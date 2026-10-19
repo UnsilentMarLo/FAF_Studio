@@ -26,15 +26,27 @@ local function Skip(text)
     return false
 end
 
+-- A native file dialog (ed_file_dialog, ed_files_dialog, ed_folder_dialog: Interop > Add files, Stamps > Import, the export buttons) is modal and blocks the UI thread until
+-- a person answers: a press that opens one hangs the whole run (found 2026-10-19: the nightly's stack showed GetOpenFileNameW). While a button is pressed here, the dialogs
+-- answer "cancelled" at once.
+local DIALOGS = { 'ed_file_dialog', 'ed_files_dialog', 'ed_folder_dialog' }
+local function NoDialog() return nil end
+
 local function Press(entry, errors, where)
     if Skip(entry.text) then return false end
     local b = entry.button
     -- a button of a panel part that was rebuilt meanwhile (destroyed) is stale: pressing it proves nothing
     local okParent, parent = pcall(function() return b:GetParent() end)
     if not okParent or parent == nil then return false end      -- (a destroyed control answers nil)
+    local real = {}
+    for _, name in DIALOGS do
+        real[name] = rawget(_G, name)
+        if real[name] then rawset(_G, name, NoDialog) end
+    end
     local ok, err = pcall(function()
         if b.HandleEvent then b:HandleEvent({ Type = 'ButtonPress', Modifiers = {}, MouseX = 0, MouseY = 0 }) end
     end)
+    for name, fn in real do rawset(_G, name, fn) end
     if not ok then table.insert(errors, where .. ' [' .. tostring(entry.text) .. ']: ' .. string.sub(tostring(err), 1, 200)) end
     return true
 end

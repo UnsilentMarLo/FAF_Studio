@@ -901,6 +901,7 @@ Command = {
     ["file.save"] = "Save the map.",
     ["file.saveas"] = "Save the map under another name.",
     ["file.start"] = "Show the start screen: recent maps, templates and the mod project.",
+    ["file.exit"] = "Close the editor. Unsaved changes are asked about first.",
     ["help.diagnostics"] = "Write the version, the log tail and your settings into one file for a bug report.",
     ["help.hotkeys"] = "Look at and change the key bindings.",
     ["help.open"] = "Open the help: topics, search and step by step workflows.",

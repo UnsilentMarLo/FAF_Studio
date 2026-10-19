@@ -54,3 +54,14 @@ Menu.Extend('menubar.File', function()
         { command = 'file.start' },
     }
 end, 4)
+
+--- File > Exit: the editor's own way out. The game's Escape quit dialog is off in an editor session (schook/lua/ui/dialogs/eschandler.lua); unsaved changes are asked about first.
+Commands.Register{ id = 'file.exit', title = 'File: exit', run = function()
+    import('/lua/editor/gui/dialogs_map.lua').Guard(function() import('/lua/ui/dialogs/eschandler.lua').SafeQuit() end)
+end }
+
+Menu.Extend('menubar.File', function()
+    return {
+        { command = 'file.exit' },
+    }
+end, 95)
