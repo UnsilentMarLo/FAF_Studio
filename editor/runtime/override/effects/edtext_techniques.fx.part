@@ -1,0 +1,60 @@
+
+// ---- Editor text techniques (appended to FAF's primbatcher.fx by editor/tools/gen_primbatcher_fx.py) -----------------------------
+// ClearType-style text in two passes on a fixed-function blender (D3D9 has no dual-source blending):
+//   pass 0: dst = dst * (1 - cov)          (Zero, InvSrcColor, the pixel shader outputs the per-channel coverage)
+//   pass 1: dst = dst + C * cov            (One, One, the pixel shader outputs coverage times the text colour)
+// together dst*(1-cov) + C*cov per channel, independent of the background (opaque panels and the world alike).
+// The glyph atlas holds the three sub-pixel coverages in R, G and B (moho/editor/EdTextBackend.cpp).
+// Vertex colour = text colour, its alpha and AlphaMultiplier scale the coverage.
+
+float EdLcdBoost = 1.0;    // coverage exponent for white text (1.0 = none); light text on dark looks thin without a boost, dark text is not boosted
+
+sampler EdTextSampler = sampler_state
+{
+    Texture = (Texture1);
+    MipFilter = NONE;
+    MinFilter = POINT;
+    MagFilter = POINT;
+    AddressU  = Clamp;
+    AddressV  = Clamp;
+};
+
+float3 EdAdjustCoverage(float3 cov, float3 textColor)
+{
+    float lum = dot(textColor, float3(0.299, 0.587, 0.114));
+    return pow(cov, lerp(1.0, EdLcdBoost, lum));
+}
+
+float4 EdTextCoveragePS(float4 Pos : POSITION, float4 Diff : COLOR0, float2 Tex1 : TEXCOORD0) : COLOR
+{
+    float3 cov = EdAdjustCoverage(tex2D(EdTextSampler, Tex1).rgb, Diff.rgb) * (Diff.a * AlphaMultiplier);
+    return float4(cov, 1);
+}
+
+float4 EdTextAddPS(float4 Pos : POSITION, float4 Diff : COLOR0, float2 Tex1 : TEXCOORD0) : COLOR
+{
+    float3 cov = EdAdjustCoverage(tex2D(EdTextSampler, Tex1).rgb, Diff.rgb) * (Diff.a * AlphaMultiplier);
+    return float4(cov * Diff.rgb, 1);
+}
+
+technique TTextLcd
+{
+    pass P0
+    {
+        AlphaState( AlphaBlend_Zero_InvSrcColor )
+        DepthState( Depth_Disable )
+        RasterizerState( Rasterizer_Cull_None )
+
+        VertexShader = compile vs_1_1 PrimBatcherVS();
+        PixelShader = compile ps_2_0 EdTextCoveragePS();
+    }
+    pass P1
+    {
+        AlphaState( AlphaBlend_One_One_Write_RGB )
+        DepthState( Depth_Disable )
+        RasterizerState( Rasterizer_Cull_None )
+
+        VertexShader = compile vs_1_1 PrimBatcherVS();
+        PixelShader = compile ps_2_0 EdTextAddPS();
+    }
+}

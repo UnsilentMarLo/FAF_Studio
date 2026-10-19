@@ -1,0 +1,79 @@
+-- A radial profile drawn as a curve: bowl, high rim, outer slope; noise breaks it up. The bowl fills with the map's water.
+Graph = {
+    ['name'] = 'Crater lake (rim and bowl)',
+    ['nextId'] = 8,
+    ['nodes'] = {
+        { ['id'] = 1, ['params'] = { ['radius'] = 150 }, ['type'] = 'radial', ['x'] = 0, ['y'] = 0 },
+        {
+            ['id'] = 2,
+            ['params'] = { ['points'] = { { 0, 0.08 }, { 0.35, 0.12 }, { 0.62, 1 }, { 0.85, 0.35 }, { 1, 0.12 } } },
+            ['type'] = 'remap',
+            ['x'] = 224,
+            ['y'] = 0,
+        },
+        {
+            ['id'] = 3,
+            ['params'] = { ['octaves'] = 4, ['scale'] = 70 },
+            ['type'] = 'perlin',
+            ['x'] = 0,
+            ['y'] = 152,
+        },
+        {
+            ['id'] = 4,
+            ['params'] = { ['mode'] = 'add', ['opacity'] = 0.14 },
+            ['type'] = 'blend',
+            ['x'] = 448,
+            ['y'] = 0,
+        },
+        { ['id'] = 5, ['params'] = { ['hi'] = 92, ['lo'] = 14 }, ['type'] = 'range', ['x'] = 672, ['y'] = 0 },
+        {
+            ['id'] = 6,
+            ['params'] = { ['density'] = 2, ['lifetime'] = 50, ['talus'] = 0.8, ['thermal'] = 0.5, ['thermal_steps'] = 3 },
+            ['type'] = 'erode_droplet',
+            ['x'] = 896,
+            ['y'] = 0,
+        },
+        { ['id'] = 7, ['params'] = {}, ['type'] = 'out_height', ['x'] = 1120, ['y'] = 0 },
+    },
+    ['seed'] = 10,
+    ['version'] = 1,
+    ['view'] = { ['x'] = 20, ['y'] = 20, ['zoom'] = 0.8 },
+    ['wires'] = {
+        {
+            1,
+            'out',
+            2,
+            'a',
+        },
+        {
+            2,
+            'out',
+            4,
+            'a',
+        },
+        {
+            4,
+            'out',
+            5,
+            'a',
+        },
+        {
+            5,
+            'out',
+            6,
+            'a',
+        },
+        {
+            6,
+            'out',
+            7,
+            'a',
+        },
+        {
+            3,
+            'out',
+            4,
+            'b',
+        },
+    },
+}

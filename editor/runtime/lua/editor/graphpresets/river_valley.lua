@@ -1,0 +1,82 @@
+-- Gentle hills with a river carved along a wobbling path: a flat bed under the water level, banks, sand along the river.
+Graph = {
+    ['name'] = 'River valley (a river path through hills)',
+    ['nextId'] = 8,
+    ['nodes'] = {
+        {
+            ['id'] = 1,
+            ['params'] = { ['octaves'] = 4, ['scale'] = 170 },
+            ['type'] = 'simplex',
+            ['x'] = 0,
+            ['y'] = 0,
+        },
+        { ['id'] = 2, ['params'] = { ['hi'] = 58, ['lo'] = 34 }, ['type'] = 'range', ['x'] = 224, ['y'] = 0 },
+        {
+            ['id'] = 3,
+            ['params'] = {
+                ['falloff'] = 14,
+                ['height'] = 3,
+                ['width'] = 9,
+                ['wobble'] = 0.12,
+                ['x0'] = 0.05,
+                ['x1'] = 0.95,
+                ['z0'] = 0.3,
+                ['z1'] = 0.7,
+            },
+            ['type'] = 'path_line',
+            ['x'] = 0,
+            ['y'] = 152,
+        },
+        {
+            ['id'] = 4,
+            ['params'] = { ['mode'] = 'river', ['profile'] = 'u' },
+            ['type'] = 'path_shape',
+            ['x'] = 448,
+            ['y'] = 0,
+        },
+        { ['id'] = 5, ['params'] = {}, ['type'] = 'out_height', ['x'] = 672, ['y'] = 0 },
+        { ['id'] = 6, ['params'] = { ['kind'] = 'reach' }, ['type'] = 'path_mask', ['x'] = 448, ['y'] = 152 },
+        { ['id'] = 7, ['params'] = { ['layer'] = 2 }, ['type'] = 'out_layer', ['x'] = 672, ['y'] = 152 },
+    },
+    ['seed'] = 7,
+    ['version'] = 1,
+    ['view'] = { ['x'] = 20, ['y'] = 20, ['zoom'] = 0.8 },
+    ['wires'] = {
+        {
+            1,
+            'out',
+            2,
+            'a',
+        },
+        {
+            2,
+            'out',
+            4,
+            'a',
+        },
+        {
+            3,
+            'out',
+            4,
+            'pts',
+        },
+        {
+            4,
+            'out',
+            5,
+            'a',
+        },
+        {
+            3,
+            'out',
+            6,
+            'pts',
+        },
+        {
+            6,
+            'out',
+            7,
+            'a',
+        },
+    },
+}

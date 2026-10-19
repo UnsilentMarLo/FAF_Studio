@@ -1,0 +1,896 @@
+-- Object tools: marker types, selection (single, shift-toggle and box), picking, moving / resizing, property edits and deleting for
+-- markers and areas. Everything goes through the map document (map.lua) and records an undo entry in history.lua. ui.lua owns the tool
+-- list and the world click hook and calls OnSelectPress / PlaceMarker / NewArea; the GUI panels (gui/panels_objects.lua) read and
+-- change the state here.
+
+local Map = import('/lua/editor/map.lua')
+local History = import('/lua/editor/history.lua')
+local Dragger = import('/lua/maui/dragger.lua').Dragger
+local Grid = import('/lua/editor/grid.lua')
+
+--- The primary selected object (the one the properties panel edits): kind 'marker' | 'area' (false = nothing), and its name.
+Selection = { kind = false, name = false }
+--- Everything selected, in selection order: list of { kind, name }. The primary is the last element.
+Items = {}
+--- What the pointer is over with the select tool (highlight only).
+Hover = { kind = false, name = false }
+--- Marker template the Marker tool places.
+MarkerType = 'Blank Marker'
+--- Rectangle being dragged out with the select tool, { x0, z0, x1, z1 } in world units, or false.
+Marquee = false
+--- Bumped by every change of the objects (overlays and marker visuals re-sync on it).
+Changed = 0
+
+local function Bump()
+    Changed = Changed + 1
+end
+
+local function GroundHeight(x, z)
+    return ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or 0
+end
+
+local function Markers()
+    return Map.Doc.save.MasterChain._MASTERCHAIN_.Markers
+end
+
+local function Areas()
+    return Map.Doc.save.Areas
+end
+
+local function Table(kind)
+    if kind == 'marker' then return Markers() end
+    return Areas()
+end
+
+-- ---- marker types --------------------------------------------------------------------------------------------------------------
+
+local CATEGORY_ORDER = { 'Resources', 'Areas and points', 'Paths', 'Other' }
+
+local FALLBACK_TYPES = {
+    ['Blank Marker'] = { prop = '/env/common/props/markers/M_Blank_prop.bp', color = 'ff800080' },
+    ['Mass'] = { resource = true, amount = 100, size = 1, prop = '/env/common/props/markers/M_Mass_prop.bp', color = 'ff808080' },
+    ['Hydrocarbon'] = { resource = true, amount = 100, size = 3, prop = '/env/common/props/markers/M_Hydrocarbon_prop.bp', color = 'ff008000' },
+}
+
+local templates = false
+
+--- The marker templates of the game (/lua/MarkerTemplates.lua), so mods that add marker types show up too.
+--- True while a read-only workspace (Review) is showing: selecting and looking stay possible, every change is refused.
+ReadOnly = false
+
+function Templates()
+    if templates then
+        return templates
+    end
+    -- the file calls VECTOR3(), which only the sim and the map loader define
+    if rawget(_G, 'VECTOR3') == nil then
+        rawset(_G, 'VECTOR3', function(x, y, z) return { x, y, z } end)
+    end
+    local ok, mod = pcall(import, '/lua/MarkerTemplates.lua')
+    templates = (ok and mod.MarkerTemplates) or FALLBACK_TYPES
+    return templates
+end
+
+local function CategoryOf(name, t)
+    if t.resource then return 1 end
+    if string.find(name, 'Path Node', 1, true) then return 3 end
+    if t.hint or string.find(name, 'Area', 1, true) or string.find(name, 'Point', 1, true) or string.find(name, 'Zone', 1, true) then return 2 end
+    return 4
+end
+
+--- All marker types as { name, category, color, resource }, grouped by category and sorted by name.
+function MarkerTypes()
+    local list = {}
+    for name, t in Templates() do
+        table.insert(list, { name = name, category = CATEGORY_ORDER[CategoryOf(name, t)], rank = CategoryOf(name, t),
+                             color = t.color or 'ff808080', resource = t.resource and true or false })
+    end
+    table.sort(list, function(a, b)
+        if a.rank ~= b.rank then return a.rank < b.rank end
+        return a.name < b.name
+    end)
+    return list
+end
+
+function SetMarkerType(name)
+    if Templates()[name] then
+        MarkerType = name
+        return true
+    end
+    return false
+end
+
+--- 'RRGGBB' of a template colour string ('ffRRGGBB').
+function ColorHex(argb)
+    local s = argb or 'ff808080'
+    if string.len(s) >= 8 then return string.sub(s, 3) end
+    return s
+end
+
+-- ---- selection ---------------------------------------------------------------------------------------------------------------
+
+local function Exists(kind, name)
+    return Map.Doc ~= nil and Table(kind)[name] ~= nil
+end
+
+--- True when the object is part of the selection.
+function IsSelected(kind, name)
+    for _, it in Items do
+        if it.kind == kind and it.name == name then return true end
+    end
+    return false
+end
+
+local function SyncPrimary()
+    local last = Items[table.getn(Items)]
+    if last then
+        Selection.kind, Selection.name = last.kind, last.name
+    else
+        Selection.kind, Selection.name = false, false
+    end
+    Bump()
+end
+
+--- Selects an object. mode: nil / 'set' replaces the selection, 'add' adds, 'toggle' flips its membership.
+--- Select(false) clears everything.
+function Select(kind, name, mode)
+    if not kind or not name then
+        Items = {}
+        SyncPrimary()
+        return
+    end
+    if mode == 'toggle' and IsSelected(kind, name) then
+        local rest = {}
+        for _, it in Items do
+            if not (it.kind == kind and it.name == name) then table.insert(rest, it) end
+        end
+        Items = rest
+    else
+        if mode ~= 'add' and mode ~= 'toggle' then Items = {} end
+        if not IsSelected(kind, name) then
+            table.insert(Items, { kind = kind, name = name })
+        else
+            -- re-picking a selected object makes it the primary one
+            local rest = {}
+            for _, it in Items do
+                if not (it.kind == kind and it.name == name) then table.insert(rest, it) end
+            end
+            table.insert(rest, { kind = kind, name = name })
+            Items = rest
+        end
+    end
+    SyncPrimary()
+end
+
+--- Replaces (or, with `additive`, extends) the selection with a list of { kind, name }.
+function SelectMany(list, additive)
+    if not additive then Items = {} end
+    for _, it in list do
+        if not IsSelected(it.kind, it.name) then
+            table.insert(Items, { kind = it.kind, name = it.name })
+        end
+    end
+    SyncPrimary()
+end
+
+--- Drops selected objects that no longer exist (after delete / undo).
+function Prune()
+    if not Map.Doc then
+        Items = {}
+        SyncPrimary()
+        return
+    end
+    local keep = {}
+    for _, it in Items do
+        if Exists(it.kind, it.name) then table.insert(keep, it) end
+    end
+    if table.getn(keep) ~= table.getn(Items) then
+        Items = keep
+        SyncPrimary()
+    end
+end
+
+function SelectionCount()
+    return table.getn(Items)
+end
+
+--- The primary selected object's data table, or nil.
+function SelectedObject()
+    if not Map.Doc or not Selection.kind then
+        return nil
+    end
+    return Table(Selection.kind)[Selection.name]
+end
+
+-- ---- naming ------------------------------------------------------------------------------------------------------------------------
+
+local function UniqueName(kind, base)
+    local n = 1
+    local name
+    repeat
+        name = string.format('%s %02d', base, n)
+        n = n + 1
+    until not Exists(kind, name)
+    return name
+end
+
+-- ---- creating / deleting -------------------------------------------------------------------------------------------------------------
+
+local function CopyFields(t)
+    local fields = {}
+    for k, v in t do
+        if type(v) == 'table' then
+            local c = {}
+            for k2, v2 in v do c[k2] = v2 end
+            fields[k] = c
+        else
+            fields[k] = v
+        end
+    end
+    return fields
+end
+
+--- Places a marker of the selected type at a world position, selects it, records undo. Returns its name.
+function PlaceMarker(x, z, kind, fixedName)
+    if not Map.Doc or ReadOnly then return nil end
+    kind = kind or MarkerType
+    x, z = Grid.SnapMarker(kind, x, z)       -- Mass / Hydrocarbon markers sit on the build grid like the structure they stand for
+    local template = Templates()[kind] or {}
+    local name = fixedName or UniqueName('marker', kind)
+    local m = Map.AddMarker(name, kind, x, GroundHeight(x, z), z, CopyFields(template))
+    History.Push({
+        label = 'place ' .. name,
+        undo = function() Markers()[name] = nil Prune() Bump() end,
+        redo = function() Markers()[name] = m Select('marker', name) end,
+    })
+    Select('marker', name)
+    return name
+end
+
+--- Puts a copy of marker table `src` at (x, z) (clipboard paste): same type and fields, a new name (`name` or <type> NN), one undo entry, not selected.
+function PasteMarker(src, x, z, name)
+    if not Map.Doc or ReadOnly then return nil end
+    local fields = CopyFields(src)
+    fields.position = nil
+    name = name or UniqueName('marker', src.type or 'marker')
+    local m = Map.AddMarker(name, src.type, x, GroundHeight(x, z), z, fields)
+    History.Push({
+        label = 'paste ' .. name,
+        undo = function() Markers()[name] = nil Prune() Bump() end,
+        redo = function() Markers()[name] = m Select('marker', name) end,
+    })
+    Bump()
+    return name
+end
+
+--- A copy of the rectangle `r` ({ x0, z0, x1, z1 }) moved by (dx, dz) (clipboard paste), one undo entry, not selected.
+function PasteArea(r, dx, dz)
+    if not Map.Doc or ReadOnly then return nil end
+    local name = UniqueName('area', 'AREA')
+    Map.AddArea(name, r[1] + dx, r[2] + dz, r[3] + dx, r[4] + dz)
+    local a = Areas()[name]
+    History.Push({
+        label = 'paste ' .. name,
+        undo = function() Areas()[name] = nil Prune() Bump() end,
+        redo = function() Areas()[name] = a Select('area', name) end,
+    })
+    Bump()
+    return name
+end
+
+--- Creates a rectangle area, selects it, records undo. Returns its name.
+function NewArea(x0, z0, x1, z1)
+    if not Map.Doc or ReadOnly then return nil end
+    local name = UniqueName('area', 'AREA')
+    Map.AddArea(name, math.min(x0, x1), math.min(z0, z1), math.max(x0, x1), math.max(z0, z1))
+    local a = Areas()[name]
+    History.Push({
+        label = 'add ' .. name,
+        undo = function() Areas()[name] = nil Prune() Bump() end,
+        redo = function() Areas()[name] = a Select('area', name) end,
+    })
+    Select('area', name)
+    return name
+end
+
+--- Deletes everything selected (one undo step).
+function DeleteSelection()
+    if not Map.Doc or ReadOnly or table.getn(Items) == 0 then return false end
+    local removed = {}
+    for _, it in Items do
+        local obj = Table(it.kind)[it.name]
+        if obj then table.insert(removed, { kind = it.kind, name = it.name, obj = obj }) end
+    end
+    if table.getn(removed) == 0 then return false end
+    local function Remove()
+        for _, r in removed do Table(r.kind)[r.name] = nil end
+        Prune()
+        Bump()
+    end
+    local function Restore()
+        for _, r in removed do Table(r.kind)[r.name] = r.obj end
+        Items = {}
+        for _, r in removed do table.insert(Items, { kind = r.kind, name = r.name }) end
+        SyncPrimary()
+    end
+    Remove()
+    History.Push({
+        label = (table.getn(removed) == 1) and ('delete ' .. removed[1].name) or ('delete ' .. table.getn(removed) .. ' objects'),
+        undo = Restore,
+        redo = Remove,
+    })
+    return true
+end
+
+-- ---- property edits (the properties panel) -------------------------------------------------------------------------------------
+
+--- Sets a marker field (position.x / .z, orientation, amount ...) to a value with undo. `path` is a list of keys.
+function SetField(obj, path, value, label)
+    if ReadOnly then return end
+    local holder = obj
+    for i = 1, table.getn(path) - 1 do
+        holder = holder[path[i]]
+    end
+    local key = path[table.getn(path)]
+    local old = holder[key]
+    if old == value then return end
+    holder[key] = value
+    Bump()
+    History.Push({
+        label = label or 'edit',
+        undo = function() holder[key] = old Bump() end,
+        redo = function() holder[key] = value Bump() end,
+    })
+end
+
+--- Middle of the selected markers and areas: x, z (nil without a selection).
+function SelectionCenter()
+    if not Map.Doc then return nil end
+    local sx, sz, n = 0, 0, 0
+    for _, it in Items do
+        local obj = Table(it.kind)[it.name]
+        if obj then
+            if it.kind == 'marker' then
+                sx, sz, n = sx + obj.position[1], sz + obj.position[3], n + 1
+            else
+                local r = obj.rectangle
+                sx, sz, n = sx + (r[1] + r[3]) / 2, sz + (r[2] + r[4]) / 2, n + 1
+            end
+        end
+    end
+    if n == 0 then return nil end
+    return sx / n, sz / n
+end
+
+--- Moves every selected marker and area by (dx, dz) as one undo step (markers snap to the build grid like a drag does).
+function MoveSelectionBy(dx, dz)
+    if not Map.Doc or ReadOnly or table.getn(Items) == 0 then return false end
+    local before, after = {}, {}
+    for _, it in Items do
+        local obj = Table(it.kind)[it.name]
+        if obj then
+            if it.kind == 'marker' then
+                local nx, nz = Grid.SnapMarker(obj.type, obj.position[1] + dx, obj.position[3] + dz)
+                table.insert(before, { kind = 'marker', name = it.name, x = obj.position[1], y = obj.position[2], z = obj.position[3] })
+                table.insert(after, { kind = 'marker', name = it.name, x = nx, y = GroundHeight(nx, nz), z = nz })
+            else
+                local r = obj.rectangle
+                table.insert(before, { kind = 'area', name = it.name, r1 = r[1], r2 = r[2], r3 = r[3], r4 = r[4] })
+                table.insert(after, { kind = 'area', name = it.name, r1 = r[1] + dx, r2 = r[2] + dz, r3 = r[3] + dx, r4 = r[4] + dz })
+            end
+        end
+    end
+    local function Set(list)
+        for _, b in list do
+            if b.kind == 'marker' then
+                if Markers()[b.name] then Map.MoveMarker(b.name, b.x, b.y, b.z) end
+            else
+                local a = Areas()[b.name]
+                if a then a.rectangle[1], a.rectangle[2], a.rectangle[3], a.rectangle[4] = b.r1, b.r2, b.r3, b.r4 end
+            end
+        end
+        Bump()
+    end
+    Set(after)
+    History.Push({
+        label = (table.getn(before) == 1) and ('move ' .. before[1].name) or ('move ' .. table.getn(before) .. ' objects'),
+        undo = function() Set(before) end,
+        redo = function() Set(after) end,
+    })
+    return true
+end
+
+--- Turns the selected markers (their heading, the second orientation lane) by `deg` degrees as one undo step; areas stay as they are.
+function RotateSelectionBy(deg)
+    if not Map.Doc or ReadOnly then return false end
+    local changes = {}
+    for _, it in Items do
+        if it.kind == 'marker' then
+            local m = Markers()[it.name]
+            if m then
+                m.orientation = m.orientation or Map.MakeVec3(0, 0, 0)
+                table.insert(changes, { m = m, old = m.orientation[2] or 0, new = (m.orientation[2] or 0) + math.rad(deg) })
+            end
+        end
+    end
+    if table.getn(changes) == 0 then return false end
+    for _, c in changes do c.m.orientation[2] = c.new end
+    Bump()
+    History.Push({
+        label = 'rotate ' .. table.getn(changes) .. ' markers',
+        undo = function() for _, c in changes do c.m.orientation[2] = c.old end Bump() end,
+        redo = function() for _, c in changes do c.m.orientation[2] = c.new end Bump() end,
+    })
+    return true
+end
+
+--- Moves a marker to x, z (y follows the terrain) with undo; used by the position fields.
+function SetMarkerPosition(name, x, z)
+    if ReadOnly then return false end
+    local m = Markers()[name]
+    if not m then return false end
+    local ox, oy, oz = m.position[1], m.position[2], m.position[3]
+    local ny = GroundHeight(x, z)
+    Map.MoveMarker(name, x, ny, z)
+    Bump()
+    History.Push({
+        label = 'move ' .. name,
+        undo = function() Map.MoveMarker(name, ox, oy, oz) Bump() end,
+        redo = function() Map.MoveMarker(name, x, ny, z) Bump() end,
+    })
+    return true
+end
+
+local function Rename(kind, old, new)
+    if new == '' or new == old or Exists(kind, new) then return false end
+    local tbl = Table(kind)
+    local obj = tbl[old]
+    if not obj then return false end
+    local function Swap(from, to)
+        tbl[to] = obj
+        tbl[from] = nil
+        for _, it in Items do
+            if it.kind == kind and it.name == from then it.name = to end
+        end
+        SyncPrimary()
+    end
+    Swap(old, new)
+    History.Push({
+        label = 'rename ' .. old,
+        undo = function() Swap(new, old) end,
+        redo = function() Swap(old, new) end,
+    })
+    return true
+end
+
+function RenameSelection(new)
+    if not Map.Doc or not Selection.kind then return false end
+    return Rename(Selection.kind, Selection.name, new)
+end
+
+function SetAreaRect(name, x0, z0, x1, z1)
+    if ReadOnly then return false end
+    local a = Areas()[name]
+    if not a then return false end
+    local r = a.rectangle
+    local ox0, oz0, ox1, oz1 = r[1], r[2], r[3], r[4]
+    local nx0, nz0, nx1, nz1 = math.min(x0, x1), math.min(z0, z1), math.max(x0, x1), math.max(z0, z1)
+    if nx0 == ox0 and nz0 == oz0 and nx1 == ox1 and nz1 == oz1 then return true end
+    r[1], r[2], r[3], r[4] = nx0, nz0, nx1, nz1
+    Bump()
+    History.Push({
+        label = 'resize ' .. name,
+        undo = function() r[1], r[2], r[3], r[4] = ox0, oz0, ox1, oz1 Bump() end,
+        redo = function() r[1], r[2], r[3], r[4] = nx0, nz0, nx1, nz1 Bump() end,
+    })
+    return true
+end
+
+--- Moves the given resource markers onto the build grid (one undo step). Returns how many moved.
+function SnapMarkersToGrid(names)
+    if ReadOnly then return 0 end
+    if not Map.Doc then return 0 end
+    local before, after = {}, {}
+    for _, name in names do
+        local m = Markers()[name]
+        if m and not Grid.IsAligned(m.type, m.position[1], m.position[3]) then
+            local nx, nz = Grid.SnapMarker(m.type, m.position[1], m.position[3])
+            table.insert(before, { name = name, x = m.position[1], y = m.position[2], z = m.position[3] })
+            table.insert(after, { name = name, x = nx, y = GroundHeight(nx, nz), z = nz })
+        end
+    end
+    if table.getn(before) == 0 then return 0 end
+    local function Set(list)
+        for _, b in list do
+            if Markers()[b.name] then Map.MoveMarker(b.name, b.x, b.y, b.z) end
+        end
+        Bump()
+    end
+    Set(after)
+    History.Push({
+        label = 'snap ' .. table.getn(before) .. ' marker(s) to the build grid',
+        undo = function() Set(before) end,
+        redo = function() Set(after) end,
+    })
+    return table.getn(before)
+end
+
+--- Moves the named markers that stand outside the map onto the nearest point of the map (height from the terrain there), one undo step. -> how many moved.
+function ClampMarkersToMap(names)
+    if ReadOnly or not Map.Doc then return 0 end
+    local w, h = ed_terrain_info()
+    local sx, sz = (w or 257) - 1, (h or 257) - 1
+    local before, after = {}, {}
+    for _, name in names do
+        local m = Markers()[name]
+        local p = m and m.position
+        if p and p[1] and p[3] and p[1] == p[1] and p[3] == p[3] and (p[1] < 0 or p[3] < 0 or p[1] > sx or p[3] > sz) then
+            local nx, nz = math.max(0, math.min(sx, p[1])), math.max(0, math.min(sz, p[3]))
+            table.insert(before, { name = name, x = p[1], y = p[2], z = p[3] })
+            table.insert(after, { name = name, x = nx, y = GroundHeight(nx, nz), z = nz })
+        end
+    end
+    if table.getn(before) == 0 then return 0 end
+    local function Set(list)
+        for _, b in list do
+            if Markers()[b.name] then Map.MoveMarker(b.name, b.x, b.y, b.z) end
+        end
+        Bump()
+    end
+    Set(after)
+    History.Push({
+        label = 'pull ' .. table.getn(before) .. ' marker(s) onto the map',
+        undo = function() Set(before) end,
+        redo = function() Set(after) end,
+    })
+    return table.getn(before)
+end
+
+-- ---- picking ------------------------------------------------------------------------------------------------------------------
+
+local function View()
+    return import('/lua/ui/game/worldview.lua').viewLeft
+end
+
+--- World units per screen pixel at a window position (for pick tolerances that stay the same size on screen).
+local function PixelSize(mx, my)
+    return import('/lua/editor/viewscale.lua').PixelSize()
+end
+
+local HANDLE_PX = 10
+local MARKER_PX = 14
+
+-- Resize handles of a rectangle: corners and edge midpoints. id = which edges move.
+local function Handles(r)
+    local mx, mz = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2
+    return {
+        { id = 'nw', x = r[1], z = r[2] }, { id = 'ne', x = r[3], z = r[2] },
+        { id = 'sw', x = r[1], z = r[4] }, { id = 'se', x = r[3], z = r[4] },
+        { id = 'n', x = mx, z = r[2] }, { id = 's', x = mx, z = r[4] },
+        { id = 'w', x = r[1], z = mz }, { id = 'e', x = r[3], z = mz },
+    }
+end
+HandlesOf = Handles
+
+--- The area whose handles are shown: only when exactly one area (and nothing else) is selected.
+function HandleArea()
+    if table.getn(Items) == 1 and Items[1].kind == 'area' and Map.Doc and Areas()[Items[1].name] then
+        return Items[1].name
+    end
+    return nil
+end
+
+--- What is under a world position: { kind, name, handle } or nil. Window position for the pixel tolerance.
+function Pick(wx, wz, mx, my)
+    if not Map.Doc then return nil end
+    local px = PixelSize(mx, my)
+
+    -- the handles of a lone selected area win over everything under them
+    local handleArea = HandleArea()
+    if handleArea then
+        for _, h in Handles(Areas()[handleArea].rectangle) do
+            if math.abs(h.x - wx) <= HANDLE_PX * px and math.abs(h.z - wz) <= HANDLE_PX * px then
+                return { kind = 'area', name = handleArea, handle = h.id }
+            end
+        end
+    end
+
+    local best, bestD = nil, (MARKER_PX * px) * (MARKER_PX * px)
+    for name, m in Markers() do
+        local dx, dz = m.position[1] - wx, m.position[3] - wz
+        local d = dx * dx + dz * dz
+        if d <= bestD then
+            best, bestD = name, d
+        end
+    end
+    if best then
+        return { kind = 'marker', name = best }
+    end
+
+    -- smallest area containing the point
+    local areaName, areaSize = nil, nil
+    for name, a in Areas() do
+        local r = a.rectangle
+        if r and wx >= r[1] and wx <= r[3] and wz >= r[2] and wz <= r[4] then
+            local size = (r[3] - r[1]) * (r[4] - r[2])
+            if not areaSize or size < areaSize then
+                areaName, areaSize = name, size
+            end
+        end
+    end
+    if areaName then
+        return { kind = 'area', name = areaName }
+    end
+    return nil
+end
+
+--- Updates the hover highlight (call each frame with the world position under the pointer, or nil).
+function UpdateHover(wx, wz, mx, my)
+    local hit = wx and Pick(wx, wz, mx, my) or nil
+    local kind, name = false, false
+    if hit and not hit.handle then kind, name = hit.kind, hit.name end
+    if Hover.kind ~= kind or Hover.name ~= name then
+        Hover.kind, Hover.name = kind, name
+        Bump()
+    end
+    return hit
+end
+
+-- ---- select tool: press, then drag ------------------------------------------------------------------------------------------------
+
+local function WorldAt(x, y)
+    local view = View()
+    if not view then return nil end
+    local p = UnProject(view, Vector2(x, y))
+    if p then return p[1], p[3] end
+    return nil
+end
+
+--- Everything whose reference point lies inside the world rectangle: markers by position, areas by centre.
+local function InBox(x0, z0, x1, z1)
+    local minx, maxx, minz, maxz = math.min(x0, x1), math.max(x0, x1), math.min(z0, z1), math.max(z0, z1)
+    local list = {}
+    for name, m in Markers() do
+        local p = m.position
+        if p[1] >= minx and p[1] <= maxx and p[3] >= minz and p[3] <= maxz then
+            table.insert(list, { kind = 'marker', name = name })
+        end
+    end
+    for name, a in Areas() do
+        local r = a.rectangle
+        if r then
+            local cx, cz = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2
+            if cx >= minx and cx <= maxx and cz >= minz and cz <= maxz then
+                table.insert(list, { kind = 'area', name = name })
+            end
+        end
+    end
+    return list
+end
+
+--- Starts a drag that moves everything selected together; `wx, wz` is where the grab happened.
+--- A live move / turn of the selected markers and areas: Move(dx, dz) and Turn(deg) change the objects at once (relative to where they were when this
+--- started), Commit() pushes ONE undo entry for everything done since (nothing when nothing changed), Cancel() puts everything back. The group drag of the
+--- select tool and the transform gizmo both use it, so the objects follow the pointer while it is dragged.
+function NewLiveMove()
+    local before = {}
+    for _, it in Items do
+        local obj = Table(it.kind)[it.name]
+        if obj then
+            if it.kind == 'marker' then
+                table.insert(before, { kind = 'marker', name = it.name, x = obj.position[1], y = obj.position[2], z = obj.position[3], turn = (obj.orientation and obj.orientation[2]) or 0 })
+            else
+                local r = obj.rectangle
+                table.insert(before, { kind = 'area', name = it.name, r1 = r[1], r2 = r[2], r3 = r[3], r4 = r[4] })
+            end
+        end
+    end
+    local L = { moved = false, dx = 0, dz = 0, deg = 0 }
+
+    local function Snapshot()
+        local after = {}
+        for _, b in before do
+            if b.kind == 'marker' then
+                local m = Markers()[b.name]
+                if m then table.insert(after, { kind = 'marker', name = b.name, x = m.position[1], y = m.position[2], z = m.position[3], turn = (m.orientation and m.orientation[2]) or 0 }) end
+            else
+                local a = Areas()[b.name]
+                if a then
+                    local r = a.rectangle
+                    table.insert(after, { kind = 'area', name = b.name, r1 = r[1], r2 = r[2], r3 = r[3], r4 = r[4] })
+                end
+            end
+        end
+        return after
+    end
+    local function Set(list)
+        for _, b in list do
+            if b.kind == 'marker' then
+                local m = Markers()[b.name]
+                if m then
+                    Map.MoveMarker(b.name, b.x, b.y, b.z)
+                    if b.turn and (b.turn ~= 0 or m.orientation) then
+                        m.orientation = m.orientation or Map.MakeVec3(0, 0, 0)
+                        m.orientation[2] = b.turn
+                    end
+                end
+            else
+                local a = Areas()[b.name]
+                if a then a.rectangle[1], a.rectangle[2], a.rectangle[3], a.rectangle[4] = b.r1, b.r2, b.r3, b.r4 end
+            end
+        end
+        Bump()
+    end
+
+    local function Apply()
+        for _, b in before do
+            if b.kind == 'marker' then
+                local m = Markers()[b.name]
+                if m then
+                    local nx, nz = Grid.SnapMarker(m.type, b.x + L.dx, b.z + L.dz)
+                    Map.MoveMarker(b.name, nx, GroundHeight(nx, nz), nz)
+                    if L.deg ~= 0 then
+                        m.orientation = m.orientation or Map.MakeVec3(0, 0, 0)
+                        m.orientation[2] = b.turn + math.rad(L.deg)
+                    end
+                end
+            else
+                local a = Areas()[b.name]
+                if a then
+                    local r = a.rectangle
+                    r[1], r[2], r[3], r[4] = b.r1 + L.dx, b.r2 + L.dz, b.r3 + L.dx, b.r4 + L.dz
+                end
+            end
+        end
+        Bump()
+        L.moved = true
+    end
+    function L.Move(dx, dz) L.dx, L.dz = dx, dz Apply() end
+    function L.Turn(deg) L.deg = deg Apply() end
+    function L.Cancel()
+        if L.moved then Set(before) L.moved = false end
+    end
+    function L.Commit()
+        if not L.moved then return false end
+        local after = Snapshot()
+        History.Push({
+            label = (table.getn(before) == 1) and ((L.deg ~= 0 and 'turn ' or 'move ') .. before[1].name) or ((L.deg ~= 0 and 'turn ' or 'move ') .. table.getn(before) .. ' objects'),
+            undo = function() Set(before) end,
+            redo = function() Set(after) end,
+        })
+        return true
+    end
+    return L
+end
+
+local function BeginGroupMove(wx, wz, event)
+    local live = NewLiveMove()
+    local dragger = Dragger()
+    dragger.OnMove = function(self, x, y)
+        local cx, cz = WorldAt(x, y)
+        if cx then live.Move(cx - wx, cz - wz) end
+    end
+    dragger.OnRelease = function(self, x, y)
+        self:Destroy()
+        live.Commit()
+    end
+    dragger.OnCancel = function(self)
+        self:Destroy()
+        live.Cancel()
+    end
+    PostDragger(GetFrame(0), event.KeyCode, dragger)
+end
+
+--- Drag a handle of the lone selected area.
+local function BeginResize(name, handle, event)
+    local r = Areas()[name].rectangle
+    local o0, o1, o2, o3 = r[1], r[2], r[3], r[4]
+    local dragger = Dragger()
+    local changed = false
+    dragger.OnMove = function(self, x, y)
+        local cx, cz = WorldAt(x, y)
+        if not cx or not Areas()[name] then return end
+        local x0, z0, x1, z1 = o0, o1, o2, o3
+        if string.find(handle, 'w', 1, true) then x0 = cx end
+        if string.find(handle, 'e', 1, true) then x1 = cx end
+        if string.find(handle, 'n', 1, true) then z0 = cz end
+        if string.find(handle, 's', 1, true) then z1 = cz end
+        r[1], r[2], r[3], r[4] = math.min(x0, x1), math.min(z0, z1), math.max(x0, x1), math.max(z0, z1)
+        changed = true
+        Bump()
+    end
+    dragger.OnRelease = function(self, x, y)
+        self:Destroy()
+        if changed then
+            local n0, n1, n2, n3 = r[1], r[2], r[3], r[4]
+            History.Push({
+                label = 'resize ' .. name,
+                undo = function() r[1], r[2], r[3], r[4] = o0, o1, o2, o3 Bump() end,
+                redo = function() r[1], r[2], r[3], r[4] = n0, n1, n2, n3 Bump() end,
+            })
+        end
+    end
+    dragger.OnCancel = function(self) self:Destroy() end
+    PostDragger(GetFrame(0), event.KeyCode, dragger)
+end
+
+--- Drag out a selection box from empty ground (also used by the unit, prop and decal select tools). `onDone(box, additive)` runs on release:
+--- box = { x0, z0, x1, z1 } in world units after a drag, nil after a plain click.
+function BeginBoxSelect(wx, wz, event, additive, onDone)
+    local sx, sy = event.MouseX, event.MouseY
+    local dragger = Dragger()
+    local moved = false
+    dragger.OnMove = function(self, x, y)
+        local cx, cz = WorldAt(x, y)
+        if not cx then return end
+        if not moved and (math.abs(x - sx) + math.abs(y - sy)) < 5 then return end   -- a click, not a drag, until the pointer leaves
+        moved = true
+        Marquee = { wx, wz, cx, cz }
+        Bump()
+    end
+    dragger.OnRelease = function(self, x, y)
+        self:Destroy()
+        local box = Marquee
+        Marquee = false
+        onDone(box, additive)
+        Bump()
+    end
+    dragger.OnCancel = function(self)
+        self:Destroy()
+        Marquee = false
+        Bump()
+    end
+    PostDragger(GetFrame(0), event.KeyCode, dragger)
+end
+
+local function BeginMarquee(wx, wz, event, additive)
+    BeginBoxSelect(wx, wz, event, additive, function(box, add)
+        if box then
+            SelectMany(InBox(box[1], box[2], box[3], box[4]), add)
+        elseif not add then
+            Select(false)
+        end
+    end)
+end
+
+--- Left press with the select tool. Shift toggles an object in the selection; a press on a selected object drags the whole
+--- selection; a press on empty ground drags a selection box. Returns true (the click is always taken).
+function OnSelectPress(wx, wz, event)
+    if not Map.Doc then Map.Load() end        -- the document loads on first use, like the other tools
+    if not Map.Doc then return true end
+    local shift = event.Modifiers and event.Modifiers.Shift
+    local hit = Pick(wx, wz, event.MouseX, event.MouseY)
+
+    if not hit then
+        BeginMarquee(wx, wz, event, shift and true or false)
+        return true
+    end
+
+    if hit.handle and not ReadOnly then
+        BeginResize(hit.name, hit.handle, event)
+        return true
+    end
+
+    if shift then
+        Select(hit.kind, hit.name, 'toggle')
+        return true
+    end
+
+    if not IsSelected(hit.kind, hit.name) then
+        Select(hit.kind, hit.name)
+    else
+        Select(hit.kind, hit.name, 'add')    -- already part of it: keep the group, make this the primary
+    end
+    if not ReadOnly then
+        BeginGroupMove(wx, wz, event)
+    end
+    return true
+end
+
+--- Short info text for the status line: what is selected.
+function SelectionText()
+    local n = table.getn(Items)
+    if n == 0 or not Map.Doc then return '' end
+    if n == 1 then return Selection.kind .. ' ' .. tostring(Selection.name) end
+    return n .. ' selected'
+end

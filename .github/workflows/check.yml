@@ -1,0 +1,21 @@
+name: check
+
+# The checks that need no engine and no game install: the Lua name lint and the generated help data. (The nightly QA needs a staged engine on a machine with the FAForever client.)
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Lua name lint
+        run: python scripts/editor_lint.py
+      - name: Help data is up to date
+        run: python scripts/gen_help.py --check
+      - name: Scripts compile
+        run: python -m compileall -q scripts editor/tools

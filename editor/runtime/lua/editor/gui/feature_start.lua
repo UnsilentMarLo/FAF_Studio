@@ -1,0 +1,56 @@
+-- What happens when the editor comes up: the start screen (when no map was given), the notices about the last run (crash report, unsaved autosave), the first-run tour
+-- and a command that was queued by the start screen ("Release a map" opens the map first and runs the release afterwards). The shell calls OnStart() at the end of every
+-- Start; only the first session of a process (the one the user started) shows the start screen and the notices - opening a map restarts the session, and these must not
+-- come back each time (init_editor.lua writes `editor_boot.txt` = 0 at process start, this module sets it to 1).
+--
+-- Commands: file.start (File > Start screen).
+--
+-- Lua 5.0 dialect.
+
+local Commands = import('/lua/editor/gui/commands.lua')
+local Menu = import('/lua/editor/gui/menu.lua')
+local UserData = import('/lua/editor/userdata.lua')
+
+local function StartScreen() return import('/lua/editor/gui/startscreen.lua') end
+
+--- Starts the tour when one is waiting (the first run showed the start screen) and nothing else is on the screen.
+function MaybeTour()
+    if UserData.Get('tourPending', false) and not StartScreen().IsOpen() and not import('/lua/editor/gui/dialog.lua').IsOpen() then
+        UserData.Set('tourPending', false)
+        UserData.Flush()
+        pcall(function() import('/lua/editor/gui/tour.lua').Start() end)
+    end
+end
+
+function OnStart()
+    local boot = ed_read_file('editor_boot.txt')
+    local first = (boot == nil or boot == '' or boot == '0')
+    ed_write_file('editor_boot.txt', '1')
+    if first then
+        local noMap = not HasCommandLineArg('/map')
+        if noMap and UserData.Get('startScreen', true) ~= false then
+            if not UserData.Get('tourDone', false) then UserData.Set('tourPending', true) end
+            StartScreen().Open{ afterNoMap = true }
+        end
+        pcall(function()
+            import('/lua/editor/gui/feature_crash.lua').Notices(function() MaybeTour() end)
+        end)
+    else
+        MaybeTour()
+    end
+    -- a command the start screen queued before it opened a map ("Release a map...")
+    local after = UserData.Get('after', false)
+    if type(after) == 'string' and after ~= '' then
+        UserData.Set('after', false)
+        UserData.Flush()
+        pcall(function() Commands.Run(after) end)
+    end
+end
+
+Commands.Register{ id = 'file.start', title = 'File: start screen', run = function() StartScreen().Open() end }
+
+Menu.Extend('menubar.File', function()
+    return {
+        { command = 'file.start' },
+    }
+end, 4)

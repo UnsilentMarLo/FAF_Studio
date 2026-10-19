@@ -1,0 +1,15 @@
+# Append-only design / status documents: parallel branches that both add sections merge by keeping both (no conflict at the end of the file).
+docs/projects/MAP_EDITOR_DESIGN.md merge=union
+docs/projects/MAP_EDITOR.md merge=union
+docs/projects/MOD_UNIT_EDITOR_DESIGN.md merge=union
+docs/projects/editor/TERRAIN_GEN_DESIGN.md merge=union
+
+# Self tests of feature branches: one name per line, merged as a union (scripts/editor_inst.py extra_selftests).
+editor/runtime/lua/editor/selftests.extra merge=union
+
+# Patch series: byte exact (git am --keep-cr), never converted.
+engine/patches/*.patch -text
+
+# Windows launchers
+*.ps1 text eol=crlf
+*.cmd text eol=crlf

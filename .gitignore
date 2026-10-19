@@ -1,0 +1,26 @@
+# generated / local ----------------------------------------------------------------------------------------------------------------------------------
+/engine/faf-re/
+/engine/run/
+/engine/native_tests/
+/engine/build.log
+/engine/_build.bat
+/.runs/
+/dist/
+/external/
+/.claude/worktrees/
+.xmake/
+build/
+__pycache__/
+*.pyc
+
+# generated assets (python scripts/studio.py generate)
+editor/runtime/maps/
+editor/runtime/brushes/
+editor/runtime/override/textures/editor/markers/
+editor/runtime/override/textures/editor/cursors/
+editor/runtime/override/textures/editor/layers/
+editor/runtime/override/textures/editor/envthumbs/
+
+# a crash dump is never committed
+*.dmp
+faf_crash_*.txt

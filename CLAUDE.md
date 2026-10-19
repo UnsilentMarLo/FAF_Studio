@@ -1,0 +1,28 @@
+# CLAUDE.md: FAF Studio
+
+Read `README.md` and `docs/REPOSITORY.md` first. These rules are mandatory for work in this repository.
+
+## Lua dialect: Moho LuaPlus (Lua 5.0.1)
+
+- No `^` (`math.pow`), no `#` length (`table.getn`; `#` starts a comment), no `%` (`math.mod`), no `...` expression (`arg`), no `string.match` (`string.find` / `string.gfind`), no `goto`.
+- Reading a nil field is silent, writing into nil crashes: create every table you write into. Numbers are 32-bit floats.
+- `import('/lua/...')` with absolute lowercase paths; module globals are module fields. Closures in `for` loops share the loop variable: copy it to a local.
+- Modules are cached per process: restart the test instance after a Lua edit.
+- A hook under `editor/runtime/schook/<vfs path>` is appended to the base file and compiled as one chunk: mirror the full VFS path, wrap in `do ... end`, no top-level `local`,
+  call the old function with all arguments. Read the base definition first (a FAForever/fa checkout, `FAF_STUDIO_FAF_REPO`).
+
+## UI
+
+- Maui does not clip: a control past its parent's edge is drawn over its neighbour. Lay rows of buttons out with `W.Flow`; no fixed x positions that assume a panel width.
+- Every number setting is a `W.Slider` (field + bar + minus / plus). Every widget has a tooltip (`tipdata.lua`). Every panel is a `gui/panels_*.lua` that registers itself.
+- The game's own HUD (top menu, Escape quit dialog, unit life bars) is off in the editor and in test runs; the editor owns leaving, restarting and quitting.
+
+## Testing
+
+- `python scripts/studio.py check` (lint, generated files) after any change; for UI work start a test instance and look at the result with `editor_inst.py shot`.
+- A test instance has its own tag; never stop a process by name, only by the pid an instance wrote. Do not touch other people's instances.
+- Never enable page heap or change the FAF installation; never overwrite `ForgedAlliance.exe`; never commit or upload an exe.
+
+## Engine
+
+The native code is `engine/patches/*.patch` (applied by `studio.py engine setup`). Change it in `engine/faf-re`, commit there, run `studio.py engine export`.
