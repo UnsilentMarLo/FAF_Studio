@@ -5,8 +5,33 @@ do
     local edProps = {}   -- key -> prop entity created by the editor
 
     --- Play / edit switch of the editor: a mission script that sees Options.EditorMode waits for ScenarioInfo.EditorPlaying before its first stage.
+    --- While editing, a unit stands where the editor put it: it cannot move, so other units and the terrain edits cannot push it away from its gizmo, and it does not
+    --- trample props. A test run lets every unit go again.
+    local function FreezeUnit(u)
+        if u and not u.Dead and not u.EdFrozen then
+            u.EdFrozen = true
+            pcall(function() u:SetImmobile(true) end)
+        end
+    end
+    EdFreezeUnit = FreezeUnit
+
     Callbacks.EdSetPlay = function(data)
         ScenarioInfo.EditorPlaying = data.on and true or false
+        if data.on then
+            local units = GetUnitsInRect(Rect(0, 0, 100000, 100000))
+            if units then
+                for _, u in units do
+                    if u.EdFrozen and not u.Dead then
+                        u.EdFrozen = nil
+                        pcall(function() u:SetImmobile(false) end)
+                        -- structures get the footprint decal the editor withheld (schook/lua/sim/units/StructureUnit.lua)
+                        if u.CreateTarmac and EntityCategoryContains(categories.STRUCTURE, u) then
+                            pcall(function() u:CreateTarmac(true, true, true) end)
+                        end
+                    end
+                end
+            end
+        end
         if data.on and ScenarioInfo.EditorGroupUnits then
             for _, u in ScenarioInfo.EditorGroupUnits do
                 if u and not u.Dead then u:Destroy() end
@@ -150,6 +175,7 @@ do
         local y = data.y or GetTerrainHeight(data.x, data.z)
         -- an army that was added after the sim started has no brain yet: the unit appears after the map is saved and reopened
         local ok, unit = pcall(function() return CreateUnitHPR(data.bp, army, data.x, y, data.z, 0, data.heading or 0, 0) end)
+        if ok and unit then FreezeUnit(unit) end
         if ok and unit and data.group == '_view' then unit.EdViewUnit = true end      -- the unit viewer's own units (EdClearLab takes them down)
         -- units of the mission's own groups are shown while editing only: the script spawns them when the mission plays
         if ok and unit and data.group and data.group ~= 'INITIAL' then

@@ -87,6 +87,8 @@ Panels.Register{
                     local span = (b.label.Width() + Skin.S(16) > bw) and cols or 1
                     if col + span > cols then col = 0 rowY = rowY + bh + gap end
                     local bwSpan = span * bw + (span - 1) * pad
+                    if cols == 1 then bwSpan = math.max(bwSpan, w - 2 * pad) end           -- one column: the button takes the panel's width
+                    if b.label.Width() + Skin.S(8) > bwSpan then W.Fit(b.label, b.label:GetText(), bwSpan - Skin.S(8)) end
                     W.Place(b, group, pad + col * (bw + pad), rowY, bwSpan, bh)
                     W.Center(b.label, b, 0, 0, bwSpan, bh)
                     col = col + span

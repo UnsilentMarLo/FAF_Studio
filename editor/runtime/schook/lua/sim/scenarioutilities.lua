@@ -5,7 +5,15 @@ do
 
     function CreateInitialArmyGroup(strArmy, createCommander)
         if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then
-            return baseCreateInitialArmyGroup(strArmy, false)
+            local group, cdr = baseCreateInitialArmyGroup(strArmy, false)
+            -- the map's units stand still while it is edited (a test run releases them: EdSetPlay in schook/lua/simcallbacks.lua)
+            for _, u in group or {} do
+                if u and not u.Dead and u.SetImmobile then
+                    u.EdFrozen = true
+                    pcall(function() u:SetImmobile(true) end)
+                end
+            end
+            return group, cdr
         end
         return baseCreateInitialArmyGroup(strArmy, createCommander)
     end
