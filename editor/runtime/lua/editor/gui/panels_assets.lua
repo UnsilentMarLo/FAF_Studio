@@ -103,15 +103,15 @@ Panels.Register{
             local b = W.Button(group, '', 0, 0, Skin.S(100), Skin.S(22), function(self, event)
                 local f = P.facets and P.facets[i]
                 if not f then return end
-                local values = Cat.Values(State.kind, f[1])
-                local cur = State.filters[f[1]]
-                local at = 0
-                for j, v in values do if v == cur then at = j end end
-                at = at + 1
-                if at > table.getn(values) then State.filters[f[1]] = nil else State.filters[f[1]] = values[at] end
-                P:Rebuild()
-                P:Layout()
-            end, { tip = 'Click to step through the values of this filter; the last step shows all.' })
+                -- a menu of the values (one click to the one wanted, instead of stepping through all of them)
+                local facet = f[1]
+                local items = { { title = 'All', checked = (State.filters[facet] == nil), run = function() State.filters[facet] = nil P:Rebuild() P:Layout() end } }
+                for _, v in Cat.Values(State.kind, facet) do
+                    local value = v
+                    table.insert(items, { title = value, checked = (State.filters[facet] == value), run = function() State.filters[facet] = value P:Rebuild() P:Layout() end })
+                end
+                Menu.Show(GetFrame(0), self.Left(), self.Bottom(), items)
+            end, { tip = 'Choose the value of this filter from a menu; All shows everything.' })
             P.facetButtons[i] = b
         end
 

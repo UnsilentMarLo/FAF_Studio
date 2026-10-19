@@ -410,16 +410,15 @@ Panels.Register{
             local pad = Skin.S(8)
             W.Place(P.field.frame, group, pad, pad, math.max(Skin.S(60), w - 2 * pad), Skin.S(22))
             P.field.Width:Set(math.max(Skin.S(60), w - 2 * pad) - 2)
-            local bottom = h - pad - Skin.S(24)
+            local btns = {}
+            for _, b in { P.bind1, P.bind2, P.clear, P.default, P.all } do table.insert(btns, { b, b.Width() }) end
+            local rowsH = W.Flow(group, btns, 0, 0, w - 2 * pad, Skin.S(24), Skin.S(6), true)      -- the buttons wrap in a narrow panel
+            local bottom = h - pad - rowsH
             local rowAbove = bottom - Skin.S(28)
             local listTop = pad + Skin.S(28)
             P.list:SetRect(pad, listTop, w - 2 * pad, math.max(Skin.S(40), rowAbove - listTop - Skin.S(4)))
             W.Place(P.status, group, pad, rowAbove + Skin.S(6))
-            local x = pad
-            for _, b in { P.bind1, P.bind2, P.clear, P.default, P.all } do
-                W.Place(b, group, x, bottom, b.Width(), Skin.S(24))
-                x = x + b.Width() + Skin.S(6)
-            end
+            W.Flow(group, btns, pad, bottom, w - 2 * pad, Skin.S(24), Skin.S(6))
             Rebuild()
         end
         function P:Destroy()

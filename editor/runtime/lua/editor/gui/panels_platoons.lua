@@ -226,13 +226,10 @@ Panels.Register{
         P.rowAdd = Btn('Add unit...', 74, function()
             local name = Current()
             if not name then return end
-            local Units = import('/lua/editor/units.lua')
-            local ids = {}
-            for _, u in Units.Catalog() do table.insert(ids, u.id) end
-            Dialogs().PickName('Unit type', ids, nil, function(id)
+            import('/lua/editor/gui/browser.lua').OpenUnits{ title = 'Add a unit type to ' .. name, done = function(id)
                 P.row = PL.AddRow(name, { id }) or P.row
                 P:Refresh(true)
-            end)
+            end }
         end)
         P.rowDel = Btn('Remove', 58, function()
             local name = Current()
@@ -259,10 +256,7 @@ Panels.Register{
         P.unitBtn = Btn('Unit...', 120, function()
             local name = Current()
             if not name then return end
-            local Units = import('/lua/editor/units.lua')
-            local ids = {}
-            for _, u in Units.Catalog() do table.insert(ids, u.id) end
-            Dialogs().PickName('Unit type', ids, nil, function(id) PL.SetRow(name, P.row, 'bp', id) P:Refresh(true) end)
+            import('/lua/editor/gui/browser.lua').OpenUnits{ title = 'Unit type of row ' .. tostring(P.row), done = function(id) PL.SetRow(name, P.row, 'bp', id) P:Refresh(true) end }
         end)
         P.squadBtn = Btn('Squad', 90, function()
             local name = Current()

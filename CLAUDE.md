@@ -15,6 +15,7 @@ Read `README.md` and `docs/REPOSITORY.md` first. These rules are mandatory for w
 
 - Maui does not clip: a control past its parent's edge is drawn over its neighbour. Lay rows of buttons out with `W.Flow`; no fixed x positions that assume a panel width.
 - Every number setting is a `W.Slider` (field + bar + minus / plus). Every widget has a tooltip (`tipdata.lua`). Every panel is a `gui/panels_*.lua` that registers itself.
+- Choosing from a long list (units, textures, more than ~20 names) goes through `gui/browser.lua` (categories, search, preview: `docs/projects/editor/BROWSER.md`), never a flat scroll list.
 - The game's own HUD (top menu, Escape quit dialog, unit life bars) is off in the editor and in test runs; the editor owns leaving, restarting and quitting.
 
 ## Testing

@@ -151,6 +151,9 @@ function Dialogs()
         { 'Find and replace', function() import('/lua/editor/gui/feature_parity.lua').FindDialog() end },
         { 'Release map', function() import('/lua/editor/gui/feature_release.lua').ReleaseDialog() end },
         { 'Import mesh', function() import('/lua/editor/gui/dialogs_meshimport.lua').Open() end },
+        { 'Unit browser', function() import('/lua/editor/gui/browser.lua').OpenUnits{} end },
+        { 'Texture browser', function() import('/lua/editor/gui/browser.lua').OpenTextures{ sources = { { '/env', '*_albedo.dds' } } } end },
+        { 'Name browser', function() local n = {} for i = 1, 30 do table.insert(n, 'Mass ' .. i) end import('/lua/editor/gui/browser.lua').OpenNames{ title = 'Names', names = n } end },
     }
     local missing, n = {}, 0
     for _, d in list do

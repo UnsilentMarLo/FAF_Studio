@@ -21,3 +21,4 @@ selftest_env
 selftest_resize
 selftest_platoons
 selftest_mirror
+selftest_browser

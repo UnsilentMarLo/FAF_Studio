@@ -319,6 +319,9 @@ Panels.Register{
             local rule = Selected()
             self.list:Refresh()
             self.bPreset:SetText('Preset: ' .. MaskGen.Presets[state.preset].name)
+            -- the preset names are long: cut to the button
+            W.Fit(self.bPreset.label, 'Preset: ' .. MaskGen.Presets[state.preset].name, math.max(Skin.S(40), self.bPreset.Width() - Skin.S(10)))
+            W.Center(self.bPreset.label, self.bPreset, 0, 0, self.bPreset.Width(), self.bPreset.Height())
             self.bType:SetText('New rule: ' .. MaskGen.Types[MaskGen.Order[state.addType]].label)
             self.bLive:SetOn(state.live)
             self.bShow:SetOn(MaskGen.Preview.show)

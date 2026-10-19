@@ -9,21 +9,32 @@ local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local Fav = import('/lua/editor/favourites.lua')
 local Units = import('/lua/editor/units.lua')
+local Menu = import('/lua/editor/gui/menu.lua')
+local Cat = import('/lua/editor/assetcat.lua')
 
 live = {}
 
 Panels.Register{
     id = 'units', title = 'Units',
     create = function(group, host)
-        local P = { shown = {} }
+        local P = { shown = {}, f = {} }
         live.units = P
+
+        -- the categories of a unit (faction, tech, layer, type: assetcat.lua), by id
+        local tagsById = {}
+        for _, e in Cat.Entries('units') do tagsById[e.key] = e.tags end
 
         local function Rebuild()
             local filter = string.lower(P.filter and P.filter:GetText() or '')
             P.shown = {}
             for _, e in Units.Catalog() do
-                if filter == '' or string.find(string.lower(e.id), filter, 1, true) or string.find(string.lower(e.desc), filter, 1, true)
-                   or string.find(string.lower(e.name), filter, 1, true) or string.find(string.lower(e.faction), filter, 1, true) then
+                local pass = true
+                for facet, value in P.f do
+                    local tags = tagsById[e.id]
+                    if not tags or tags[facet] ~= value then pass = false break end
+                end
+                if pass and (filter == '' or string.find(string.lower(e.id), filter, 1, true) or string.find(string.lower(e.desc), filter, 1, true)
+                   or string.find(string.lower(e.name), filter, 1, true) or string.find(string.lower(e.faction), filter, 1, true)) then
                     table.insert(P.shown, e)
                 end
             end
@@ -38,6 +49,26 @@ Panels.Register{
             local key = Units.Active
             if key then Fav.Toggle('units', key) Rebuild() P:Refresh() end
         end)
+        -- categories: a button per facet opens a menu of its values (the list is long: narrow it by faction, tech level, type) and Browse... opens the full browser
+        P.fb = {}
+        for i, def in { { 'faction', 'Faction' }, { 'tech', 'Tech' }, { 'type', 'Type' } } do
+            local facet, label = def[1], def[2]
+            P.fb[i] = W.Button(group, label, 0, 0, Skin.S(i == 2 and 66 or 86), Skin.S(22), function(self)
+                local items = { { title = 'All ' .. string.lower(label) .. 's', checked = (P.f[facet] == nil), run = function() P.f[facet] = nil Rebuild() P:Refresh() end } }
+                for _, v in Cat.Values('units', facet) do
+                    local value = v
+                    table.insert(items, { title = value, checked = (P.f[facet] == value), run = function() P.f[facet] = value Rebuild() P:Refresh() end })
+                end
+                Menu.Show(GetFrame(0), self.Left(), self.Bottom(), items)
+            end, { tip = 'Narrow the list to one ' .. string.lower(label) .. ' (click again to choose another or to show all).' })
+        end
+        P.browse = W.Button(group, 'Browse...', 0, 0, Skin.S(86), Skin.S(22), function()
+            import('/lua/editor/gui/browser.lua').OpenUnits{ title = 'Choose a unit to place', current = Units.Active, done = function(id)
+                Units.Active = id
+                if UI.State.tool ~= 'unit' then UI.SelectTool('unit') end
+                P:Refresh()
+            end }
+        end, { tip = 'Open the unit browser: categories, pictures and search in one window.' })
         P.favOnly = W.Button(group, 'Starred only', 0, 0, Skin.S(96), Skin.S(22), function(self) P.onlyFav = self.on Rebuild() end, { toggle = true })
 
         P.list = W.VirtualList(group, {
@@ -95,6 +126,10 @@ Panels.Register{
 
         function P:Refresh()
             P.list:Refresh()
+            for i, def in { { 'faction', 'Faction' }, { 'tech', 'Tech' }, { 'type', 'Type' } } do
+                P.fb[i]:SetText(P.f[def[1]] and tostring(P.f[def[1]]) or def[2])
+                P.fb[i]:SetOn(P.f[def[1]] ~= nil)
+            end
             P.army:SetText('Army: ' .. tostring(Units.ArmyName))
             P.group:SetText('Group: ' .. tostring(Units.Group))
             W.Fit(P.name, 'Placing: ' .. tostring(Units.Active or 'none selected') .. '  (' .. table.getn(P.shown) .. ' units listed)', (P.w or 300) - Skin.S(16))
@@ -108,26 +143,27 @@ Panels.Register{
             W.Place(P.filter.frame, group, pad + Skin.S(34), y, w - 2 * pad - Skin.S(34), Skin.S(22))
             P.filter.Width:Set(w - 2 * pad - Skin.S(34) - 2)
             y = y + Skin.S(28)
-            W.Place(P.star, group, pad, y, Skin.S(44), Skin.S(22))
-            W.Place(P.favOnly, group, pad + Skin.S(50), y, Skin.S(96), Skin.S(22))
-            y = y + Skin.S(28)
+            y = W.Flow(group, { { P.fb[1], Skin.S(86) }, { P.fb[2], Skin.S(66) }, { P.fb[3], Skin.S(86) }, { P.browse, Skin.S(86) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4)) + Skin.S(6)
+            y = W.Flow(group, { { P.star, Skin.S(44) }, { P.favOnly, Skin.S(96) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(6)) + Skin.S(6)
             -- army and group side by side when the panel is wide enough, else one button per row (a docked panel is ~200 px wide)
             local bw = w - 2 * pad
             local wide = bw >= Skin.S(306)
             local foot = wide and Skin.S(84) or Skin.S(112)
-            P.list:SetRect(pad, y, w - 2 * pad, math.max(Skin.S(60), h - y - foot - pad))
+            local listH = math.max(Skin.S(60), h - y - foot - pad)
+            P.list:SetRect(pad, y, w - 2 * pad, listH)
+            local fy = math.max(h - foot, y + listH + pad)      -- a short panel scrolls instead of laying the controls over each other
             if wide then
-                W.Place(P.army, group, pad, h - foot, Skin.S(150), Skin.S(24))
-                W.Place(P.group, group, pad + Skin.S(156), h - foot, Skin.S(150), Skin.S(24))
-                W.Place(P.move, group, pad, h - foot + Skin.S(28), Skin.S(140), Skin.S(24))
-                W.Place(P.name, group, pad, h - foot + Skin.S(56))
+                W.Place(P.army, group, pad, fy, Skin.S(150), Skin.S(24))
+                W.Place(P.group, group, pad + Skin.S(156), fy, Skin.S(150), Skin.S(24))
+                W.Place(P.move, group, pad, fy + Skin.S(28), Skin.S(140), Skin.S(24))
+                W.Place(P.name, group, pad, fy + Skin.S(56))
             else
                 for i, b in { P.army, P.group, P.move } do
-                    W.Place(b, group, pad, h - foot + (i - 1) * Skin.S(28), bw, Skin.S(24))
+                    W.Place(b, group, pad, fy + (i - 1) * Skin.S(28), bw, Skin.S(24))
                     b.Width:Set(bw)
                     W.Center(b.label, b, 0, 0, bw, Skin.S(24))
                 end
-                W.Place(P.name, group, pad, h - foot + Skin.S(84))
+                W.Place(P.name, group, pad, fy + Skin.S(84))
             end
             P:Refresh()
         end

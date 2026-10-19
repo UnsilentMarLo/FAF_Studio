@@ -24,6 +24,11 @@ end
 
 --- A list of names to choose from: done(name) with the choice, or nothing when the dialog is closed another way.
 function PickName(title, names, current, done)
+    -- a long list is browsed by category (prefix / first letter), not scrolled (browser.lua)
+    if table.getn(names) >= 24 then
+        import('/lua/editor/gui/browser.lua').OpenNames{ title = title, names = names, current = current, done = done }
+        return
+    end
     local d = Dialog.Open(title, 380, 380)
     local c = Skin.color
     local state = { shown = names }
