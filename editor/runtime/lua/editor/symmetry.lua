@@ -132,3 +132,63 @@ function Axes()
     end
     return lines
 end
+
+-- ---- counterparts of a moved selection ---------------------------------------------------------------------------------------------------------
+-- With symmetry on, moving or turning a selected object also moves the object that stands at its mirror image (if there is one): the mirror candidate follows by the
+-- mirrored move and turn.
+
+--- items: the selected objects, pos(o) -> x, z, candidates: every object that may be a counterpart, same(a, b): may b be the counterpart of a, selected(c): already selected.
+--- -> nil (symmetry off / no counterparts) or a list of groups { key, kind, refX, refZ, targets = { candidate, ... } }; one group per image of the symmetry.
+function Plan(items, pos, candidates, same, selected)
+    if Mode == 'off' then return nil end
+    local groups, byKey = {}, {}
+    for _, it in items do
+        local x, z = pos(it)
+        for _, img in Points(x, z) do
+            if img.kind ~= 'id' then
+                for _, c in candidates do
+                    if not selected(c) and same(it, c) then
+                        local cx, cz = pos(c)
+                        local ex, ez = cx - img.x, cz - img.z
+                        if ex * ex + ez * ez <= 2.25 then
+                            local key = img.kind .. ':' .. string.format('%.3f', img.angle or 0)
+                            local g = byKey[key]
+                            if not g then
+                                g = { key = key, kind = img.kind, refX = x, refZ = z, targets = {}, used = {} }
+                                byKey[key] = g
+                                table.insert(groups, g)
+                            end
+                            if not g.used[c] then
+                                g.used[c] = true
+                                table.insert(g.targets, c)
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if table.getn(groups) == 0 then return nil end
+    return groups
+end
+
+local function ImageOf(key, x, z)
+    for _, p in Points(x, z) do
+        if p.kind .. ':' .. string.format('%.3f', p.angle or 0) == key then return p end
+    end
+    return nil
+end
+
+--- The move (dx, dz) of the selected object at (x, z) as its image `key` sees it.
+function ImageDelta(key, x, z, dx, dz)
+    local a, b = ImageOf(key, x, z), ImageOf(key, x + dx, z + dz)
+    if not (a and b) then return 0, 0 end
+    return b.x - a.x, b.z - a.z
+end
+
+--- A turn of `deg` degrees as the image sees it: rotations turn the same way, mirrors the other way.
+function ImageTurn(kind, deg)
+    if kind == 'rot' then return deg end
+    return -deg
+end

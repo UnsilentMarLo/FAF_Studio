@@ -362,7 +362,30 @@ function SelectionCenter()
     return sx / n, sz / n
 end
 
---- Moves every selected marker and area by (dx, dz) as one undo step (markers snap to the build grid like a drag does).
+--- The markers that stand at the mirror images of the selected markers (same type, with symmetry on): groups, see symmetry.lua Plan.
+local function MirrorPlan()
+    local Sym = import('/lua/editor/symmetry.lua')
+    if Sym.Mode == 'off' or not Map.Doc then return nil end
+    local items, selected = {}, {}
+    for _, it in Items do
+        if it.kind == 'marker' then
+            local m = Markers()[it.name]
+            if m then
+                table.insert(items, { name = it.name, type = m.type, x = m.position[1], z = m.position[3] })
+                selected[it.name] = true
+            end
+        end
+    end
+    if table.getn(items) == 0 then return nil end
+    local cands = {}
+    for name, m in Markers() do
+        if not selected[name] then table.insert(cands, { name = name, type = m.type, x = m.position[1], z = m.position[3] }) end
+    end
+    return Sym.Plan(items, function(o) return o.x, o.z end, cands, function(a, b) return a.type == b.type end, function(c) return selected[c.name] end)
+end
+
+--- Moves every selected marker and area by (dx, dz) as one undo step (markers snap to the build grid like a drag does). With symmetry on the marker at the mirror image of
+--- a selected one moves by the mirrored move.
 function MoveSelectionBy(dx, dz)
     if not Map.Doc or ReadOnly or table.getn(Items) == 0 then return false end
     local before, after = {}, {}
@@ -377,6 +400,21 @@ function MoveSelectionBy(dx, dz)
                 local r = obj.rectangle
                 table.insert(before, { kind = 'area', name = it.name, r1 = r[1], r2 = r[2], r3 = r[3], r4 = r[4] })
                 table.insert(after, { kind = 'area', name = it.name, r1 = r[1] + dx, r2 = r[2] + dz, r3 = r[3] + dx, r4 = r[4] + dz })
+            end
+        end
+    end
+    local plan = MirrorPlan()
+    if plan then
+        local Sym = import('/lua/editor/symmetry.lua')
+        for _, g in plan do
+            local mdx, mdz = Sym.ImageDelta(g.key, g.refX, g.refZ, dx, dz)
+            for _, t in g.targets do
+                local obj = Markers()[t.name]
+                if obj then
+                    local nx, nz = Grid.SnapMarker(obj.type, obj.position[1] + mdx, obj.position[3] + mdz)
+                    table.insert(before, { kind = 'marker', name = t.name, x = obj.position[1], y = obj.position[2], z = obj.position[3] })
+                    table.insert(after, { kind = 'marker', name = t.name, x = nx, y = GroundHeight(nx, nz), z = nz })
+                end
             end
         end
     end
@@ -410,6 +448,19 @@ function RotateSelectionBy(deg)
             if m then
                 m.orientation = m.orientation or Map.MakeVec3(0, 0, 0)
                 table.insert(changes, { m = m, old = m.orientation[2] or 0, new = (m.orientation[2] or 0) + math.rad(deg) })
+            end
+        end
+    end
+    local plan = MirrorPlan()
+    if plan and table.getn(changes) > 0 then
+        local Sym = import('/lua/editor/symmetry.lua')
+        for _, g in plan do
+            for _, t in g.targets do
+                local m = Markers()[t.name]
+                if m then
+                    m.orientation = m.orientation or Map.MakeVec3(0, 0, 0)
+                    table.insert(changes, { m = m, old = m.orientation[2] or 0, new = (m.orientation[2] or 0) + math.rad(Sym.ImageTurn(g.kind, deg)) })
+                end
             end
         end
     end
@@ -685,6 +736,19 @@ function NewLiveMove()
             end
         end
     end
+    -- with symmetry on the markers at the mirror images of the selected ones follow, mirrored
+    local plan = MirrorPlan()
+    if plan then
+        for _, g in plan do
+            for _, t in g.targets do
+                local obj = Markers()[t.name]
+                if obj then
+                    table.insert(before, { kind = 'marker', name = t.name, x = obj.position[1], y = obj.position[2], z = obj.position[3], turn = (obj.orientation and obj.orientation[2]) or 0,
+                                           mk = g.key, mkind = g.kind, refX = g.refX, refZ = g.refZ })
+                end
+            end
+        end
+    end
     local L = { moved = false, dx = 0, dz = 0, deg = 0 }
 
     local function Snapshot()
@@ -727,11 +791,17 @@ function NewLiveMove()
             if b.kind == 'marker' then
                 local m = Markers()[b.name]
                 if m then
-                    local nx, nz = Grid.SnapMarker(m.type, b.x + L.dx, b.z + L.dz)
+                    local ddx, ddz, ddeg = L.dx, L.dz, L.deg
+                    if b.mk then
+                        local Sym = import('/lua/editor/symmetry.lua')
+                        ddx, ddz = Sym.ImageDelta(b.mk, b.refX, b.refZ, L.dx, L.dz)
+                        ddeg = Sym.ImageTurn(b.mkind, L.deg)
+                    end
+                    local nx, nz = Grid.SnapMarker(m.type, b.x + ddx, b.z + ddz)
                     Map.MoveMarker(b.name, nx, GroundHeight(nx, nz), nz)
-                    if L.deg ~= 0 then
+                    if ddeg ~= 0 then
                         m.orientation = m.orientation or Map.MakeVec3(0, 0, 0)
-                        m.orientation[2] = b.turn + math.rad(L.deg)
+                        m.orientation[2] = b.turn + math.rad(ddeg)
                     end
                 end
             else

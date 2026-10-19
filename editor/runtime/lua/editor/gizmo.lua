@@ -16,8 +16,8 @@ local Dragger = import('/lua/maui/dragger.lua').Dragger
 Dragging = false      -- 'x' | 'z' | 'free' | 'ring' while a handle is dragged
 Preview = false       -- { dx, dz } or { turn = degrees } while dragging
 
-local ARROW_PX = 70
-local RING_PX = 46
+local ARROW_PX = 56
+local RING_PX = 30
 local HIT_PX = 9
 local CENTER_PX = 13    -- half side of the centre square (outside a marker icon, which is 22 px)
 

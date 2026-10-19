@@ -342,6 +342,13 @@ local function Read(i)
     return { bp = bp, x = x, y = y, z = z, heading = 2 * math.atan2(qy, qw), sx = sx, sy = sy, sz = sz }
 end
 
+--- Heading (radians) of a selected prop { bp, x, z } (0 when it cannot be found).
+function SelectedHeading(p)
+    local idx = FindIndex(p.bp, p.x, p.z)
+    local d = idx and Read(idx)
+    return d and d.heading or 0
+end
+
 function Info()
     if table.getn(Selection) ~= 1 then return nil end
     local idx = FindIndex(Selection[1].bp, Selection[1].x, Selection[1].z)
@@ -389,13 +396,66 @@ local function Transform(label, change)
     return true
 end
 
-function MoveSelected(dx, dz)
+local function MoveSelectedOnly(dx, dz)
     return Transform('move props', function(o)
         local n = {}
         for k, v in o do n[k] = v end
         n.x, n.z = o.x + dx, o.z + dz
         return n
     end)
+end
+
+local function RotateSelectedOnly(deg)
+    local rad = math.rad(deg)
+    return Transform('rotate props', function(o)
+        local n = {}
+        for k, v in o do n[k] = v end
+        n.heading = o.heading + rad
+        return n
+    end)
+end
+
+--- The props that stand at the mirror images of the selected ones (same blueprint, with symmetry on): groups, see symmetry.lua Plan.
+local function MirrorPlan()
+    if Symmetry.Mode == 'off' or table.getn(Selection) == 0 then return nil end
+    local found = {}
+    for _, p in Selection do
+        for _, img in Symmetry.Points(p.x, p.z) do
+            if img.kind ~= 'id' then
+                local c = Pick(img.x, img.z, 1.5)
+                if c and c.bp == p.bp then table.insert(found, c) end
+            end
+        end
+    end
+    if table.getn(found) == 0 then return nil end
+    return Symmetry.Plan(Selection, function(p) return p.x, p.z end, found, function(a, b) return a.bp == b.bp end, function(c) return IsSelected(c) end)
+end
+
+local function WithMirrors(plan, act, label)
+    local main = Selection
+    local pushed = 1
+    for _, g in plan do
+        Selection = {}
+        for _, c in g.targets do table.insert(Selection, { bp = c.bp, x = c.x, z = c.z }) end
+        if act(g) then pushed = pushed + 1 end
+    end
+    Selection = main
+    SelRevision = SelRevision + 1
+    if pushed > 1 then History.Merge(pushed, label) end
+end
+
+function MoveSelected(dx, dz)
+    local plan = MirrorPlan()
+    local ok = MoveSelectedOnly(dx, dz)
+    if ok and plan then
+        local main = Selection
+        WithMirrors(plan, function(g)
+            local mdx, mdz = Symmetry.ImageDelta(g.key, g.refX, g.refZ, dx, dz)
+            return MoveSelectedOnly(mdx, mdz)
+        end, 'move props (with mirror)')
+        Selection = main
+    end
+    return ok
 end
 
 --- One selected prop to an absolute position.
@@ -406,13 +466,14 @@ function MoveTo(x, z)
 end
 
 function RotateSelected(deg)
-    local rad = math.rad(deg)
-    return Transform('rotate props', function(o)
-        local n = {}
-        for k, v in o do n[k] = v end
-        n.heading = o.heading + rad
-        return n
-    end)
+    local plan = MirrorPlan()
+    local ok = RotateSelectedOnly(deg)
+    if ok and plan then
+        local main = Selection
+        WithMirrors(plan, function(g) return RotateSelectedOnly(Symmetry.ImageTurn(g.kind, deg)) end, 'turn props (with mirror)')
+        Selection = main
+    end
+    return ok
 end
 
 --- Sets the heading of the single selected prop (degrees).

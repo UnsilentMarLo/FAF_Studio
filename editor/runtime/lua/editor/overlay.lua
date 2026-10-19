@@ -446,9 +446,11 @@ end
 -- The brush's weight map as a greyscale gradient on the ground: every height sample inside the radius shows the weight a dab would give it
 -- (brighter = stronger), scaled by the strength setting; the ring marks the radius.
 local previewKey = ''
+local previewKeys = {}        -- per image of the brush under symmetry: slot -> key of what is drawn
 lastBrushPos = false
 
-local function BrushPreview(p, r, mode)
+local function BrushPreview(p, r, mode, slot)
+    slot = slot or ''
     local B = Terrain.Brush
     local ref = (mode == 'flatten' or mode == 'smooth') and 1.0 or 6.0
     local scale = 0.25 + 0.75 * math.min(1, B.strength / ref)
@@ -464,7 +466,8 @@ local function BrushPreview(p, r, mode)
         extra = St.shape .. '|' .. St.rotation .. '|' .. St.falloff
     end
     local key = string.format('%.2f|%.2f|%d|%.2f|%.2f|%s|%s|%d|%s', p[1], p[3], r, B.falloff, scale, mode, Brushes.Active, Brushes.Angle, extra)
-    if key == previewKey then return end
+    if key == previewKeys[slot] then return end
+    previewKeys[slot] = key
     previewKey = key
     local x0, z0, x1, z1 = math.floor(p[1] - r), math.floor(p[3] - r), math.ceil(p[1] + r), math.ceil(p[3] + r)
     local nw, nh = x1 - x0 + 1, z1 - z0 + 1
@@ -482,7 +485,7 @@ local function BrushPreview(p, r, mode)
             end
         end
     end
-    ed_overlay_nodes('cur:brush', x0, z0, nw, nh, values, 'FFFFFF', 190)
+    ed_overlay_nodes('cur:brush' .. slot, x0, z0, nw, nh, values, 'FFFFFF', 190)
 end
 
 -- ---- symmetry: the axes across the map and a ring at every image of the brush ----------------------------------------------------------
@@ -683,7 +686,7 @@ local unitIds = {}
 --- Rings at every unit of the map (a unit tool is active) and a brighter one for the selected units.
 local function DrawUnits(ui)
     local Units = import('/lua/editor/units.lua')
-    local active = (ui.State.tool == 'unit' or ui.State.tool == 'unit_select')
+    local active = (ui.State.tool == 'unit_select')      -- (the Place unit tool shows a ghost instead of a ring on every unit)
     local list = active and Units.All() or {}
     local off = Units.DragOffset
     local key = string.format('%d|%d|%d|%s|%s|%s', table.getn(list), Units.SelRevision, table.getn(Units.Selection), tostring(off and off[1]), tostring(off and off[2]), tostring(active))
@@ -800,8 +803,11 @@ local function Pointer(view, ui, mouseX, mouseY)
             local q = images[i]
             if q then
                 Line(nil, 'cur:ring' .. i, Circle(q.x, q.z, r, 48, GroundHeight(q.x, q.z), math.max(2, r)), color, 0.3, 2, 3, true)
+                BrushPreview({ q.x, GroundHeight(q.x, q.z), q.z }, r, tool.id, tostring(i))        -- every image shows the weights, not only the first
             else
                 Remove('cur:ring' .. i)
+                Remove('cur:brush' .. i)
+                previewKeys[tostring(i)] = nil
             end
         end
         Remove('cur:inner')
@@ -840,6 +846,12 @@ local function Pointer(view, ui, mouseX, mouseY)
     if not (tool and tool.kind == 'brush' and p) then
         Remove('cur:brush')
         previewKey = ''
+        -- the images of the brush under symmetry go with it (one ring stayed on the map after the tool was changed)
+        for i = 2, 4 do
+            Remove('cur:ring' .. i)
+            Remove('cur:brush' .. i)
+        end
+        previewKeys = {}
     end
     if not (tool and tool.kind == 'marker' and p) then
         Remove('cur:fp') Remove('cur:sk')
@@ -942,6 +954,8 @@ function Update(ui)
     pcall(function() import('/lua/editor/chains.lua').Draw(ui) end)        -- marker chains (parity audit)
     pcall(function() import('/lua/editor/unitrings.lua').Draw(ui) end)     -- range rings of the selected units
     DrawPropSelection(ui)
+    pcall(function() import('/lua/editor/placer.lua').Update(ui, view) end)      -- the ghost of what the Place tools put down
+    pcall(function() import('/lua/editor/placer.lua').UpdateMoves(ui) end)        -- the ghosts of what the select tools drag
     DrawTypes(view)
     pcall(function() import('/lua/editor/maskgen.lua').DrawOverlay(view) end)       -- the mask generator's preview
 

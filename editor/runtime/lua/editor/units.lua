@@ -294,8 +294,48 @@ local function Transform(label, change)
     return true
 end
 
-function MoveSelected(dx, dz)
+local function MoveSelectedOnly(dx, dz)
     return Transform('move units', function(u) u.x, u.z = u.x + dx, u.z + dz return u end)
+end
+
+--- The counterparts of the selected units under the symmetry (units of the same blueprint at the mirror images): list of groups, see symmetry.lua Plan.
+local function MirrorPlan()
+    if Symmetry.Mode == 'off' or table.getn(Selection) == 0 then return nil end
+    local items = {}
+    for _, sel in Selection do
+        local u = Find(sel)
+        if u then table.insert(items, u) end
+    end
+    return Symmetry.Plan(items, function(u) return u.x, u.z end, All(), function(a, b) return a.bp == b.bp end, function(u) return IsSelected(u) end)
+end
+
+--- Runs `act(group)` with the selection set to the counterparts of each group and puts the selection back; merges the undo steps into one.
+local function WithMirrors(plan, act, label)
+    local main = Selection
+    local pushed = 1
+    for _, g in plan do
+        Selection = {}
+        for _, u in g.targets do table.insert(Selection, { army = u.army, name = u.name }) end
+        if act(g) then pushed = pushed + 1 end
+    end
+    Selection = main
+    SelRevision = SelRevision + 1
+    if pushed > 1 then History.Merge(pushed, label) end
+end
+
+function MoveSelected(dx, dz)
+    local plan = MirrorPlan()
+    local ok = MoveSelectedOnly(dx, dz)
+    if ok and plan then
+        local main = Selection
+        local x0, z0 = plan[1].refX, plan[1].refZ
+        WithMirrors(plan, function(g)
+            local mdx, mdz = Symmetry.ImageDelta(g.key, g.refX, g.refZ, dx, dz)
+            return MoveSelectedOnly(mdx, mdz)
+        end, 'move units (with mirror)')
+        Selection = main
+    end
+    return ok
 end
 
 function MoveTo(x, z)
@@ -304,9 +344,20 @@ function MoveTo(x, z)
     return MoveSelected(x - i.x, z - i.z)
 end
 
-function RotateSelected(deg)
+local function RotateSelectedOnly(deg)
     local rad = math.rad(deg)
     return Transform('rotate units', function(u) u.heading = u.heading + rad return u end)
+end
+
+function RotateSelected(deg)
+    local plan = MirrorPlan()
+    local ok = RotateSelectedOnly(deg)
+    if ok and plan then
+        local main = Selection
+        WithMirrors(plan, function(g) return RotateSelectedOnly(Symmetry.ImageTurn(g.kind, deg)) end, 'turn units (with mirror)')
+        Selection = main
+    end
+    return ok
 end
 
 function SetHeading(deg)

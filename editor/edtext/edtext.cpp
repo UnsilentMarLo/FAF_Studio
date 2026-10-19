@@ -117,7 +117,19 @@ EDT_API int edt_raster(EdFont* f, uint32_t face, uint32_t glyph, int phase, int*
     if (SUCCEEDED(a->GetAlphaTextureBounds(DWRITE_TEXTURE_CLEARTYPE_3x1, &b)) && b.right > b.left && b.bottom > b.top) {
         *left = b.left; *top = b.top; *w = b.right - b.left; *h = b.bottom - b.top;
         int need = (*w) * (*h) * 3;
-        if (need <= cap && SUCCEEDED(a->CreateAlphaTexture(DWRITE_TEXTURE_CLEARTYPE_3x1, &b, rgb, (UINT32)need))) ok = 1;
+        if (need <= cap && SUCCEEDED(a->CreateAlphaTexture(DWRITE_TEXTURE_CLEARTYPE_3x1, &b, rgb, (UINT32)need))) {
+            // Grayscale: the three sub-pixel coverages of a pixel become one value (copied to R, G, B). ClearType's per-channel coverage showed as colour fringes over the editor's
+            // dark panels. A gamma below 1 gives the thinner light-on-dark strokes back their weight, so the text stays crisp instead of turning grey.
+            static uint8_t lut[256]; static bool lutReady = false;
+            if (!lutReady) { for (int i = 0; i < 256; i++) lut[i] = (uint8_t)std::min(255.0, 255.0 * std::pow(i / 255.0, 0.72) + 0.5); lutReady = true; }
+            int px = (*w) * (*h);
+            for (int i = 0; i < px; i++) {
+                int g = (rgb[i * 3] + 2 * rgb[i * 3 + 1] + rgb[i * 3 + 2] + 2) / 4;      // the centre sub-pixel counts double: less horizontal blur than a plain average
+                uint8_t v = lut[g];
+                rgb[i * 3] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = v;
+            }
+            ok = 1;
+        }
     }
     a->Release(); return ok;
 }

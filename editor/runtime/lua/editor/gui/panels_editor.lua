@@ -32,7 +32,7 @@ local TOOL_GROUPS = {
     { 'Terrain shape', { 'raise', 'lower', 'flatten', 'smooth', 'plateau', 'noise', 'ramp', 'stamp' } },
     { 'Erosion', { 'erode', 'rain', 'deposit' } },
     { 'Texture', { 'paint', 'erase', 'stamp_paint', 'ttype' } },
-    { 'Place objects', { 'unit', 'prop', 'prop_erase', 'decal', 'decal_erase', 'marker', 'area', 'army', 'paths' } },
+    { 'Place objects', { 'unit', 'prop_place', 'decal_place', 'prop', 'prop_erase', 'decal', 'decal_erase', 'marker', 'area', 'army', 'paths' } },
     { 'Measure and view', { 'ruler', 'camera' } },
 }
 

@@ -61,8 +61,12 @@ Tools = {
     { id = 'prop_erase', label = 'Erase props', kind = 'brush', workspaces = { Objects = true } },
     { id = 'decal',   label = 'Decal brush', kind = 'brush', workspaces = { Objects = true } },
     { id = 'decal_erase', label = 'Erase decals', kind = 'brush', workspaces = { Objects = true } },
-    { id = 'unit',    label = 'Unit tool', kind = 'custom', workspaces = { Objects = true, Mission = true },
-      OnPress = function(wx, wz, event) return import('/lua/editor/units.lua').Place(wx, wz) > 0 end },
+    { id = 'unit',    label = 'Place unit', kind = 'custom', workspaces = { Objects = true, Mission = true },
+      OnPress = function(wx, wz, event) return import('/lua/editor/placer.lua').Press('unit', wx, wz, event) end },
+    { id = 'prop_place', label = 'Place prop', kind = 'custom', workspaces = { Objects = true },
+      OnPress = function(wx, wz, event) return import('/lua/editor/placer.lua').Press('prop_place', wx, wz, event) end },
+    { id = 'decal_place', label = 'Place decal', kind = 'custom', workspaces = { Objects = true },
+      OnPress = function(wx, wz, event) return import('/lua/editor/placer.lua').Press('decal_place', wx, wz, event) end },
     { id = 'unit_select', label = 'Select units', kind = 'custom', workspaces = { Objects = true, Mission = true },
       OnPress = function(wx, wz, event) return import('/lua/editor/units.lua').Press(wx, wz, event) end },
     { id = 'decal_select', label = 'Select decals', kind = 'custom', workspaces = { Objects = true },
@@ -659,6 +663,7 @@ end
 local function UnitBars(on)
     pcall(ConExecute, 'UI_RenderUnitBars ' .. (on and 'true' or 'false'))
     pcall(ConExecute, 'ren_SelectBoxes ' .. (on and 'true' or 'false'))       -- the game's selection / hover box of a unit (the editor draws its own selection)
+    pcall(ConExecute, 'ren_Ranges ' .. (on and 'true' or 'false'))            -- the game's range rings of a unit (the editor draws its own: unitrings.lua)
 end
 
 local dots = {}      -- pool of { dot = Bitmap, text = Text }
