@@ -203,9 +203,11 @@ end
 --- build grid. The colour turns red when the validator found the marker blocked, orange when stacked, yellow when off the grid.
 local function RebuildFootprints()
     local seen = {}
+    local Filter = import('/lua/editor/markerfilter.lua')
     for name, m in Map.Doc.save.MasterChain._MASTERCHAIN_.Markers do
         local info = Grid.ResourceInfo(m.type)
-        if info then
+        -- a hidden marker layer shows nothing of its markers: not the icon, the prop, the name or the footprint rectangles (a selected marker stays visible)
+        if info and (not Filter.IsHidden(m.type) or Tools.IsSelected('marker', name)) then
             local x, z = m.position[1], m.position[3]
             local issue = Validate.ByName[name]
             local color = (issue and ISSUE_COLOR[issue]) or FOOTPRINT_COLOR[m.type] or 'FFFFFF'
@@ -285,8 +287,9 @@ local function UpdateLabels(view, px)
         if p.x < 0 or p.y < 0 or p.x > w or p.y > h then return end
         n = n + 1
         local t = Label(n)
-        t:SetText(name)
-        t:SetColor(extra and 'FFFFE040' or 'FFE8F0F8')
+        if t.shownText ~= name then t:SetText(name) t.shownText = name end
+        local color = extra and 'FFFFE040' or 'FFE8F0F8'
+        if t.shownColor ~= color then t:SetColor(color) t.shownColor = color end
         t.Left:Set(ox + p.x + 17)
         t.Top:Set(oy + p.y - 7)
         t:Show()
@@ -964,8 +967,6 @@ function Update(ui)
     end
     Handles(view, px)
     MarkerVis.Update()
-    if math.mod(frameCount, 3) == 0 then
-        UpdateLabels(view, px)
-    end
+    UpdateLabels(view, px)      -- every frame: the names follow a moving marker or camera without lag (only the position is set per frame, text and colour when they change)
     return true
 end

@@ -45,6 +45,17 @@ function Apply(opts)
     applied = true
 end
 
+--- A test run uses the game's own key map (its hotkeys, the spawn menu, control groups ...): the editor's map would swallow them. Apply() brings the editor's keys back.
+function UseGame()
+    local KeyMapper = import('/lua/keymap/keymapper.lua')
+    IN_ClearKeyMap()
+    IN_AddKeyMapTable(KeyMapper.GetKeyMappings(true))
+    pcall(function() IN_AddKeyMapTable(KeyMapper.GenerateHotbuildModifiers()) end)
+    pcall(function() import('/lua/keymap/hotbuild.lua').addModifiers() end)
+    pcall(function() import('/lua/keymap/hotkeylabels.lua').init() end)
+    applied = false
+end
+
 function Rebind(id, keys)
     local def = Commands.registry[id]
     if not def then return false end

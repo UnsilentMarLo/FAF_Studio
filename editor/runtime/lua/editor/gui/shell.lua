@@ -167,7 +167,14 @@ function CloseWindow(host)
             LayoutChanged()
             host:Destroy()
             ed_window_destroy(id)
-            for _, panelId in panels do S.main:AddPanel(panelId) end
+            -- during a test run the editor's main window stays hidden: the panels go back to it when the run ends (OnMode)
+            local ok, mode = pcall(function() return import('/lua/editor/ui.lua').State.mode end)
+            if ok and mode == 'play' then
+                S.pendingDock = S.pendingDock or {}
+                for _, panelId in panels do table.insert(S.pendingDock, panelId) end
+            else
+                for _, panelId in panels do S.main:AddPanel(panelId) end
+            end
             return
         end
     end
@@ -424,6 +431,14 @@ end
 --- ui.lua switched between editing and a test run: the shell disappears for the run and a Pause / Stop bar takes its place.
 function OnMode(mode)
     local playing = (mode == 'play')
+    -- the game's key map in a test run, the editor's own while editing
+    local Keys = import('/lua/editor/gui/keys.lua')
+    if playing then pcall(Keys.UseGame) else pcall(Keys.Apply, { exclusive = true }) end
+    if not playing and S.pendingDock then
+        local list = S.pendingDock
+        S.pendingDock = false
+        for _, panelId in list do pcall(function() S.main:AddPanel(panelId) end) end
+    end
     if S.main then
         if playing then S.main.root:Hide() else S.main.root:Show() end
     end

@@ -38,7 +38,7 @@ local COLOR_AREA = 'ff30c8ff'
 --- 'custom' calls tool.OnPress(wx, wz, event) (return false to let the click through). Editor mods add tools by
 --- appending to this table from a hook on /lua/editor/ui.lua.
 Tools = {
-    { id = 'select',  label = 'Select',  kind = 'select' },
+    { id = 'select',  label = 'Select marker / area',  kind = 'select' },
     { id = 'raise',   label = 'Raise',   kind = 'brush' },
     { id = 'lower',   label = 'Lower',   kind = 'brush' },
     { id = 'flatten', label = 'Flatten', kind = 'brush' },
@@ -69,10 +69,10 @@ Tools = {
       OnPress = function(wx, wz, event) return import('/lua/editor/decals.lua').Press(wx, wz, event) end },
     { id = 'prop_select', label = 'Select props', kind = 'custom', workspaces = { Objects = true },
       OnPress = function(wx, wz, event) return import('/lua/editor/props.lua').Press(wx, wz, event) end },
-    { id = 'marker',  label = 'Marker',  kind = 'marker' },
+    { id = 'marker',  label = 'Place marker',  kind = 'marker' },
     { id = 'army',    label = 'Start position', kind = 'custom', workspaces = { Objects = true, Mission = true },
       OnPress = function(wx, wz, event) return import('/lua/editor/armies.lua').Place(wx, wz) ~= nil end },
-    { id = 'area',    label = 'Area',    kind = 'area' },
+    { id = 'area',    label = 'Place area',    kind = 'area' },
     { id = 'ruler',   label = 'Ruler',   kind = 'custom', workspaces = { Terrain = true, Objects = true, Environment = true, Mission = true, Review = true },
       OnPress = function(wx, wz, event) return import('/lua/editor/ruler.lua').Press(wx, wz, event) end },
     { id = 'camera',  label = 'Camera',  kind = 'none' },
@@ -200,6 +200,47 @@ function AllowedTools()
     return list
 end
 
+-- ---- brush settings per kind of brush -------------------------------------------------------------------------------------------------------------
+-- Terrain.Brush is the live brush every tool reads. Each kind of brush keeps its own radius, strength, sign and falloff: changing tools swaps them in and out, so a big prop brush
+-- does not make the height brush big.
+
+BRUSH_KIND = {
+    raise = 'terrain', lower = 'terrain', flatten = 'terrain', smooth = 'terrain', plateau = 'terrain', noise = 'terrain', ramp = 'terrain',
+    erode = 'erosion', rain = 'erosion', deposit = 'erosion',
+    stamp = 'stamp', stamp_paint = 'texture', paint = 'texture', erase = 'texture', ttype = 'texture',
+    prop = 'props', prop_erase = 'props', decal = 'decals', decal_erase = 'decals',
+}
+BrushProfiles = {}      -- kind -> { radius, strength, sign, falloff }
+local BRUSH_DEFAULT = {
+    terrain = { radius = 12, strength = 2.0, sign = 1, falloff = 1.0 }, erosion = { radius = 16, strength = 2.0, sign = 1, falloff = 1.0 },
+    stamp = { radius = 16, strength = 2.0, sign = 1, falloff = 1.0 }, texture = { radius = 8, strength = 5.0, sign = 1, falloff = 0.6 },
+    props = { radius = 10, strength = 2.0, sign = 1, falloff = 1.0 }, decals = { radius = 10, strength = 2.0, sign = 1, falloff = 1.0 },
+}
+
+--- Stores the live brush under the kind of the tool that was active and loads the settings of the kind of the tool that becomes active.
+function SwitchBrushKind(oldId, newId)
+    local oldKind, newKind = BRUSH_KIND[oldId], BRUSH_KIND[newId]
+    if oldKind == newKind then return end
+    local B = Terrain.Brush
+    if oldKind then BrushProfiles[oldKind] = { radius = B.radius, strength = B.strength, sign = B.sign or 1, falloff = B.falloff } end
+    if newKind then
+        local p = BrushProfiles[newKind] or BRUSH_DEFAULT[newKind]
+        B.radius, B.strength, B.sign, B.falloff = p.radius, p.strength, p.sign, p.falloff
+    end
+end
+
+--- The profiles as they are now (the live brush included), for saving.
+function BrushSnapshot()
+    local snap = {}
+    for kind, p in BrushProfiles do snap[kind] = { radius = p.radius, strength = p.strength, sign = p.sign, falloff = p.falloff } end
+    local kind = BRUSH_KIND[State.tool]
+    if kind then
+        local B = Terrain.Brush
+        snap[kind] = { radius = B.radius, strength = B.strength, sign = B.sign or 1, falloff = B.falloff }
+    end
+    return snap
+end
+
 function SelectTool(id)
     local tool = FindTool(id)
     if not tool then
@@ -209,6 +250,7 @@ function SelectTool(id)
         Say(tool.label .. ' is not available in the ' .. tostring(State.workspace) .. ' workspace')
         return false
     end
+    SwitchBrushKind(State.tool, id)
     State.tool = id
     if tool.kind == 'brush' then
         Terrain.Brush.mode = id
@@ -243,6 +285,7 @@ function EnforceTool()
     local ws = State.workspace and Workspaces[State.workspace]
     if not ws or ActiveTool() then return false end
     local old = State.tool
+    SwitchBrushKind(old, ws.default)
     State.tool = ws.default
     local tool = FindTool(ws.default)
     if tool and tool.kind == 'brush' then Terrain.Brush.mode = ws.default end
@@ -612,9 +655,10 @@ local function GameUIHidden(hidden)
     end
 end
 
---- The unit life / fuel bars are game HUD (gamemain.lua switches them on at the start of a game): off while editing (placed units, the unit viewer's unit), on in a test run.
+--- The unit life / fuel bars and the selection box are game HUD (gamemain.lua switches them on at the start of a game): off while editing (placed units, the unit viewer's unit), on in a test run.
 local function UnitBars(on)
     pcall(ConExecute, 'UI_RenderUnitBars ' .. (on and 'true' or 'false'))
+    pcall(ConExecute, 'ren_SelectBoxes ' .. (on and 'true' or 'false'))       -- the game's selection / hover box of a unit (the editor draws its own selection)
 end
 
 local dots = {}      -- pool of { dot = Bitmap, text = Text }
@@ -658,6 +702,19 @@ function SetMode(mode)
         UnitBars(true)
         ShowEditorUI(false)
         Say('playing')
+        -- like a game: the camera goes to the commander the run spawned (EdSetPlay in schook/lua/simcallbacks.lua) and selects it
+        ForkThread(function()
+            for i = 1, 25 do
+                WaitSeconds(0.2)
+                if State.mode ~= 'play' then return end
+                pcall(UISelectionByCategory, 'COMMAND', false, false, false, false)
+                local sel = GetSelectedUnits()
+                if sel and table.getn(sel) > 0 then
+                    pcall(UIZoomTo, sel, 0.4)
+                    return
+                end
+            end
+        end)
     else
         if SessionIsPaused and SessionIsPaused() then
             SessionRequestPause()

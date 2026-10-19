@@ -11,3 +11,26 @@ do
         end
     end
 end
+
+do
+    -- The game's loading dialog (a faction movie, "IN TRANSIT", the game's tips) is replaced by the editor's own loading screen: dark, with the editor's name, version and tips.
+    -- Base: CreateWldUIProvider() sets the file's local `provider` (no return value; the hook shares the base chunk, so the local is visible here) whose
+    -- StartLoadingDialog / UpdateLoadingDialog / StopLoadingDialog the engine calls.
+    local baseCreateWldUIProvider = CreateWldUIProvider
+    function CreateWldUIProvider()
+        baseCreateWldUIProvider()
+        if HasCommandLineArg('/editor') and provider then
+            provider.StartLoadingDialog = function(self)
+                GetCursor():Hide()
+                supressExitDialog = true
+                pcall(function() import('/lua/editor/gui/loading.lua').Start() end)
+            end
+            provider.UpdateLoadingDialog = function(self, elapsedTime) end
+            provider.StopLoadingDialog = function(self)
+                pcall(function() import('/lua/editor/gui/loading.lua').Stop() end)
+                GetCursor():Show()
+                FlushEvents()
+            end
+        end
+    end
+end

@@ -26,6 +26,16 @@ local function Section(group, text, y)
     return y + Skin.S(18)
 end
 
+-- the tool buttons by what they do, in this order; a tool of no group (added by a mod) goes to "Other"
+local TOOL_GROUPS = {
+    { 'Select', { 'select', 'unit_select', 'prop_select', 'decal_select' } },
+    { 'Terrain shape', { 'raise', 'lower', 'flatten', 'smooth', 'plateau', 'noise', 'ramp', 'stamp' } },
+    { 'Erosion', { 'erode', 'rain', 'deposit' } },
+    { 'Texture', { 'paint', 'erase', 'stamp_paint', 'ttype' } },
+    { 'Place objects', { 'unit', 'prop', 'prop_erase', 'decal', 'decal_erase', 'marker', 'area', 'army', 'paths' } },
+    { 'Measure and view', { 'ruler', 'camera' } },
+}
+
 Panels.Register{
     id = 'tools', title = 'Tools',
     create = function(group, host)
@@ -42,6 +52,10 @@ Panels.Register{
             local b = Make(tool.label, function() UI.SelectTool(id) P:Refresh() end, function() return Tips.ForTool(id) end)
             P.toolButtons[id] = b
         end
+        P.heads = {}
+        for _, g in TOOL_GROUPS do P.heads[g[1]] = W.Label(group, g[1], 0, 0, { color = Skin.color.textDim, size = 'small' }) end
+        P.heads.Other = W.Label(group, 'Other', 0, 0, { color = Skin.color.textDim, size = 'small' })
+        P.heads.Actions = W.Label(group, 'Map', 0, 0, { color = Skin.color.textDim, size = 'small' })
         P.undo = Make('Undo', function() UI.DoUndo() end, 'Undo the last step (Ctrl+Z). A brush stroke is one step.')
         P.redo = Make('Redo', function() UI.DoRedo() end, 'Redo what you undid (Ctrl+Y).')
         P.save = Make('Save map', function() UI.DoSave() end, 'Save the map (Ctrl+S). The first save asks where.')
@@ -52,44 +66,62 @@ Panels.Register{
         end
         function P:OnResize(w, h)
             P.w, P.h = w, h
-            local pad, bh = Skin.S(8), Skin.S(24)
+            local pad, bh, gap = Skin.S(8), Skin.S(24), Skin.S(4)
             local bw = math.max(Skin.S(70), math.floor((w - pad * 3) / 2))
             local cols = math.max(1, math.floor((w - pad) / (bw + pad)))
-            local function Grid(list, y)
-                for i, loopButton in list do
+            local function Park(b)
+                W.Place(b, group, -20000, -20000)
+                b.label.Left:Set(function() return b.Left() end)
+            end
+            --- A group of buttons: its header, then the buttons in rows of `cols`; a button whose text does not fit one column takes the whole row.
+            local function Block(head, list, y)
+                if table.getn(list) == 0 then
+                    W.Place(head, group, -20000, -20000)
+                    return y
+                end
+                W.Place(head, group, pad, y)
+                y = y + Skin.S(16)
+                local col, rowY = 0, y
+                for _, loopButton in list do
                     local b = loopButton   -- closures share the loop variable (nil after the loop)
-                    local col, row = math.mod(i - 1, cols), math.floor((i - 1) / cols)
-                    W.Place(b, group, pad + col * (bw + pad), y + row * (bh + Skin.S(4)), bw, bh)
-                    local lx = math.floor((bw - b.label.Width()) / 2)
-                    b.label.Left:Set(function() return b.Left() + lx end)
+                    local span = (b.label.Width() + Skin.S(16) > bw) and cols or 1
+                    if col + span > cols then col = 0 rowY = rowY + bh + gap end
+                    local bwSpan = span * bw + (span - 1) * pad
+                    W.Place(b, group, pad + col * (bw + pad), rowY, bwSpan, bh)
+                    W.Center(b.label, b, 0, 0, bwSpan, bh)
+                    col = col + span
                 end
-                return y + math.ceil(table.getn(list) / cols) * (bh + Skin.S(4))
+                return rowY + bh + gap + Skin.S(6)
             end
-            -- only the tools of the showing workspace; the others leave the screen (a Maui child shown by a refresh would reappear)
-            local tools = {}
+            -- only the tools of the showing workspace, by group; the others leave the screen (a Maui child shown by a refresh would reappear)
+            local grouped = {}
+            for _, g in TOOL_GROUPS do for _, id in g[2] do grouped[id] = true end end
+            local y = pad
+            for _, g in TOOL_GROUPS do
+                local list = {}
+                for _, id in g[2] do
+                    local tool
+                    for _, t in UI.Tools do if t.id == id then tool = t end end
+                    if tool and UI.ToolAllowed(tool) and P.toolButtons[id] then table.insert(list, P.toolButtons[id]) end
+                end
+                y = Block(P.heads[g[1]], list, y)
+            end
+            local other = {}
             for _, tool in UI.Tools do
-                local b = P.toolButtons[tool.id]
-                if UI.ToolAllowed(tool) then
-                    tools[table.getn(tools) + 1] = b
-                else
-                    W.Place(b, group, -20000, -20000)
-                    b.label.Left:Set(function() return b.Left() end)
-                end
+                if not grouped[tool.id] and UI.ToolAllowed(tool) then table.insert(other, P.toolButtons[tool.id]) end
             end
-            local y = Grid(tools, pad)
-            y = y + Skin.S(8)
+            y = Block(P.heads.Other, other, y)
+            for _, tool in UI.Tools do
+                if not UI.ToolAllowed(tool) then Park(P.toolButtons[tool.id]) end
+            end
             -- a read-only workspace (Review) has nothing to undo
             local ws = UI.Workspaces[UI.State.workspace]
             local actions = { P.undo, P.redo, P.save, P.play, P.mods }
             if ws and ws.readOnly then
-                for _, b in { P.undo, P.redo } do
-                    W.Place(b, group, -20000, -20000)
-                    local hidden = b
-                    hidden.label.Left:Set(function() return hidden.Left() end)
-                end
+                for _, b in { P.undo, P.redo } do Park(b) end
                 actions = { P.save, P.play, P.mods }
             end
-            Grid(actions, y)
+            Block(P.heads.Actions, actions, y)
             P:Refresh()
         end
         return P

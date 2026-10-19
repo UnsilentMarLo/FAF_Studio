@@ -93,15 +93,18 @@ function Run()
     -- ---- remembered working state ----------------------------------------------------------------------------------------------------------
     local Terrain = import('/lua/editor/terrain.lua')
     local Persist = import('/lua/editor/persist.lua')
-    local oldRadius = Terrain.Brush.radius
+    local ui = import('/lua/editor/ui.lua')
+    local oldRadius, oldTool = Terrain.Brush.radius, ui.State.tool
+    ui.State.tool = 'raise'          -- the brush settings are kept per kind of brush: the live brush belongs to the active tool's kind (ui.lua BRUSH_KIND)
     Terrain.Brush.radius = 33
     Persist.Tick()
-    local saved = UserData.Get('brush', false)
-    Check('persist: a changed brush is noted', type(saved) == 'table' and saved.radius == 33)
+    local saved = UserData.Get('brushes', false)
+    Check('persist: a changed brush is noted', type(saved) == 'table' and type(saved.terrain) == 'table' and saved.terrain.radius == 33)
     Terrain.Brush.radius = 5
     Persist.Restore()
     Check('persist: restore puts the brush back', Terrain.Brush.radius == 33)
     Terrain.Brush.radius = oldRadius
+    ui.State.tool = oldTool
     Persist.Tick()
 
     -- ---- help ------------------------------------------------------------------------------------------------------------------------------

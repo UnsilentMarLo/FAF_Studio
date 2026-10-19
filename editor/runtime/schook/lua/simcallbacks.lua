@@ -13,6 +13,26 @@ do
             end
             ScenarioInfo.EditorGroupUnits = nil
         end
+        if data.on then
+            -- a test run starts like a game: the human army gets its commander at its start position (the game's own CreateInitialArmyGroup does that; the editor
+            -- world has none while editing, schook/lua/sim/scenarioutilities.lua). Armies that already have one (a mission map's INITIAL group) are left alone.
+            pcall(function()
+                local ScenarioUtils = import('/lua/sim/ScenarioUtilities.lua')
+                for _, brain in ArmyBrains do
+                    if brain.BrainType == 'Human' then
+                        local name = brain.Name
+                        local have = brain:GetListOfUnits(categories.COMMAND, false)
+                        if (not have or table.getn(have) == 0) and ScenarioUtils.GetMarker(name) then
+                            local faction = import('/lua/factions.lua').Factions[brain:GetFactionIndex()]
+                            local cdr = CreateInitialArmyUnit(name, faction.InitialUnit)      -- (engine global: the unit at the army's start marker)
+                            if cdr and cdr.RotateTowardsMid then cdr:RotateTowardsMid() end
+                            ScenarioInfo.EditorACU = cdr
+                        end
+                        break
+                    end
+                end
+            end)
+        end
     end
 
     --- Puts every unit / prop in a rectangle back on the (edited) terrain.
