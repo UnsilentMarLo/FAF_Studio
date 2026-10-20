@@ -546,7 +546,7 @@ function Run(opts)
         world = world, layers = layers, props = plan.props, decals = plan.decals, lines = plan.lines,
     }
     local good = ed_write_file(dir .. '/' .. stem .. '.scmap', scmap)
-    good = ed_write_file(dir .. '/' .. stem .. '_scenario.lua', Ser.Chunk({ { 'version', 3 }, { 'ScenarioInfo', info } })) and good
+    good = ed_write_file(dir .. '/' .. stem .. '_scenario.lua', Ser.ScenarioChunk(info)) and good
     good = ed_write_file(dir .. '/' .. stem .. '_save.lua', HEADER .. Ser.Chunk({ { 'Scenario', plan.save } })) and good
     good = ed_write_file(dir .. '/' .. stem .. '_script.lua', script) and good
     good = ed_write_file(dir .. '/' .. stem .. '_editor.lua', import('/lua/editor/mods.lua').SidecarText(pathsText)) and good

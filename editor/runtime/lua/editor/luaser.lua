@@ -99,3 +99,36 @@ function Chunk(assignments)
     end
     return table.concat(out)
 end
+
+local RESERVED = { ['and'] = true, ['break'] = true, ['do'] = true, ['else'] = true, ['elseif'] = true, ['end'] = true, ['false'] = true, ['for'] = true, ['function'] = true,
+                   ['if'] = true, ['in'] = true, ['local'] = true, ['nil'] = true, ['not'] = true, ['or'] = true, ['repeat'] = true, ['return'] = true, ['then'] = true,
+                   ['true'] = true, ['until'] = true, ['while'] = true }
+
+--- The text of a `_scenario.lua` in the form the game's own maps have: `key = value` for names that are identifiers (`['standard']` stays quoted, as in the game's files), the no-rush radius
+--- and offsets as numbers with decimals, and an offset of 0 for every army (norushoffsetX_ARMY_1 ... Y). `info` is not changed.
+function ScenarioChunk(info)
+    local copy = {}
+    for k, v in info do copy[k] = v end
+    local std = info.Configurations and info.Configurations.standard
+    local armies = std and std.teams and std.teams[1] and std.teams[1].armies
+    for _, name in armies or {} do
+        if copy['norushoffsetX_' .. name] == nil then copy['norushoffsetX_' .. name] = 0 end
+        if copy['norushoffsetY_' .. name] == nil then copy['norushoffsetY_' .. name] = 0 end
+    end
+    local text = Chunk({ { 'version', 3 }, { 'ScenarioInfo', copy } })
+    local out = {}
+    for line in string.gfind(text, '[^\n]+') do
+        local rest
+        local s, e, p, k = string.find(line, "^(%s*)%['([%a_][%w_]*)'%] = ")
+        if s and k ~= 'standard' and not RESERVED[k] then
+            rest = string.sub(line, e + 1)
+            if string.find(k, '^norush') then
+                local _, _, num, tail = string.find(rest, '^(%-?%d+),(.*)$')
+                if num then rest = string.format('%d.000000,', tonumber(num)) .. tail end
+            end
+            line = p .. k .. ' = ' .. rest
+        end
+        table.insert(out, line)
+    end
+    return table.concat(out, '\n') .. '\n'
+end
