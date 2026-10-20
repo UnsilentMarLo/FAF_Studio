@@ -28,6 +28,7 @@ Topics = {
             { "li", "Ctrl+Shift+P opens the command palette: type a few letters of anything the editor can do." },
             { "li", "Hover a tool or a panel tab for a short description." },
             { "li", "File > Start screen shows the start page again; Help > Tutorial starts the tutorial again." },
+            { "li", "File > Settings sets the graphics quality (the editor starts on Ultra) and the size of the interface." },
         },
     },
     {

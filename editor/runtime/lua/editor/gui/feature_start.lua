@@ -23,6 +23,7 @@ function MaybeTour()
 end
 
 function OnStart()
+    pcall(function() import('/lua/editor/graphics.lua').Apply(true) end)       -- the saved graphics settings (the editor defaults to the highest quality)
     local boot = ed_read_file('editor_boot.txt')
     local first = (boot == nil or boot == '' or boot == '0')
     ed_write_file('editor_boot.txt', '1')
