@@ -17,7 +17,7 @@ function Refresh()
 end
 
 Panels.Register{
-    id = 'settings', title = 'Settings', minW = 280, minH = 240,
+    id = 'settings', title = 'Settings', minW = 280, minH = 240, rebuildOnResize = true,
     create = function(group, host)
         local P = { rows = {}, presetButtons = {}, w = 300 }
         live.settings = P
@@ -37,6 +37,7 @@ Panels.Register{
         for _, d in Graphics.Defs do
             local key = d.key
             local row = { key = key }
+            row.full = d.label
             row.label = W.Label(group, d.label, 0, 0, { color = c.text })
             row.button = Btn(Graphics.StateText(key), 110, function()
                 Graphics.Cycle(key)
@@ -48,7 +49,8 @@ Panels.Register{
             Graphics.Reset()
             P:Refresh()
         end, { tip = 'Back to the highest quality (Ultra); anti-aliasing off and vertical sync on.' })
-        P.note = W.Label(group, 'Anti-aliasing and vertical sync take effect at once; the window may flicker for a moment.', 0, 0, { color = c.textDim, size = 'small' })
+        P.noteText = 'Anti-aliasing and vertical sync take effect at once; the window may flicker for a moment.'
+        P.noteLines = {}
 
         P.uiTitle = W.Label(group, 'Interface', 0, 0, { color = c.text })
         P.scaleLabel = W.Label(group, 'Size of the interface', 0, 0, { color = c.textDim })
@@ -88,7 +90,7 @@ Panels.Register{
             local bw = Skin.S(110)
             local labelW = math.max(Skin.S(60), w - 2 * pad - bw - Skin.S(8))
             for _, row in self.rows do
-                W.Fit(row.label, row.label:GetText(), labelW)
+                W.Fit(row.label, row.full, labelW)
                 W.Place(row.label, group, pad, y + Skin.S(3))
                 W.Place(row.button, group, w - pad - bw, y, bw, Skin.S(22))
                 y = y + Skin.S(28)
@@ -96,9 +98,10 @@ Panels.Register{
             y = y + Skin.S(4)
             W.Place(self.reset, group, pad, y, self.reset.Width(), Skin.S(22))
             y = y + Skin.S(30)
-            W.Fit(self.note, self.note:GetText(), w - 2 * pad)
-            W.Place(self.note, group, pad, y)
-            y = y + Skin.S(34)
+            for _, l in self.noteLines do l:Destroy() end
+            local lines, bottom = W.Paragraph(group, self.noteText, pad, y, w - 2 * pad, { color = c.textDim, size = 'small' }, Skin.S(16))
+            self.noteLines = lines
+            y = (bottom or (y + Skin.S(16))) + Skin.S(14)
             W.Place(self.uiTitle, group, pad, y)
             y = y + Skin.S(26)
             W.Place(self.scaleLabel, group, pad, y + Skin.S(3))
