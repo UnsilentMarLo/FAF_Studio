@@ -23,7 +23,7 @@ end
 
 function Open()
     local O = R.Options
-    local d = Dialog.Open('Resize map  (makes a resized copy; the open map stays as it is)', 620, 468, function() R.ClearBounds() end)
+    local d = Dialog.Open('Resize map  (creates a resized copy; the open map is unchanged)', 620, 468, function() R.ClearBounds() end)
     local c = Skin.color
     local sizeButtons, modeButtons, anchorButtons, fillButtons, playButtons = {}, {}, {}, {}, {}
     local lines = {}

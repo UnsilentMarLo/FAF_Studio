@@ -21,7 +21,7 @@ Commands.Register{ id = 'assets.window', title = 'Window: asset browser in its o
     import('/lua/editor/gui/shell.lua').OpenPanelWindow('assets', 900, 560)
 end }
 
-Commands.Register{ id = 'assets.prune', title = 'Window: delete old asset browser pictures', run = function()
+Commands.Register{ id = 'assets.prune', title = 'Window: delete outdated asset browser thumbnails', run = function()
     local n = import('/lua/editor/assetthumbs.lua').PruneOldVersions()
     pcall(function() import('/lua/editor/ui.lua').Say('deleted ' .. n .. ' old picture file(s)') end)
 end }

@@ -7,12 +7,12 @@ Missions are made in the Mission workspace. The mission is compiled into the map
 ## Set up
 
 1. File > Map info...: set the map type to campaign so that the other armies get the campaign brain (without it they are passive).
-2. Armies panel: the list of armies, their faction, colour, economy and, on the Alliances page, who is enemy, ally or neutral towards whom. A click on a row cycles the state; "Both ways" sets the other side as well.
+2. Armies panel: the list of armies, their faction, colour, economy and, on the Alliances page, who is enemy, ally or neutral towards whom. Click a row to cycle the state; "Both ways" sets the other side as well.
 3. Place the units of each army with the Unit tool (Objects or Mission workspace). Groups keep units together for orders and triggers.
 
 ## Stages and nodes
 
-1. Stages panel: Add stage creates a stage; Up and Down order them; Remove deletes one.
+1. Stages panel: Add stage creates a stage; Up and Down reorder them; Remove deletes one.
 2. A stage runs its enter nodes first, then its ready nodes. All objectives of a stage must be done before the next stage starts, or its failsafe timer runs out.
 3. Add node adds an action or a trigger to the selected stage. Triggers (timer, group destroyed, unit killed, units in an area, objective decided) hold child nodes: select the trigger and use Add inside. Edit... changes the parameters of the selected node.
 4. Bases panel: define a base from an area, with AI that builds and attacks. Strings panel: the dialogue lines the "Play a dialogue" node uses.

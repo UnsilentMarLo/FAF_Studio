@@ -50,8 +50,8 @@ function Open()
                 elseif i == 2 then text = 'markers ' .. table.getn(s.markers) .. ', areas ' .. table.getn(s.areas) .. ', props ' .. table.getn(s.props) .. ', decals ' .. table.getn(s.decals) .. ', units ' .. table.getn(s.units)
                 elseif i == 3 then text = plan.images .. ' copies will be made'
                 elseif i == 4 and plan.others then text = plan.nOthers .. ' objects in the other regions will be removed first' color = c.warn
-                elseif i == 5 and O.cats.markers then text = 'start positions are never mirrored; copies are not in the chains of their originals' color = c.textDim
-                elseif i == 6 and O.cats.units and O.armies == 'map' then text = 'units move to the army whose start position is the image of their own army\'s' color = c.textDim
+                elseif i == 5 and O.cats.markers then text = 'start positions are never mirrored; copies are not added to the chains of their originals' color = c.textDim
+                elseif i == 6 and O.cats.units and O.armies == 'map' then text = 'units go to the army whose start position mirrors the start position of their own army' color = c.textDim
                 end
             end
             lines[i]:SetText(text)
@@ -88,7 +88,7 @@ function Open()
     end, { tip = 'Replace what is on the other side, or add to it. Click to change.' })
     d:Label('What happens', 14, 216, { color = c.textDim })
     for i = 1, REPORT_LINES do lines[i] = d:Label('', 14, 236 + (i - 1) * 18, { color = c.text, size = 'small' }) end
-    d:Label('Pictures cannot be flipped: a mirrored prop or decal keeps its picture, only its heading is mapped.', 14, 350, { color = c.textDim, size = 'small' })
+    d:Label('Images cannot be flipped: a mirrored prop or decal keeps its image; only its heading is mirrored.', 14, 350, { color = c.textDim, size = 'small' })
     go = d:Button('Mirror', 14, 372, 110, 26, function()
         local opts = { sector = O.sector, cats = O.cats, mode = O.mode, armies = O.armies }
         Dialog.Close()

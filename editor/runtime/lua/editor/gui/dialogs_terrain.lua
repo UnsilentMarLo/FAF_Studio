@@ -154,7 +154,7 @@ function PlayableArea()
     local a, b, c1, d1 = Row('Left (x from)', 'x0'), Row('Top (z from)', 'z0'), Row('Right (x to)', 'x1'), Row('Bottom (z to)', 'z1')
     Place(a, 14, 36) Place(c1, 228, 36)
     Place(b, 14, 92) Place(d1, 228, 92)
-    d:Label(exists and 'The map has a playable area already.' or 'No playable area yet: the whole map can be played.', 14, 150, { color = c.textDim, size = 'small' })
+    d:Label(exists and 'The map already has a playable area.' or 'No playable area yet: the whole map can be played.', 14, 150, { color = c.textDim, size = 'small' })
     d:Button('Whole map', 14, 172, 110, 26, function()
         P.x0, P.z0, P.x1, P.z1 = 0, 0, size, size
         for _, s in { a, b, c1, d1 } do s:Refresh() end

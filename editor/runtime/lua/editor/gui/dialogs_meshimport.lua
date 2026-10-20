@@ -82,7 +82,7 @@ function Import()
     import('/lua/editor/gui/panels_mesh.lua').SetModel(m)
     Say('mesh import: ' .. table.getn(files) .. ' patch files written, manifest ' .. (path and 'saved' or 'NOT saved'))
     if Map.Doc and Map.Doc.info.TerrainSystem ~= 'mesh' then
-        Say('mesh import: switch "Mesh map in scenario" on in the Mesh terrain panel so the game loads the manifest')
+        Say('mesh import: turn on "Mesh map in scenario" in the Mesh terrain panel so the game loads the manifest')
     end
     return files
 end
@@ -90,7 +90,7 @@ end
 function Open()
     if not Opts then Reset() end
     local c = Skin.color
-    local d = Dialog.Open('Import mesh: an OBJ file becomes terrain patches of the mesh map (the old patch files stay on disk)', 640, 560)
+    local d = Dialog.Open('Import mesh: turns an OBJ file into terrain patches of the mesh map (old patch files stay on disk)', 640, 560)
 
     d:Label('OBJ file (full path, or relative to the map folder)', 14, 30, { color = c.textDim })
     local field = d:Field(14, 50, 612, 22, { text = Path, onChange = function(t) Path = t end })

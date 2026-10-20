@@ -40,7 +40,7 @@ function Shortcuts()
         { title = 'File', prefix = 'file.' },
         { title = 'Edit', prefix = 'edit.' },
         { title = 'View', prefix = 'view.' },
-        { title = 'Tools of the workspace', prefix = 'tool.' },
+        { title = 'Workspace tools', prefix = 'tool.' },
         { title = 'Workspaces', prefix = 'workspace.' },
         { title = 'Camera', prefix = 'camera.' },
         { title = 'Help and commands', prefix = '' },        -- everything else

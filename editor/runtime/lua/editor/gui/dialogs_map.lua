@@ -14,7 +14,7 @@ local Maps = import('/lua/editor/maps.lua')
 function Guard(proceed)
     if not Maps.Dirty() then proceed() return end
     local d = Dialog.Open('Unsaved changes', 420, 120)
-    d:Label('The open map has changes that are not saved. What now?', 14, 38, { color = Skin.color.text })
+    d:Label('The open map has unsaved changes. What do you want to do?', 14, 38, { color = Skin.color.text })
     d:Button('Save', 14, 78, 100, 26, function()
         Dialog.Close()
         if Maps.Save() then proceed() end
@@ -181,14 +181,14 @@ function LobbySlots()
     end
     if n == 0 then
         local d = Dialog.Open('Lobby slots', 420, 110)
-        d:Label('The map has no start positions yet (the Start position tool).', 14, 42, { color = Skin.color.text })
+        d:Label('The map has no start positions yet. Use the Start position tool.', 14, 42, { color = Skin.color.text })
         d:Button('Close', 14, 74, 100, 26, function() Dialog.Close() end)
         return
     end
     local rows = math.min(n, 16)
     local d = Dialog.Open('Lobby slots: factions per start position', 460, 100 + rows * 28)
     local c = Skin.color
-    d:Label('Click a faction to take it out of the slot; a slot with all four is unrestricted.', 14, 40, { color = c.textDim, size = 'small' })
+    d:Label('Click a faction to remove it from the slot. A slot with all four factions is unrestricted.', 14, 40, { color = c.textDim, size = 'small' })
     local state = {}
     local names = { uef = 'UEF', aeon = 'Aeon', cybran = 'Cybran', seraphim = 'Seraphim' }
     for slot = 1, rows do

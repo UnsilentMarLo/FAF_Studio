@@ -2,7 +2,7 @@
 -- Lua 5.0 dialect.
 
 List = {
-    'Press F1 for help: search the topics, see every shortcut, read the step by step workflows.',
+    'Press F1 for help: search the topics, see every shortcut, read the step-by-step workflows.',
     'Ctrl+Shift+P opens the command palette: type a few letters of anything the editor can do and press Enter.',
     'Ctrl+Z / Ctrl+Y undo and redo. A brush stroke is one step, so a bad stroke is one Ctrl+Z away.',
     'Drag a panel tab out of the window to get a second window (a second screen works well); closing it docks the panel back. The editor remembers your layout.',

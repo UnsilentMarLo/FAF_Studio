@@ -445,7 +445,7 @@ Panels.Register{
                 end
             end
             if MP.IsCamera(M()) then
-                Action('Look through this camera', function() MP.LookThrough(name) end)
+                Action('View through this camera', function() MP.LookThrough(name) end)
                 Action('Set from the current camera', function() MP.SetFromCamera(name) end)
             end
             Gap(4)
@@ -880,15 +880,15 @@ Commands.Register{ id = 'view.grid', title = 'View: build grid', keys = 'G', run
     local shell = import('/lua/editor/gui/shell.lua')
     if shell.S and shell.S.gridButton then shell.S.gridButton:SetOn(Grid.Visible) end
 end }
-Commands.Register{ id = 'validate.snap', title = 'Snap resource markers to the build grid', run = function() Validate.FixAlignment() end }
-Commands.Register{ id = 'validate.pullmarkers', title = 'Pull markers outside the map onto the map edge', run = function() Validate.PullMarkersInside() end }
+Commands.Register{ id = 'validate.snap', title = 'Snap resource markers to grid', run = function() Validate.FixAlignment() end }
+Commands.Register{ id = 'validate.pullmarkers', title = 'Move stray markers onto the map', run = function() Validate.PullMarkersInside() end }
 Commands.Register{ id = 'validate.run', title = 'Validate resource markers', run = function() Validate.Run() end }
 Commands.Register{ id = 'edit.copy', title = 'Copy', keys = 'Ctrl+C', run = function()
     if UI.State.tool == 'paths' then import('/lua/editor/paths.lua').CopyCurrent() return end
     import('/lua/editor/clipboard.lua').Copy()
 end }
 Commands.Register{ id = 'edit.cut', title = 'Cut', keys = 'Ctrl+X', run = function() import('/lua/editor/clipboard.lua').Cut() end }
-Commands.Register{ id = 'edit.paste', title = 'Paste at the pointer', keys = 'Ctrl+V', run = function()
+Commands.Register{ id = 'edit.paste', title = 'Paste at cursor', keys = 'Ctrl+V', run = function()
     if UI.State.tool == 'paths' then
         local p = GetMouseWorldPos()
         import('/lua/editor/paths.lua').Paste(p and p[1], p and p[3])

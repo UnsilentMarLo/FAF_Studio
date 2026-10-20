@@ -68,12 +68,12 @@ Commands.Register{ id = 'graph.build', title = 'Graph: build (heights, layers, t
     Say(r and string.format('graph built in %.0f ms', r.ms) or ('graph not built: ' .. tostring(err)))
     Tick()
 end }
-Commands.Register{ id = 'graph.preview', title = 'Graph: show the preview on the terrain', run = function()
+Commands.Register{ id = 'graph.preview', title = 'Graph: preview on terrain', run = function()
     local n, err = GRun.ShowOnTerrain()
     Say(n and ('graph preview on the terrain: ' .. n .. ' samples') or ('no preview: ' .. tostring(err)))
 end }
-Commands.Register{ id = 'graph.revert', title = 'Graph: take the preview off the terrain', run = function() GRun.RevertTerrain() end }
-Commands.Register{ id = 'graph.fit', title = 'Graph: fit the canvas to the nodes', run = function()
+Commands.Register{ id = 'graph.revert', title = 'Graph: remove terrain preview', run = function() GRun.RevertTerrain() end }
+Commands.Register{ id = 'graph.fit', title = 'Graph: fit view to nodes', run = function()
     local mod = Canvas()
     if mod and mod.live.canvas then mod.live.canvas:Fit() end
 end }

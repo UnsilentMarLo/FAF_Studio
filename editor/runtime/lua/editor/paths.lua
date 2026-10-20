@@ -4,6 +4,7 @@
 --
 --   data (the sidecar `_editor.lua` keeps it as `Paths = { ... }`):
 --     path   { id, name, kind = 'catmull' | 'bezier', mode, closed, sym, strength, tension, grade, limitGrade, interp, erosion (thermal passes over the banks),
+--              blend (units: the change spreads into the surrounding ground by a Gaussian of this width),
 --              points = { { x, z, w, f, h, abs, bank, ho = {dx, dz}, hi = {dx, dz} }, ... },
 --              profile = { points = { {x, v}, ... }, smooth, symmetric, preset },
 --              strata = { { layer, kind = 'core' | 'bank' | 'reach', strength }, ... },
@@ -252,7 +253,7 @@ function NewPath(mode, kind)
     nextId = nextId + 1
     local path = {
         id = id, name = Modes[mode].label .. ' ' .. (nextId - 1), kind = kind or 'catmull', mode = mode, closed = false, sym = false, strength = 1,
-        tension = 1, grade = 0.75, limitGrade = false, interp = true, erosion = 0, points = {}, strata = {},
+        tension = 1, grade = 0.75, limitGrade = false, interp = true, erosion = 0, blend = 0, points = {}, strata = {},
         scatter = { on = false, bp = '', spacing = 6, side = 'both', lateral = 1, jitter = 0.5, scaleMin = 0.8, scaleMax = 1.2, seed = 1 },
         decals = { on = false, tex = '', spacing = 12, side = 'center', lateral = 0, size = 6, jitter = 0.2, seed = 1 },
     }
@@ -574,7 +575,7 @@ function SetAbsolute(on)
     Record('path point pinned', before)
 end
 
---- Sets a field of the current path (name, mode, kind, closed, sym, strength, tension, grade, limitGrade, interp, erosion).
+--- Sets a field of the current path (name, mode, kind, closed, sym, strength, tension, grade, limitGrade, interp, erosion, blend).
 function SetField(key, value)
     local path = CurrentPath()
     if not path then return end
@@ -979,12 +980,12 @@ end
 
 -- ---- the native build ---------------------------------------------------------------------------------------------------------------------------
 
-local function Bounds(sets)
+local function Bounds(sets, extra)
     local x0, z0, x1, z1 = 1e9, 1e9, -1e9, -1e9
     for _, set in sets do
         local S = set.S
         for k = 1, S.n do
-            local r = S.w[k] + S.f[k] + 2
+            local r = S.w[k] + S.f[k] + 2 + (extra or 0)
             if S.x[k] - r < x0 then x0 = S.x[k] - r end
             if S.z[k] - r < z0 then z0 = S.z[k] - r end
             if S.x[k] + r > x1 then x1 = S.x[k] + r end
@@ -1039,10 +1040,11 @@ end
 
 --- Builds the new heights (quantised to the map's words) and the strata layers of a path. `s` is a Fields scope owning all temporaries; the result keeps its handles in `s`.
 --- Returns { rect, base, new, delta, masks = { {layer, base, new, delta, cover} }, sets }.
-local function Build(path, s, wantMasks)
+local function Build(path, s, wantMasks, chain)
     local mw, mh = MapSize()
     local sets = ImageSets(path)
-    local bx0, bz0, bx1, bz1 = Bounds(sets)
+    local blend = Clamp(path.blend or 0, 0, 80)
+    local bx0, bz0, bx1, bz1 = Bounds(sets, blend * 3)
     local rect = { bx0, bz0, bx1, bz1 }
     local old = Results[path.id]
     if old and old.rect then rect = Union(rect, old.rect) end
@@ -1052,6 +1054,10 @@ local function Build(path, s, wantMasks)
     local z1 = Clamp(math.ceil(rect[4]), 0, mh - 1)
     if x1 <= x0 or z1 <= z0 then error('the path lies outside the map') end
     local H = s:Height(1, x0, z0, x1, z1)
+    -- paths previewed together: the ground this path starts from already holds the result of the paths before it
+    for _, prev in (chain or {}) do
+        H = s:Op('path_paste', { a = H, b = prev.new, mode = 'set' })
+    end
     local base = H
     if old and old.delta then base = s:Op('path_paste', { a = H, b = old.delta, mode = 'sub' }) end
     local ground = function(x, z) return Fields.Sample(base, x, z) end
@@ -1064,6 +1070,14 @@ local function Build(path, s, wantMasks)
         args.clip = m.clip
         args.strength = path.strength or 1
         cur = s:Op('path_shape', args)
+    end
+    if blend > 0 then
+        -- blend: the change spreads into the surrounding ground. The blurred change is added where it is stronger than the shaped one (the core keeps its depth, the edge gets a soft skirt)
+        local d = s:Op('sub', { a = cur, b = base })
+        local soft = s:Op('blur', { a = d, radius = blend })
+        local up = s:Op('max', { a = s:Op('clamp', { a = d, lo = 0, hi = 100000 }), b = s:Op('clamp', { a = soft, lo = 0, hi = 100000 }) })
+        local down = s:Op('min', { a = s:Op('clamp', { a = d, lo = -100000, hi = 0 }), b = s:Op('clamp', { a = soft, lo = -100000, hi = 0 }) })
+        cur = s:Op('add', { a = base, b = s:Op('add', { a = up, b = down }) })
     end
     if (path.erosion or 0) > 0 then
         -- bank erosion: thermal passes over the whole reach of the path (the cut walls slump to a natural talus)
@@ -1305,26 +1319,45 @@ History.PreUndo = function()
     return false
 end
 
---- Shows the result on the real terrain (heights only); the next Preview, Apply or tool change takes it away first.
+--- Shows the result of one path (`id`) or of several (`id` a list of path ids, previewed together in that order: a later path starts from the ground the earlier ones made) on the real
+--- terrain (heights only), as one native step; the next Preview, Apply or tool change takes it away first.
 function Preview(id)
     if not Fields.IsAvailable() then return false, 'no field engine' end
-    local path = ById(id)
-    if not path or table.getn(path.points) < 1 then return false, 'no path' end
+    local ids = type(id) == 'table' and id or { id }
+    local paths = {}
+    for _, i in ids do
+        local path = ById(i)
+        if path and table.getn(path.points) >= 1 then table.insert(paths, path) end
+    end
+    if table.getn(paths) == 0 then return false, 'no path' end
     RevertPreview()
     local s = Fields.Scope()
-    local ok, plan = pcall(Build, path, s, false)
+    local plans = {}
+    local ok, err = pcall(function()
+        for _, path in paths do
+            table.insert(plans, Build(path, s, false, plans))
+        end
+    end)
     if not ok then
         s:Free()
-        return false, tostring(plan)
+        return false, tostring(err)
+    end
+    -- one field holds the final heights of every plan: the ground, then each plan's rectangle pasted over it in order
+    local result = plans[1].new
+    local rect = plans[1].rect
+    if table.getn(plans) > 1 then
+        for _, plan in plans do rect = Union(rect, plan.rect) end
+        local H = s:Height(1, rect[1], rect[2], rect[3], rect[4])
+        for _, plan in plans do H = s:Op('path_paste', { a = H, b = plan.new, mode = 'set' }) end
+        result = H
     end
     -- the document's redo list is cleared by a new edit: do the same in the history so the two stay in step
     if History.DropRedo then History.DropRedo() end
-    local depth0 = Terrain.UndoDepth()
-    local n, err = Fields.CommitHeight(plan.new, { noHistory = true, label = 'Path preview' })
-    if n then NoteStats('preview', path, plan, n) end
+    local n, cerr = Fields.CommitHeight(result, { noHistory = true, label = 'Path preview' })
+    if n then NoteStats('preview', paths[1], plans[1], n) end
     s:Free()
-    if not n then return false, tostring(err) end
-    if n > 0 then PreviewState = { id = id, depth = Terrain.UndoDepth() } end
+    if not n then return false, tostring(cerr) end
+    if n > 0 then PreviewState = { id = paths[1].id, ids = ids, depth = Terrain.UndoDepth() } end
     Changed()
     return true, n
 end
@@ -1512,6 +1545,7 @@ local function Normalize(p)
     p.tension = p.tension or 1
     p.grade = p.grade or 0.75
     p.erosion = p.erosion or 0
+    p.blend = p.blend or 0
     p.strata = p.strata or {}
     if not p.profile or not p.profile.points then SetPreset(p, Modes[p.mode].preset) end
     p.scatter = p.scatter or { on = false, bp = '', spacing = 6, side = 'both', lateral = 1, jitter = 0.5, scaleMin = 0.8, scaleMax = 1.2, seed = 1 }

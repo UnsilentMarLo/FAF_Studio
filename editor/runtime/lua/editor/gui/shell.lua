@@ -385,9 +385,16 @@ end
 
 --- The mission Run panel (stage, objectives, flags, warnings, jump / skip) in a window of its own: the docked shell is hidden during a test run, a pop-out stays.
 function OpenRunWindow()
-    if PopoutWith('run') then return end
+    local open = PopoutWith('run')
+    if open then
+        -- already open: bring it to the front (it may sit behind the main window of a test run)
+        if rawget(_G, 'ed_window_raise') then pcall(ed_window_raise, open) end
+        return
+    end
     local cx, cy = ed_main_window_rect()
     Detach('run', 0, 0, nil, { cx + 24, cy + 90, Skin.S(480), Skin.S(420) })
+    local made = PopoutWith('run')
+    if made and rawget(_G, 'ed_window_raise') then pcall(ed_window_raise, made) end
 end
 
 --- Shows a panel that is not part of a workspace's preset (Help): where it is when it is docked or in a window already, else in a window of its own beside the main window's
@@ -592,17 +599,17 @@ function Start(name, opts)
     Commands.Register{ id = 'file.open', title = 'File: open map...', keys = 'Ctrl+O', run = function() import('/lua/editor/gui/dialogs_map.lua').OpenMap() end }
     Commands.Register{ id = 'file.save', title = 'File: save map', keys = 'Ctrl+S', run = function() EditorUI().DoSave() end }
     Commands.Register{ id = 'file.saveas', title = 'File: save map as...', keys = 'Ctrl+Shift+S', run = function() import('/lua/editor/maps.lua').SaveAs() end }
-    Commands.Register{ id = 'file.recover', title = 'File: recover autosave', run = function() import('/lua/editor/gui/dialogs_map.lua').Guard(function() import('/lua/editor/maps.lua').Recover() end) end }
+    Commands.Register{ id = 'file.recover', title = 'File: recover autosaved map', run = function() import('/lua/editor/gui/dialogs_map.lua').Guard(function() import('/lua/editor/maps.lua').Recover() end) end }
     Commands.Register{ id = 'terrain.generate', title = 'Terrain: generate...', run = function() import('/lua/editor/gui/dialogs_terrain.lua').Generate() end }
     Commands.Register{ id = 'terrain.playable', title = 'Terrain: playable area...', run = function() import('/lua/editor/gui/dialogs_terrain.lua').PlayableArea() end }
-    Commands.Register{ id = 'terrain.flatten', title = 'Terrain: flatten the map...', run = function() import('/lua/editor/gui/dialogs_terrain.lua').FlattenMap() end }
+    Commands.Register{ id = 'terrain.flatten', title = 'Terrain: flatten...', run = function() import('/lua/editor/gui/dialogs_terrain.lua').FlattenMap() end }
     Commands.Register{ id = 'file.info', title = 'File: map info...', run = function() import('/lua/editor/gui/dialogs_map.lua').MapInfo() end }
-    Commands.Register{ id = 'file.lobbyslots', title = 'File: lobby slots (factions per start position)...', run = function() import('/lua/editor/gui/dialogs_map.lua').LobbySlots() end }
+    Commands.Register{ id = 'file.lobbyslots', title = 'File: lobby slots...', run = function() import('/lua/editor/gui/dialogs_map.lua').LobbySlots() end }
     Commands.Register{ id = 'file.play', title = 'File: play test', keys = 'F5', run = function() EditorUI().Play() end }
     Commands.Register{ id = 'file.mods', title = 'File: mods...', run = function() ShowOrAdd('mods') end }
     Commands.Register{ id = 'file.import_height', title = 'File: import heightmap...', run = function() import('/lua/editor/heightio.lua').Import() end }
     Commands.Register{ id = 'file.export_height', title = 'File: export heightmap...', run = function() import('/lua/editor/heightio.lua').Export() end }
-    Commands.Register{ id = 'tool.ruler.clear', title = 'Ruler: clear the measurement', run = function() import('/lua/editor/ruler.lua').Clear() end }
+    Commands.Register{ id = 'tool.ruler.clear', title = 'Ruler: clear', run = function() import('/lua/editor/ruler.lua').Clear() end }
     Commands.Register{ id = 'view.resetlayout', title = 'View: reset layout of this workspace', run = function() Workspace.ForgetKept(S.current) ShowWorkspace(S.current, Workspace.Fresh(S.current)) end }
     Commands.Register{ id = 'help.hotkeys', title = 'Help: hotkeys...', run = function() ShowOrAdd('hotkeys') end }
     Commands.Register{ id = 'ui.scale.up', title = 'UI scale: larger', run = function() SetScale(Skin.scale + 0.25) end }

@@ -70,7 +70,7 @@ Menu.Extend('menubar.Edit', function()
     }
 end, 40)
 
-Commands.Register{ id = 'edit.mirror', title = 'Edit: mirror selection through the symmetry', run = function()
+Commands.Register{ id = 'edit.mirror', title = 'Edit: mirror selection', run = function()
     local n, why = import('/lua/editor/mirror.lua').Mirror()
     Say(n > 0 and ('mirror: ' .. n .. ' copies') or ('mirror: ' .. tostring(why)))
 end }
@@ -99,7 +99,7 @@ function FindDialog()
         state.kind = FR.KINDS[math.mod(at, table.getn(FR.KINDS)) + 1]
         state.from, state.to, state.message = false, false, ''
         FindDialog()
-    end, { tip = 'What kind of object to look for. Click to step to the next kind.' })
+    end, { tip = 'What kind of object to look for. Click to switch to the next kind.' })
     d:Label('Find', 14, 74, { color = c.textDim })
     d:Button(Label(state.from) .. (state.from and ('   (' .. matches .. ')') or ''), 120, 70, 380, 24, function()
         local names, byLabel = {}, {}
@@ -113,7 +113,7 @@ function FindDialog()
             state.message = ''
             FindDialog()
         end)
-    end, { tip = 'Choose the value to look for; the number in brackets is how often it is in the map.' })
+    end, { tip = 'Choose the value to look for. The number in brackets is how many times it occurs in the map.' })
     d:Label('Replace with', 14, 110, { color = c.textDim })
     d:Button(Label(state.to), 120, 106, 380, 24, function()
         Names.PickName('Replace with', FR.Candidates(state.kind), state.to, function(value)
@@ -162,13 +162,13 @@ end, 20)
 
 -- ---- environment styles ----------------------------------------------------------------------------------------------------------------------------
 
-Commands.Register{ id = 'map.style_save', title = 'Map: save the environment style...', run = function()
+Commands.Register{ id = 'map.style_save', title = 'Map: save environment style...', run = function()
     local path = ed_file_dialog(true, 'Save environment style', 'Environment style (*.lua)|*.lua', 'style.lua')
     if not path then return end
     local ok, why = import('/lua/editor/styles.lua').Save(path, false)
     Say(ok and ('style saved: ' .. path) or ('style not saved: ' .. tostring(why)))
 end }
-Commands.Register{ id = 'map.style_load', title = 'Map: load an environment style...', run = function()
+Commands.Register{ id = 'map.style_load', title = 'Map: load environment style...', run = function()
     local path = ed_file_dialog(false, 'Load environment style', 'Environment style (*.lua)|*.lua', '')
     if not path then return end
     local n, why = import('/lua/editor/styles.lua').Load(path, false)

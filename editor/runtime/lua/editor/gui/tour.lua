@@ -1,5 +1,5 @@
 -- The first-run tour: a dimmed screen with one part of the window lit up at a time and a short text beside it (Back / Next / Skip). It starts by itself once after the
--- first start screen (gui/feature_start.lua) and any time from Help > Take the tour.
+-- first start screen (gui/feature_start.lua) and any time from Help > Tutorial.
 --
 --   Start()   begins at step 1 (switches to the Terrain workspace so the panels the text talks about are there); Stop() ends it; IsOpen()
 --   Steps     the list of { target, title, text }; target = 'center' | 'bar' | 'status' | 'panel:<id>' (the first existing of 'panel:a,b')
@@ -16,21 +16,21 @@ local UserData = import('/lua/editor/userdata.lua')
 
 Steps = {
     { target = 'center', title = 'Welcome to FAF Studio',
-      text = 'A short tour of the window, in a few stops. You can leave at any time with Skip; Help > Take the tour shows it again.' },
+      text = 'A short tutorial of the editor window. Click Skip to close it at any time. Help > Tutorial starts it again.' },
     { target = 'bar', title = 'Menus and workspaces',
-      text = 'The menus hold every command. The buttons below them switch the workspace: Terrain, Objects, Environment, Generate, Mission, Mod and Review (Alt+1 to Alt+7). Each workspace has its own tools and panels.' },
+      text = 'The menus list every command. The buttons below them switch the workspace: Terrain, Objects, Environment, Generate, Mission, Mod and Review (Alt+1 to Alt+7). Each workspace has its own tools and panels.' },
     { target = 'panel:tools', title = 'Tools',
-      text = 'Pick a tool here, then use it in the viewport. The number keys 1 to 8 pick the first eight tools. Undo, Redo, Save map and Play test are further down (the panel scrolls with the mouse wheel).' },
-    { target = 'panel:viewport', title = 'The viewport',
-      text = 'The live map. The mouse wheel zooms, the middle button pans, the right button rotates; W A S D move the camera. Press and drag with the active tool.' },
+      text = 'Pick a tool here, then use it in the viewport. Number keys 1 to 8 select the first eight tools. Undo, Redo, Save map and Play test are further down (scroll the panel with the mouse wheel).' },
+    { target = 'panel:viewport', title = 'Viewport',
+      text = 'The live map. Use the mouse wheel to zoom, the middle button to pan and the right button to rotate; W A S D move the camera. Click and drag to use the active tool.' },
     { target = 'panel:brush,properties', title = 'Tool settings',
       text = 'The Brush panel sets radius, strength and falloff; hold Shift while painting to invert the brush. The Properties panel shows the settings of the active tool, or the values of the selected object.' },
     { target = 'panel:console,validation', title = 'Messages and checks',
-      text = 'The console shows what the editor did. The Validation tab finds problems with the map, such as resource markers that cannot be used: Check now runs it.' },
+      text = 'The console shows what the editor did. The Validation tab finds problems with the map, such as unusable resource markers. Click Check now to run it.' },
     { target = 'status', title = 'Status line',
-      text = 'The pointer position, the active tool, how many steps can be undone and the last message are shown here.' },
+      text = 'Shows the pointer position, the active tool, how many steps can be undone and the last message.' },
     { target = 'center', title = 'Where to go from here',
-      text = 'F1 opens the help with step by step topics, Ctrl+Shift+P the command palette, File > Start screen the start page. A good first read: the topic "Terrain from nothing".' },
+      text = 'F1 opens Help with step-by-step topics, Ctrl+Shift+P opens the command palette and File > Start screen shows the start page. A good first read: the topic "Terrain from nothing".' },
 }
 
 local current = false

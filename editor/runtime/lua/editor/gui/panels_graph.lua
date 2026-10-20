@@ -314,11 +314,14 @@ Panels.Register{
         --- Places the children of a node at the zoom (relative to the frame).
         local function Geometry(v, node, z)
             local def = Nodes.Defs[node.type]
+            v.geo = {}                 -- every part's offset and size inside the node: a node cut by the canvas edge places them itself (ShowCut)
+            v.isLabel = {}
             local function In(ctl, dx, dy, w, h)
                 ctl.Left:Set(function() return v.frame.Left() + dx end)
                 ctl.Top:Set(function() return v.frame.Top() + dy end)
                 if w then ctl.Width:Set(w) end
                 if h then ctl.Height:Set(h) end
+                v.geo[ctl] = { dx, dy, w, h }
             end
             local nw = math.floor(NW * z)
             In(v.header, 0, 0, nw, math.floor(HEAD * z))
@@ -349,11 +352,13 @@ Panels.Register{
                 local cy = math.floor((HEAD + PAD + (i - 1) * ROW + ROW / 2) * z)
                 In(port.dot, -half, cy - half, ps, ps)
                 In(port.label, ps, cy - math.floor(port.label.Height() / 2))
+                v.isLabel[port.label] = true
             end
             for i, port in v.outs do
                 local cy = math.floor((HEAD + PAD + (i - 1) * ROW + ROW / 2) * z)
                 In(port.dot, nw - half - 1, cy - half, ps, ps)
                 In(port.label, nw - ps - port.label.Width() - 2, cy - math.floor(port.label.Height() / 2))
+                v.isLabel[port.label] = true
             end
             v.zoomDone = z
             v.rows = Rows(node)
@@ -450,12 +455,48 @@ Panels.Register{
             end
         end
 
+        --- A node the canvas edge cuts: its parts that fit are shown where they belong, the solid ones (header, picture background) cut to the canvas, the picture cropped with its texture
+        --- coordinates; text and port dots that would cross the edge are hidden (Maui does not clip, so they would be drawn over the toolbar).
+        function Pn:ShowCut(v, sx, sy, lod)
+            local cw, ch = self.cw, self.ch
+            for ctl, gm in v.geo do
+                local w, h = gm[3] or ctl.Width(), gm[4] or ctl.Height()
+                local ax, ay = sx + gm[1], sy + gm[2]
+                local inside = ax >= 0 and ay >= 0 and ax + w <= cw and ay + h <= ch
+                if not lod and (ctl == v.status or v.isLabel[ctl]) then
+                    ctl:Hide()
+                elseif ctl == v.header or ctl == v.thumbBg or ctl == v.thumb then
+                    local x0, y0, x1, y1 = math.max(0, ax), math.max(0, ay), math.min(cw, ax + w), math.min(ch, ay + h)
+                    if x1 <= x0 or y1 <= y0 or (ctl == v.thumb and not inside and v.noUV) then
+                        ctl:Hide()
+                    else
+                        Put(ctl, x0, y0, x1 - x0, y1 - y0)
+                        if ctl == v.thumb then
+                            local ok = not v.noUV and pcall(function() ctl:SetUV((x0 - ax) / w, (y0 - ay) / h, (x1 - ax) / w, (y1 - ay) / h) end)
+                            if ok then v.uvSet = true elseif not inside then v.noUV = true ctl:Hide() return end
+                        end
+                        ctl:Show()
+                    end
+                elseif inside then
+                    Put(ctl, ax, ay)
+                    ctl:Show()
+                else
+                    ctl:Hide()
+                end
+            end
+        end
+
+        --- Puts the picture back to its whole texture and the parts to their places inside the frame (after a cut).
+        function Pn:EndCut(v)
+            if v.uvSet then
+                pcall(function() v.thumb:SetUV(0, 0, 1, 1) end)
+                v.uvSet = false
+            end
+            v.zoomDone = -1
+        end
+
         function Pn:LayoutNode(v, n, sx, sy, sw, sh, z, lod)
             do
-                if v.zoomDone ~= z or v.rows ~= Rows(n) or (v.lastLabel or '') ~= (n.label or '') then
-                    Geometry(v, n, z)
-                    v.lastLabel = n.label or ''
-                end
                 local state
                 if sx + sw < 0 or sy + sh < 0 or sx > self.cw or sy > self.ch then
                     state = 'off'
@@ -463,6 +504,11 @@ Panels.Register{
                     state = lod and 'full' or 'low'
                 else
                     state = 'cut'
+                end
+                if v.state == 'cut' and state ~= 'cut' then self:EndCut(v) end
+                if v.zoomDone ~= z or v.rows ~= Rows(n) or (v.lastLabel or '') ~= (n.label or '') then
+                    Geometry(v, n, z)
+                    v.lastLabel = n.label or ''
                 end
                 if state == 'off' then
                     Gone(v.frame)
@@ -480,16 +526,13 @@ Panels.Register{
                         Gone(v.sel)
                     end
                 end
-                if state ~= v.state then
-                    if state == 'full' then
-                        ShowParts(v, true)
-                    elseif state == 'low' then
-                        ShowParts(v, true)
-                    else
-                        ShowParts(v, false)
-                    end
-                    v.state = state
+                if state == 'cut' then
+                    self:ShowCut(v, sx, sy, lod)
+                    v.title:SetColor(c.text)
+                elseif state ~= v.state then
+                    ShowParts(v, state ~= 'off')
                 end
+                v.state = state
                 if state == 'full' or state == 'low' then
                     v.title:SetColor(c.text)
                     if state == 'low' then
@@ -990,7 +1033,7 @@ Panels.Register{
                 state.shownRevision = Graph.DataRevision
             else
                 GRun.RevertTerrain()
-                state.text = 'preview taken off'
+                state.text = 'preview removed'
             end
             Pn:Tick(true)
         end, { toggle = true }))
@@ -998,7 +1041,7 @@ Panels.Register{
             GRun.RevertTerrain()
             state.onTerrain = false
             Pn.bTerrain:SetOn(false)
-            state.text = 'preview taken off'
+            state.text = 'preview removed'
             Pn:Tick(true)
         end))
         Pn.bMask = Add(Btn('Mask view', 74, function(self)

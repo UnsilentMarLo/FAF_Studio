@@ -11,12 +11,12 @@ local function Say(text)
     pcall(function() import('/lua/editor/ui.lua').Say(text) end)
 end
 
-Commands.Register{ id = 'edit.select.same', title = 'Edit: select the same', run = function()
+Commands.Register{ id = 'edit.select.same', title = 'Edit: select same type', run = function()
     local kind, value, text = Same.Describe()
     if not kind then Say('select an object first') return end
     Say('selected ' .. Same.Same() .. ' ' .. text)
 end }
-Commands.Register{ id = 'edit.select.group', title = 'Edit: select units of the same group', run = function()
+Commands.Register{ id = 'edit.select.group', title = 'Edit: select same group', run = function()
     local n = Same.UnitGroup()
     Say(n > 0 and ('selected ' .. n .. ' units of the group') or 'select a unit first')
 end }
