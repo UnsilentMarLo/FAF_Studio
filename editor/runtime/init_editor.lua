@@ -13,7 +13,7 @@ do
     end
 end
 
--- The launcher passes the Windows display scale (FAFSTUDIO_UISCALE, e.g. 1.25) because the editor runs DPI aware (docs/projects/editor/DPI.md); gui/shell.lua uses it as the first-run
+-- The exe itself (moho/editor/EdBootstrap.cpp) sets the Windows display scale (FAFSTUDIO_UISCALE, e.g. 1.25) because the editor runs DPI aware (docs/projects/editor/DPI.md); gui/shell.lua uses it as the first-run
 -- UI scale. Only the init state may read the environment, so it goes through a file like editor_boot.txt.
 do
     local ok, value = pcall(function() return os.getenv('FAFSTUDIO_UISCALE') end)

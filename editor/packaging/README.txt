@@ -21,19 +21,19 @@ FAF Studio does not contain game data. It reads the FAForever data folder
 START
 -----
 1. Unzip the folder anywhere you can write to (not into C:\Program Files).
-2. Double-click FAFStudio.cmd.
+2. Double-click bin\FAFStudio.exe. (Right-click it > Send to > Desktop for a shortcut.)
 
-The first start links the FAF data into this folder (folder junctions, no copying, no
-administrator rights) and shows the start screen: new map, open, recent maps, release,
+The program sets itself up: there is no launcher script. The first start links the FAF data into
+this folder (folder junctions, no copying, no administrator rights) and shows the start screen: new map, open, recent maps, release,
 mod project, tips. Press F1 in the editor for help, or choose Help > Take the tour.
 
 If your FAForever data is somewhere else, set the environment variable FAF_DATA to the folder
 that contains "gamedata" before you start:
 
     set FAF_DATA=D:\Games\FAForever
-    FAFStudio.cmd
+    bin\FAFStudio.exe
 
-Open a map directly:  FAFStudio.cmd /map <map folder name or scenario path>
+Open a map directly:  bin\FAFStudio.exe /map <map folder name or scenario path>
 
 
 WHERE THINGS ARE

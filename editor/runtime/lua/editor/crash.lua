@@ -9,8 +9,8 @@
 --   Diagnostics() -> text           version, paths, settings, the open map, monitors, the tail of the log and the newest crash report
 --   Root() / BinDir()               the editor installation folder (the one that holds `bin` and `editor`) and its `bin`
 --
--- The engine writes `faf_crash_<date>_<time>.txt` and `.dmp` into its working folder when it dies; the launcher (FAFStudio.cmd) shows a message with the report's
--- path when the program ends that way, and this module offers the same, plus the autosave, at the next start.
+-- The engine writes `faf_crash_<date>_<time>.txt` and `.dmp` into its working folder when it dies; there is no launcher to say so afterwards (the exe starts by itself),
+-- so this module offers the report's path, plus the autosave, at the next start.
 --
 -- Lua 5.0 dialect.
 

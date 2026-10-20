@@ -6,14 +6,13 @@
 What goes in (see docs/projects/editor/PACKAGING.md):
     bin/        FAFStudio.exe, the DLLs it imports (found by reading its import table), init_editor.lua
     editor/     the editor's Lua tree, shaders, brushes, icons, blank maps (this checkout, generated parts from the main checkout when a worktree lacks them)
-    launcher/   launch.ps1 (FAF data, junctions, start, crash message), FAFStudio.cmd at the top
     docs/       help topics, PACKAGING.md        tools/ pack_map.py        samples/ sample map and graph notes
     README.txt, CHANGELOG.txt (from git), VERSION.txt, MANIFEST.txt (sha256 of every file)
-What stays out: all game data (the launcher links the user's FAForever folders), init_faf.lua / SupComDataPath.lua / fa_path.lua (copied from the FAForever install at every start),
+What stays out: all game data (the exe links the user's FAForever folders when it starts), init_faf.lua / SupComDataPath.lua / fa_path.lua (copied from the FAForever install at every start),
 self tests and their data, anything outside the editor.
 
---test unpacks a copy into a folder with a space in its name, starts it through the launcher with a throw-away user folder (once without a map: the start screen
-must come up; once with a command channel) and checks version, user folder, logs and links. It runs a real editor window for a minute.
+--test unpacks a copy into a folder with a space in its name and double-clicks it, in effect: bin/FAFStudio.exe without any argument but the command channel, from another
+working folder, with a throw-away user folder (once without a map: the start screen must come up; once with /map) and checks version, user folder, logs and links. It runs a real editor window for a minute.
 The package is never committed: dist/ is ignored by git, and the exe stays the user's to distribute (docs/projects/editor/PACKAGING.md).
 """
 import argparse
@@ -213,11 +212,8 @@ def assemble(a):
     print('editor tree: %d files' % n)
     stamp_version(os.path.join(dest, 'lua', 'editor', 'version.lua'), version, build, revision)
 
-    # launcher, README, docs, tools, samples
+    # README, docs, tools, samples (no launcher: bin/FAFStudio.exe starts by itself)
     pk = os.path.join(ROOT, 'editor', 'packaging')
-    os.makedirs(os.path.join(pkg, 'launcher'))
-    shutil.copy2(os.path.join(pk, 'launch.ps1'), os.path.join(pkg, 'launcher', 'launch.ps1'))
-    shutil.copy2(os.path.join(pk, 'FAFStudio.cmd'), os.path.join(pkg, 'FAFStudio.cmd'))
     readme = open(os.path.join(pk, 'README.txt'), encoding='utf-8').read()
     readme = readme.replace('@VERSION@', version).replace('@BUILD@', build).replace('@REVISION@', revision)
     with open(os.path.join(pkg, 'README.txt'), 'w', encoding='utf-8', newline='\r\n') as f:
@@ -261,8 +257,8 @@ def assemble(a):
     total = sum(int(r.split()[1]) for r in rows)
     print('%d files, %.1f MB' % (len(rows), total / 1e6))
 
-    # verify: the things the launcher and the editor look for
-    for rel in ('FAFStudio.cmd', 'launcher/launch.ps1', 'bin/FAFStudio.exe', 'bin/init_editor.lua', 'editor/lua/editor/userdata.lua', 'editor/lua/editor/helpdata.lua',
+    # verify: the things the exe and the editor look for
+    for rel in ('bin/FAFStudio.exe', 'bin/init_editor.lua', 'editor/lua/editor/userdata.lua', 'editor/lua/editor/helpdata.lua',
                 'editor/maps/editor_blank/editor_blank_scenario.lua', 'editor/schook/lua/ui/uimain.lua', 'README.txt', 'CHANGELOG.txt', 'docs/PACKAGING.md'):
         if not os.path.isfile(os.path.join(pkg, rel)):
             raise SystemExit('the package lacks ' + rel)
@@ -289,22 +285,16 @@ def assemble(a):
 
 # ---- test from a clean folder ------------------------------------------------------------------------------------------------------------
 
-def run_launcher(pkg, user, extra, env_extra=None, test_flag=True):
+def run_exe(pkg, user, extra, env_extra=None, wait=False):
+    """Starts bin\\FAFStudio.exe the way a double click does: no arguments except `extra`, the working folder is NOT bin (the exe has to find its way itself), no launcher.
+    wait=False: returns the Popen of the running editor; wait=True: waits for the end and returns the finished process (a start that cannot go on ends by itself)."""
     env = dict(os.environ)
     env['FAFSTUDIO_USER'] = user
     env.update(env_extra or {})
-    cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', os.path.join(pkg, 'launcher', 'launch.ps1')] + (['-Test'] if test_flag else []) + extra
-    r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
-    return r
-
-
-def pid_of(user):
-    p = os.path.join(user, 'engine.pid')
-    for _ in range(40):
-        if os.path.isfile(p):
-            return int(open(p).read().strip())
-        time.sleep(0.25)
-    raise SystemExit('the launcher did not report an engine process')
+    cmd = [os.path.join(pkg, 'bin', 'FAFStudio.exe')] + extra
+    if wait:
+        return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120, cwd=os.path.dirname(pkg))
+    return subprocess.Popen(cmd, env=env, cwd=os.path.dirname(pkg))
 
 
 def kill(pid):
@@ -327,7 +317,7 @@ def command(chan, lua, timeout=90):
 
 
 def package_test(pkg_src):
-    """Copies the package to a clean folder whose name has a space in it, starts it through the launcher and checks what the user would see."""
+    """Copies the package to a clean folder whose name has a space in it, starts bin\\FAFStudio.exe like a double click and checks what the user would see."""
     base = os.path.join(os.environ.get('TEMP', 'C:/tmp'), 'fafstudio pkg test')
     if os.path.isdir(base):
         shutil.rmtree(base, ignore_errors=True)
@@ -344,9 +334,8 @@ def package_test(pkg_src):
     # 1. no map argument: the start screen
     chan = os.path.join(base, 'chan 1.lua')
     open(chan, 'w').write('return "ready"\n')
-    r = run_launcher(pkg, user, ['/edcmd', chan])
-    check(r.returncode == 0, 'launcher exit code %d %s' % (r.returncode, (r.stdout + r.stderr).strip()[:200]))
-    pid = pid_of(user)
+    proc = run_exe(pkg, user, ['/edcmd', chan])
+    pid = proc.pid
     try:
         ready = command(chan, 'return "ready"', 120)
         check(ready.startswith('OK'), 'editor answers on the command channel: ' + ready[:60])
@@ -366,7 +355,7 @@ return table.concat({ V.Text(), U.Dir(), C.Root(), tostring(S.IsOpen()), tostrin
             check(os.path.normcase(os.path.normpath(lines[2])) == os.path.normcase(os.path.normpath(pkg)), 'installation folder found from the Lua tree: ' + lines[2])
             check(lines[3] == 'true', 'start screen is open when no map is given')
             check(int(lines[4]) >= 10, 'help topics: ' + lines[4])
-            check(lines[5] == 'true', 'fa_path.lua was copied from the FAF install')
+            check(lines[5] == 'true', 'fa_path.lua was copied from the FAF install by the exe')
         runs = command(chan, "return tostring(ed_text_stats())")
         check(runs.startswith('OK') and float(runs.replace('OK: ', '') or 0) > 0, 'the DirectWrite text backend (edtext.dll) draws the text: ' + runs)
         shot = os.path.join(os.path.dirname(os.path.abspath(pkg_src)), 'package_test_start.png')
@@ -382,8 +371,8 @@ return table.concat({ V.Text(), U.Dir(), C.Root(), tostring(S.IsOpen()), tostrin
     # 2. a map argument: no start screen, settings are written into the user folder
     chan2 = os.path.join(base, 'chan 2.lua')
     open(chan2, 'w').write('return "ready"\n')
-    r = run_launcher(pkg, user, ['/map', 'editor_blank', '/edcmd', chan2])
-    pid = pid_of(user)
+    proc = run_exe(pkg, user, ['/map', 'editor_blank', '/edcmd', chan2])
+    pid = proc.pid
     try:
         ready = command(chan2, 'return "ready"', 120)
         check(ready.startswith('OK'), 'second start with /map answers: ' + ready[:60])
@@ -396,20 +385,21 @@ return table.concat({ V.Text(), U.Dir(), C.Root(), tostring(S.IsOpen()), tostrin
     finally:
         kill(pid)
         time.sleep(1)
-    # 3a. no FAForever data: the launcher says what is missing and does not start anything
+    # 3. no FAForever data: the exe says what is missing (no message box under test: logs\\boot_message.txt) and ends with exit code 2, it does not crash
     nofaf = os.path.join(base, 'no faf here')
     os.makedirs(nofaf, exist_ok=True)
-    r = run_launcher(pkg, user, [], env_extra={'FAF_DATA': nofaf})
-    out = r.stdout + r.stderr
-    check(r.returncode == 2 and 'needs Supreme Commander' in out and 'FAF_DATA' in out, 'a missing FAF install is explained (exit %d): %s' % (r.returncode, ' '.join(out.split())[:100]))
-    # 3b. the message after a bad end: a program that exits with an error code stands in for the engine (where.exe refuses the editor's arguments and returns 2)
-    stand_in = os.path.join(os.environ.get('SystemRoot', 'C:/Windows'), 'System32', 'where.exe')
-    if os.path.isfile(stand_in):
-        shutil.copy2(stand_in, os.path.join(pkg, 'bin', 'FAFStudio.exe'))
-        r = run_launcher(pkg, user, [], env_extra={'FAFSTUDIO_NOGUI': '1'}, test_flag=False)
-        out = r.stdout + r.stderr
-        check('stopped unexpectedly' in out and 'Log:' in out, 'a bad end is reported in plain words: ' + ' '.join(out.split())[:160])
-        check(r.returncode != 0, 'the launcher passes the exit code on (%d)' % r.returncode)
+    shutil.rmtree(os.path.join(pkg, 'gamedata'), ignore_errors=True)
+    for link in ('gamedata', 'cache', 'movies', 'sounds', 'themes'):
+        p = os.path.join(pkg, link)
+        if os.path.isdir(p):
+            os.rmdir(p)                                    # a junction: removes the link, not the data
+    for f in ('fa_path.lua',):
+        if os.path.isfile(os.path.join(pkg, f)):
+            os.remove(os.path.join(pkg, f))
+    r = run_exe(pkg, user, [], env_extra={'FAF_DATA': nofaf, 'FAFSTUDIO_NOGUI': '1'}, wait=True)
+    msg_file = os.path.join(user, 'logs', 'boot_message.txt')
+    msg = open(msg_file, encoding='utf-8', errors='replace').read() if os.path.isfile(msg_file) else ''
+    check(r.returncode == 2 and 'needs Supreme Commander' in msg and 'FAF_DATA' in msg, 'a missing FAF install is explained (exit %d): %s' % (r.returncode, ' '.join(msg.split())[:100]))
     print('package test: %s' % ('PASS' if not problems else 'FAIL (%d)' % len(problems)))
     shutil.rmtree(base, ignore_errors=True)
     return not problems

@@ -34,7 +34,7 @@ Without a build environment, take a staged engine (`engine/run`) from a teammate
 |---|---|
 | `editor/runtime/` | The editor itself, as Lua: `lua/editor/` (model, tools, panels, `gui/`), `schook/` (hooks into the game's Lua), `override/` (shaders), `mods/`, `branding/` |
 | `editor/core/`, `editor/edtext/`, `editor/tools/` | Engine-independent C++ core (formats), the DirectWrite text DLL, asset generators |
-| `editor/help/`, `editor/packaging/`, `editor/samples/` | In-app help topics, the packaged launcher, sample maps |
+| `editor/help/`, `editor/packaging/`, `editor/samples/` | In-app help topics, the package README, sample maps |
 | `engine/` | `BASE.json` (which engine commit we build on) and `patches/` (our commits, the native `Ed*.cpp` code) |
 | `scripts/` | `studio.py` (set-up), `editor_inst.py` (test instances), `editor_merge.py` (parallel feature branches), `editor_nightly.py` (QA), `package_editor.py`, generators |
 | `docs/` | Design, QA reports, packaging, release, parallel-work docs: start with `docs/REPOSITORY.md` |

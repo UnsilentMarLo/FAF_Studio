@@ -1,6 +1,6 @@
 -- Everything the editor remembers between runs lives in one per-user folder: layouts of the workspaces, UI scale, the last tool and brush settings,
--- hotkeys, recent maps, the first-run flag. The folder comes from the command line (`/eduser <dir>`, the launcher passes
--- %APPDATA%/FAFStudio); without it (development instances, tests) it is `userdata` next to the exe, so every test instance keeps its own and
+-- hotkeys, recent maps, the first-run flag. The folder comes from the command line (`/eduser <dir>`, the exe adds
+-- %APPDATA%/FAFStudio when it is started without arguments); without it (development instances, tests) it is `userdata` next to the exe, so every test instance keeps its own and
 -- never touches a real user's settings.
 --
 --   Dir() / Path(rel)            the folder and a file in it (forward slashes)

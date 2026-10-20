@@ -11,8 +11,6 @@ out the build is the owner's decision, see "What may be shipped"). The version n
 
 ```
 FAFStudio/
-  FAFStudio.cmd          the launcher to double-click (calls launcher\launch.ps1)
-  launcher/launch.ps1      FAF data lookup, links, start, crash message
   README.txt  CHANGELOG.txt (from git)  VERSION.txt  MANIFEST.txt (sha256 of every file)
   bin/                     FAFStudio.exe + the DLLs it imports (ffmpeg libraries, edtext.dll) + init_editor.lua
   editor/                  the Lua tree (lua/ schook/ mods/ override/ brushes/ branding/ maps/ = blank templates), help/ is in docs/help
@@ -22,7 +20,7 @@ FAFStudio/
 
 The DLL list is not hand maintained: the script reads the import table of the exe (`pe_imports`) and copies the DLLs of `engine_decomp/run_x64/bin` that it needs, recursively. Self tests (`selftest_*.lua`) and
 their data stay out. The script refuses to finish when `init_faf.lua`, `SupComDataPath.lua`, `fa_path.lua` or a game data folder ended up inside, when the help data is stale (`gen_help.py --check`) or when a file
-the launcher needs is missing.
+the exe needs is missing.
 
 Generated content that git ignores (`editor/runtime/maps`, `brushes`, `override/textures`) is taken from the main checkout when a worktree does not have it, like `editor_inst start` does.
 
@@ -31,23 +29,29 @@ Generated content that git ignores (`editor/runtime/maps`, `brushes`, `override/
 The engine is the Forged Alliance executable the editor was built from. At start it runs `init_faf.lua` (FAF's file), which reads `../fa_path.lua` (written by the FAForever client: `fa_path` = the Forged
 Alliance install, `custom_vault_path` = the user's `My Games\...\Supreme Commander Forged Alliance` folder with their maps and mods, `GameVersion`, ...) and mounts: from the Forged Alliance install the
 `gamedata/*.scd`, `movies`, `sounds`, `maps`, `fonts`; from `../gamedata/*.nx2` (the folder one level above `bin`) FAF's patch files; the user's vault. `cache`, `movies`, `sounds` and `themes` next to `gamedata`
-are FAF's own folder layout, which the engine expects as well. The editor adds its own tree (`init_editor.lua`: `../editor`, `../mapout/*`, `../modproj/*`). Nothing of the game data is in the package. `launcher/launch.ps1`:
+are FAF's own folder layout, which the engine expects as well. The editor adds its own tree (`init_editor.lua`: `../editor`, `../mapout/*`, `../modproj/*`). Nothing of the game data is in the package. There is **no launcher script**: `bin\FAFStudio.exe` is double-clicked, and the exe sets itself up before the engine starts
+(`moho/editor/EdBootstrap.cpp`, called first in `WinMain`; engine patch 0034; the module and its test are described in the header of `EdBootstrap.h`):
+
+0. the process becomes DPI aware (see DPI.md) and its working folder becomes `bin\` (Lua reads and writes `editor_boot.txt`, `editor_mods.txt` ... relative to it), whatever started it;
 
 1. looks for the FAF data folder: `%FAF_DATA%`, else `%ProgramData%\FAForever` (where the FAForever client puts it); it must hold `gamedata`, `fa_path.lua`, `bin\init_faf.lua`, `bin\SupComDataPath.lua`.
-   When it does not, a message says what is missing and how to set `FAF_DATA`; nothing starts.
-2. copies `init_faf.lua` and `SupComDataPath.lua` into `bin\` and `fa_path.lua` into the package root **at every start** (FAF updates them; they are FAF's files and are not redistributed);
+   When it does not (and no earlier start left a complete set-up in the package), a message box says what is missing and how to set `FAF_DATA`; the process ends with exit code 2 and nothing starts.
+2. copies `init_faf.lua` and `SupComDataPath.lua` into `bin\` and `fa_path.lua` into the package root when they are missing or older (FAF updates them; they are FAF's files and are not redistributed);
 3. links `cache`, `gamedata`, `movies`, `sounds`, `themes` of the FAF folder into the package root as folder junctions (no copy, no administrator rights; a junction that points elsewhere is replaced;
-   a real folder of that name stops the launcher with a message);
+   a real folder of that name is left alone; where junctions are impossible (a drive that is not NTFS) a directory symbolic link is tried; when `gamedata` still is not there, a message says so, exit code 3);
 4. creates `mapout`, `modproj`, `bin\config`, the (empty) `editor_mods*.txt`, rotates the log (`editor.log` -> `editor.previous.log` in the user folder);
-5. starts `bin\FAFStudio.exe /init init_editor.lua /log <user>\logs\editor.log /nomovie /nosound /windowed <w> <h> /editor /eduser <user> [your arguments]` in `bin` (a window of 90 % of the work area, at
-   most 1920 x 1080); arguments with spaces are quoted, so a package in `C:\Users\Some Name\Tools` works (the test uses a folder with a space in its name);
-6. waits for it. When the exit code is not 0 or a `faf_crash_*.txt` appeared, a message box says: the editor stopped, the path of the report and of the log, that the work is kept (autosave) and what to send.
+5. completes the arguments: `/init init_editor.lua /editor /nomovie /nosound /windowed <w> <h> /log <user>\logs\editor.log /eduser <user>`, each only when you did not give it (a window of 90 % of the work area in real
+   pixels, at most 1920 x 1080), and sets `FAFSTUDIO_UISCALE` (the display scale) for the first-run UI scale. A start that has `/init` is left alone (scripts, tests): only the DPI awareness applies. Paths with a space
+   work (the test uses a folder with a space in its name); a user name with letters outside the ANSI code page falls back to the 8.3 path;
+6. then the engine starts as before.
 
-`FAFStudio.cmd /map <name>` opens a map (no start screen). `-Test` (used by the package test) prints instead of showing message boxes and writes the engine's process id to `<user>\engine.pid`.
+`bin\FAFStudio.exe /map <name>` opens a map (no start screen). `FAFSTUDIO_NOGUI=1` (the package test) writes the message of a start that cannot go on to `<user>\logs\boot_message.txt` instead of opening a
+message box. An exe that has no `init_editor.lua` next to it and no `/editor` argument (the plain game executable) is not touched. There is no message after a crash any more (nothing waits for the process):
+see 5.
 
 ### What may be shipped
 
-- Game data: **no**. The launcher links the user's own FAForever folders; `init_faf.lua`, `SupComDataPath.lua` and `fa_path.lua` are copied from the user's install, not from us.
+- Game data: **no**. The exe links the user's own FAForever folders; `init_faf.lua`, `SupComDataPath.lua` and `fa_path.lua` are copied from the user's install, not from us.
 - Run time requirements outside the package: Windows 10 / 11 64 bit, the Microsoft DirectX End-User Runtime libraries the exe imports (`d3dx9_43`, `d3dx10`, `x3daudio1_7`; Forged Alliance installs them), the
   Visual C++ runtime (`vcruntime140`, `msvcp140`, installed by the FAForever client).
 - `bin\*.dll`: the ffmpeg libraries (`avcodec-61` ...) are LGPL / GPL builds: when the package is given away, their license texts and source offer have to travel with it (not added yet, listed under open items).
@@ -55,7 +59,7 @@ are FAF's own folder layout, which the engine expects as well. The editor adds i
 
 ## 2. User data (`userdata.lua`, `persist.lua`)
 
-One folder per user: the command line argument `/eduser <dir>` (the launcher passes `%APPDATA%\FAFStudio`, or `%FAFSTUDIO_USER%`). Without it (development instances, tests) the folder is `userdata` next to the exe, so
+One folder per user: the command line argument `/eduser <dir>` (the exe adds `%APPDATA%\FAFStudio`, or `%FAFSTUDIO_USER%`, when it is started without arguments). Without it (development instances, tests) the folder is `userdata` next to the exe, so
 every test instance keeps its own and never touches a real user's settings; `editor_inst start` clears it unless `--keep-userdata` is given.
 
 | File | Content | Written |
@@ -102,11 +106,11 @@ with the file's size and time, mounts the folder as `/edthumbs`; one map per fra
   skipped), Back / Next / Skip. It starts once after the first start screen (setting `tourPending`, cleared by `tourDone`) and from Help > Take the tour.
 - Adding to the help: write or edit a `.md` topic and run `gen_help.py`; add a tooltip line for a new tool or panel; add a tip to `tips.lua`.
 
-## 5. Crash handling (`crash.lua`, `gui/feature_crash.lua`, the launcher)
+## 5. Crash handling (`crash.lua`, `gui/feature_crash.lua`)
 
-- The engine writes `faf_crash_<date>_<time>.txt` / `.dmp` into `bin` when it dies. **At the crash**, the launcher shows the plain message with the report path (see 1.6); the engine's own crash handler cannot show Lua
-  text (it runs in the dying process), which is why the message comes from the launcher.
-- **At the next start**, the first session of the process shows "The editor stopped unexpectedly" for crash reports this user folder has not seen (the first start with a new user folder treats what is on disk as history):
+- The engine writes `faf_crash_<date>_<time>.txt` / `.dmp` into `bin` when it dies. Nothing else runs at that moment (there is no launcher waiting for the process any more, and the engine's own crash handler
+  cannot show Lua text), so the editor says it at the **next start**:
+- the first session of the process shows "The editor stopped unexpectedly" for crash reports this user folder has not seen (the first start with a new user folder treats what is on disk as history):
   the report path, Copy the report path, Copy diagnostics, Continue.
 - **Autosave recovery**: `Maps.AutosaveTick` (every 5 minutes when the map changed) records `autosave = { map }` in the user settings; saving (`MarkClean`), Discard in the unsaved changes dialog and Recover clear it.
   When it is still set at the next start, a dialog offers Restore it / Ask me later / Discard it (this covers a crash, a closed window and a killed process alike). File > Recover autosave stays.
@@ -117,13 +121,13 @@ with the file's size and time, mounts the folder as `/edthumbs`; one map per fra
 
 - `selftest_package.lua` (registered in `selftests.extra`): user data round trip, bad and newer files, reset, layout sanitising, help search and generated topics, tooltip coverage report, thumbnail parser, crash
   report detection, tour steps, start screen build. Run with `python scripts/editor_inst.py selftests <tag>`; `python scripts/editor_merge.py try package --test`.
-- `python scripts/package_editor.py --test`: the clean folder test described in the script header (start screen with no map, version stamp, user folder, installation folder, links, log, text backend drawing, sample map listed, `/map` start, settings written, the message for a missing FAF install, the message after a bad end with a stand-in program, screenshot `dist/package_test_start.png`). Last result 2026-10-19: PASS, 6 DLLs, 150 MB unpacked, 50 MB zip.
+- `python scripts/package_editor.py --test`: the clean folder test described in the script header (start screen with no map, version stamp, user folder, installation folder, links, log, text backend drawing, sample map listed, `/map` start, settings written, the exe's message for a missing FAF install (exit code 2, `boot_message.txt`), started from another working folder like a double click, screenshot `dist/package_test_start.png`). Last result 2026-10-19: PASS, 6 DLLs, 150 MB unpacked, 50 MB zip.
 - Real input (instance `package`): start screen with 5 recent maps and thumbnails, a click on a card opened the map, layout / UI scale / brush restored after a restart, tooltips with a real hover (the pointer has to be
   moved for real: posted mouse messages do not drive Maui's hover), the tour clicked through, the help window.
 
 ## Open items
 
 - ffmpeg license texts for the DLLs in `bin` (see "What may be shipped"); an installer (`.msi` / Inno Setup) instead of a zip; code signing (SmartScreen will warn about an unsigned exe).
-- The crash message of the launcher cannot say *what* crashed; the dump files are for the developers.
-- The main window's size and position are chosen by the launcher (90 % of the work area), not remembered.
+- The crash notice at the next start cannot say *what* crashed; the dump files are for the developers.
+- The main window's size and position are chosen at start (90 % of the work area), not remembered.
 - Help topics are English only, ASCII only (the in-game font set).

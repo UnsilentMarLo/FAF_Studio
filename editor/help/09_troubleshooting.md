@@ -4,7 +4,7 @@ keywords: crash, error, problem, bug, report, diagnostics, log, faf, data, insta
 
 ## What the editor needs
 
-FAF Studio uses the data of an installed Supreme Commander: Forged Alliance with the FAForever client (the FAF data folder, usually C:/ProgramData/FAForever, and the Forged Alliance files it points to). The editor does not contain or redistribute any game data. The launcher looks for the FAF data folder; the README of the package explains how to point it at another place.
+FAF Studio uses the data of an installed Supreme Commander: Forged Alliance with the FAForever client (the FAF data folder, usually C:/ProgramData/FAForever, and the Forged Alliance files it points to). The editor does not contain or redistribute any game data. The program looks for the FAF data folder itself when it starts; the README of the package explains how to point it at another place (FAF_DATA).
 
 ## If the editor stops
 
@@ -13,7 +13,7 @@ FAF Studio uses the data of an installed Supreme Commander: Forged Alliance with
 
 ## Common questions
 
-- The editor starts but shows only a menu of the game: it was started without the editor arguments; use the FAFStudio launcher.
+- The editor shows a message that the FAF data is missing: install the FAForever client and start it once, or set the environment variable FAF_DATA to the folder that contains gamedata.
 - A map does not open: maps whose .scmap file is missing are refused with a message. Maps from mods need those mods in the Mods panel.
 - The window is too big or too small: change the UI size with the + and - buttons at the top right.
 - Layout in a mess: Workspace > Reset layout of this workspace.
