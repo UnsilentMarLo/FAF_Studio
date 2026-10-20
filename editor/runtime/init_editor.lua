@@ -13,6 +13,17 @@ do
     end
 end
 
+-- The launcher passes the Windows display scale (FAFSTUDIO_UISCALE, e.g. 1.25) because the editor runs DPI aware (docs/projects/editor/DPI.md); gui/shell.lua uses it as the first-run
+-- UI scale. Only the init state may read the environment, so it goes through a file like editor_boot.txt.
+do
+    local ok, value = pcall(function() return os.getenv('FAFSTUDIO_UISCALE') end)
+    local f = io.open('editor_dpi.txt', 'w')
+    if f then
+        f:write((ok and value) or '')
+        f:close()
+    end
+end
+
 local function Mount(dir, mountpoint)
     -- table.insert, not path[getn(path) + 1]: after the table.insert(path, 1, ...) below getn is a stored size that plain
     -- index writes do not update, so every later mount would overwrite the same slot and only the last would survive

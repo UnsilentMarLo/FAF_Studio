@@ -126,6 +126,33 @@ def refresh_engine(d, exe):
     os.link(src, dst)
 
 
+def dpi_env():
+    """Environment for the engine process. The editor must run DPI aware: otherwise Windows draws it at 96 dpi and stretches the window to the display scale (125 % = every
+    edge and glyph resampled, text blurry; measured in screenshots: a 90 px button is 112.5 px wide). `__COMPAT_LAYER=HighDpiAware` makes the process DPI aware without a manifest
+    change. The UI scale then has to follow the display scale: FAFSTUDIO_UISCALE (read by init_editor.lua) is the first-run UI scale. FAFSTUDIO_DPI=0 turns this off."""
+    env = dict(os.environ)
+    if sys.platform != 'win32' or env.get('FAFSTUDIO_DPI') == '0':
+        return env
+    layer = env.get('__COMPAT_LAYER', '')
+    if 'HighDpiAware' not in layer:
+        env['__COMPAT_LAYER'] = (layer + ' HighDpiAware').strip()
+    try:
+        import winreg
+        dpi = 96
+        for sub, name in (('Control Panel\\Desktop\\WindowMetrics', 'AppliedDPI'), ('Control Panel\\Desktop', 'LogPixels')):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub) as k:
+                    dpi = int(winreg.QueryValueEx(k, name)[0])
+                    break
+            except OSError:
+                continue
+        scale = max(1.0, min(3.0, round(dpi / 96.0 * 4) / 4))     # the UI scale buttons step by 0.25
+        env.setdefault('FAFSTUDIO_UISCALE', '%.2f' % scale)
+    except Exception:
+        pass
+    return env
+
+
 def cmd_start(a):
     d = inst_dir(a.tag)
     if not os.path.isdir(d):
@@ -165,7 +192,7 @@ def cmd_start(a):
     open(cmdfile, 'w').write('return "ready"\n-- start %d\n' % time.time_ns())
     args = [os.path.join(d, 'bin', exe), '/init', 'init_editor.lua', '/log', log, '/nomovie', '/nosound', '/windowed'] + getattr(a, 'size', '1280x720').split('x') + [
             '/editor'] + ([] if getattr(a, 'nomap', False) else ['/map', a.map]) + ['/edcmd', cmdfile] + list(getattr(a, 'extra', None) or [])
-    p = subprocess.Popen(args, cwd=os.path.join(d, 'bin'))
+    p = subprocess.Popen(args, cwd=os.path.join(d, 'bin'), env=dpi_env())
     open(os.path.join(d, 'pid.txt'), 'w').write(str(p.pid))
     open(os.path.join(d, 'start_args.txt'), 'w').write(a.map + chr(10) + exe + chr(10))     # what `selftests` restarts with
     print('started', a.tag, p.pid)

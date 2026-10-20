@@ -81,11 +81,26 @@ foreach ($f in @('editor_mods.txt', 'editor_mods_trial.txt')) {
 $log = Join-Path $user 'logs\editor.log'
 if (Test-Path $log) { Move-Item $log (Join-Path $user 'logs\editor.previous.log') -Force }
 
-# a window that fits the screen (90 % of the work area, at most 1920 x 1080)
+# DPI: the editor runs DPI aware. A process that is not is drawn at 96 dpi and stretched to the display scale by Windows (125 % display: every edge and glyph is resampled and the
+# text is blurry). __COMPAT_LAYER=HighDpiAware makes the process aware without changing the exe. The UI scale then has to follow the display scale, so the first run starts at
+# the Windows scale (FAFSTUDIO_UISCALE, read by init_editor.lua); the UI +/- buttons change it later. FAFSTUDIO_DPI=0 turns all of this off. See docs/projects/editor/DPI.md.
+$dpiScale = 1.0
+if ($env:FAFSTUDIO_DPI -ne '0') {
+    if ($env:__COMPAT_LAYER -notmatch 'HighDpiAware') { $env:__COMPAT_LAYER = ("$($env:__COMPAT_LAYER) HighDpiAware").Trim() }
+    $dpi = 96
+    foreach ($entry in @(@('HKCU:\Control Panel\Desktop\WindowMetrics', 'AppliedDPI'), @('HKCU:\Control Panel\Desktop', 'LogPixels'))) {
+        $v = (Get-ItemProperty -Path $entry[0] -Name $entry[1] -ErrorAction SilentlyContinue).($entry[1])
+        if ($v) { $dpi = [int]$v; break }
+    }
+    $dpiScale = [Math]::Max(1.0, [Math]::Min(3.0, [Math]::Round($dpi / 96.0 * 4) / 4))
+    if (-not $env:FAFSTUDIO_UISCALE) { $env:FAFSTUDIO_UISCALE = $dpiScale.ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture) }
+}
+
+# a window that fits the screen (90 % of the work area, at most 1920 x 1080 pixels; this script is not DPI aware, so its work area is in 96 dpi units)
 Add-Type -AssemblyName System.Windows.Forms
 $area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-$w = [Math]::Min(1920, [int]($area.Width * 0.9))
-$h = [Math]::Min(1080, [int]($area.Height * 0.9))
+$w = [Math]::Min(1920, [int]($area.Width * 0.9 * $dpiScale))
+$h = [Math]::Min(1080, [int]($area.Height * 0.9 * $dpiScale))
 
 $stamp = Get-Date
 # an argument with a space is quoted for the engine's command line
