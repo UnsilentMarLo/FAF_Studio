@@ -507,9 +507,18 @@ Panels.Register{
             W.BeginLayout(group)
             -- tabs
             local x = pad
+            local tabW = Skin.S(90)
+            -- the tabs wrap when the panel is narrower than the row (a tab past the panel's edge was drawn over the panel beside it)
+            local perRow = math.max(1, math.floor((w - 2 * pad + Skin.S(4)) / (tabW + Skin.S(4))))
+            local n = 0
             for _, t in self.tabs do
-                W.Place(t.button, group, x, y, Skin.S(90), Skin.S(22))
-                x = x + Skin.S(94)
+                if n > 0 and math.mod(n, perRow) == 0 then
+                    x = pad
+                    y = y + Skin.S(26)
+                end
+                W.Place(t.button, group, x, y, tabW, Skin.S(22))
+                x = x + tabW + Skin.S(4)
+                n = n + 1
             end
             y = y + Skin.S(28)
             self.pic:Hide()

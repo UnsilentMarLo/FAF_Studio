@@ -92,7 +92,10 @@ local function Shot(x, y, z, r, zoom, size)
     return true
 end
 
-local function Ground(x, z) return ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or 0 end
+local function Ground(x, z)
+    if View.Id and x == View.X and z == View.Z then return View.Y0 end          -- the stage's own floor (a ship stands at the water's surface)
+    return ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or 0
+end
 
 --- The faction name of a unit blueprint ('UEF', 'Aeon', 'Cybran', 'Seraphim'), 'default' when it has none.
 function Faction(id)
@@ -169,6 +172,17 @@ local function CaptureInner(id, r)
     end
     local ok, why = Shot(fx, fy, fz, r, zoom, r.render)
     if not ok then return nil, why end
+    -- a render in which the unit touches the edge is framed too close (its parts are cut off): back off until the whole box is inside, and say so in the log
+    for again = 1, 4 do
+        local bx0, by0, bx1, by1, bn = ed_icon_bounds(0.05)
+        if not bx0 or bn < 8 then break end
+        local rs = r.render
+        if bx0 > 0 and by0 > 0 and bx1 < rs - 1 and by1 < rs - 1 then break end
+        LOG('EDITOR: icon of ' .. tostring(id) .. ' was framed too close (zoom ' .. string.format('%.2f', zoom) .. ', box ' .. bx0 .. ',' .. by0 .. ' - ' .. bx1 .. ',' .. by1 .. ' in ' .. rs .. '): backing off')
+        zoom = zoom * 1.5
+        ok, why = Shot(fx, fy, fz, r, zoom, r.render)
+        if not ok then return nil, why end
+    end
     local fdx, fdy = math.sin(r.heading) * 672, -math.cos(r.heading) * 540 * math.sin(r.pitch)      -- where the unit's front (+z) points on the screen
     local x0, y0, x1, y1, n
     if r.half then x0, y0, x1, y1, n = ed_icon_bounds(0.05, 0.1, fdx, fdy, r.halfMin) else x0, y0, x1, y1, n = ed_icon_bounds(0.05) end
@@ -205,7 +219,9 @@ function Capture(id, recipe)
         for k, _ in r.light do lightBase[k] = now[k] end
         ed_world_set(r.light, false)
     end
+    View.IconLens(true)
     local res, why = CaptureInner(id, r)          -- (no pcall: the capture waits for frames, and nothing can yield inside one)
+    View.IconLens(false)
     if lightBase then ed_world_set(lightBase, false) end
     if r.teamColor then TeamColor(false) end
     Busy = false

@@ -59,6 +59,12 @@ function Run()
     local x2, z2 = View.StageSpotFor(256, {})
     Ok(x2 > 0 and z2 > 0, 'a map without objects has a stage spot')
 
+    -- a ship's spot: open water at least `need` deep (a lake in the south east here), nothing when the map is dry
+    local lake = function(px, pz) if px > 150 and pz > 150 and px < 220 and pz < 220 then return 0 end return 30 end
+    local wx, wz, wy = View.WaterSpotFor(lake, 256, 20, 6)
+    Ok(wx and wx > 150 and wz > 150 and wx < 220 and wz < 220 and wy == 20, 'a naval unit stands in the lake (' .. tostring(wx) .. ', ' .. tostring(wz) .. ')')
+    Ok(View.WaterSpotFor(function() return 30 end, 256, 20, 6) == nil, 'a dry map has no water spot')
+
     -- the camera focus: the line of sight through the focus passes through the unit's centre, the focus lies on the ground
     for _, case in { { 0, 0.5 }, { 3.7, 0.55 }, { 1.2, 1.4 }, { 5, 0.12 } } do
         local h, p = case[1], case[2]

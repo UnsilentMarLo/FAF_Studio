@@ -512,8 +512,17 @@ local function Tick()
             if kind == 'size' then
                 p.host:SetRect(0, 0, GetFrame(id).Width(), GetFrame(id).Height())
             elseif kind == 'close' then
-                CloseWindow(p.host)
-                Say('panels docked back')
+                -- the window's X button: dock the panels back and close the window. Whatever goes wrong while docking, the window must still go (an error here used to leave it
+                -- standing with the event already consumed, so the X seemed to do nothing).
+                local ok, err = pcall(CloseWindow, p.host)
+                if ok then
+                    Say('panels docked back')
+                else
+                    LOG('EDITOR gui: closing a pop-out failed: ' .. tostring(err))
+                    S.popouts[id] = nil
+                    pcall(ed_window_destroy, id)
+                    Say('window closed (docking its panels back failed, see the log)')
+                end
             end
         end
     end

@@ -75,7 +75,7 @@ Panels.Register{
         end
         P.tog = {
             { Toggle('range', 'Rings', 50), 50, 'range' }, { Toggle('senses', 'Senses', 58), 58, 'senses' }, { Toggle('footprint', 'Footprint', 68), 68, 'footprint' },
-            { Toggle('hitbox', 'Hit box', 60), 60, 'hitbox' }, { Toggle('bones', 'Bones', 52), 52, 'bones' }, { Toggle('grid', 'Grid', 44), 44, 'grid' },
+            { Toggle('hitbox', 'Hit box', 60), 60, 'hitbox' }, { Toggle('bones', 'Bones', 52), 52, 'bones' }, { Toggle('grid', 'Grid', 44), 44, 'grid' }, { Toggle('lock', 'Lock', 44), 44, 'lock' },
         }
 
         -- fourth row: LOD, team colour, light, list mode

@@ -4,7 +4,7 @@
 --   NewRun{ step, thumbs, seed, only }        an evaluation: step = 1 full resolution, 4 = every fourth sample (the preview); thumbs = make node pictures; seed = graph seed override;
 --                                             only = set of node ids to evaluate (default all). run:Evaluate() -> report, run:Entry(id), run:Value(id, port), run:Free()
 --   Main                                      the live run of the canvas (preview resolution, thumbnails); Refresh() re-evaluates when the graph or the map changed
---   PreviewStep()                             the step of the preview run for this map
+--   PreviewStep()                             the step of the preview run for this map (grid at most PreviewCap = 513 samples a side; SetPreviewCap(257|513|1025))
 --   FinalHeight(run, base)                    the field the height outputs make (nil when there is none)
 --   ShowOnTerrain() / RevertTerrain() / TerrainShown()       the preview result on the real terrain, taken off again by Revert (a native undo step that is not in the history)
 --   Build()                                   full resolution run; heights, layers, terrain types and props as ONE undo step -> summary table, or nil, message
@@ -66,17 +66,26 @@ local function Strip(msg)
     return msg
 end
 
---- The step of the preview: the smallest that keeps the grid within 257 samples a side (1025 map: 4).
+--- The preview grid is at most PreviewCap samples a side (the toolbar's Detail button cycles PreviewCaps). 257 was too coarse for texture masks; 513 is the default.
+PreviewCaps = { 257, 513, 1025 }
+PreviewCap = 513
+
+--- The step of the preview: the smallest that keeps the grid within PreviewCap samples a side (1025 map: 2 at 513).
 function PreviewStep()
     local w, h = Size()
     if not w then return 1 end
     local span = math.max(w, h) - 1
     local step = 1
-    while math.floor(span / step) + 1 > 257 do step = step + 1 end
+    while math.floor(span / step) + 1 > PreviewCap do step = step + 1 end
     for s = step, step + 3 do
         if math.mod(w - 1, s) == 0 and math.mod(h - 1, s) == 0 then return s end
     end
     return step
+end
+
+--- The thumbnail size follows the detail: 128 px a side, 192 at the finest.
+function ThumbSize()
+    return PreviewCap > 513 and 192 or 128
 end
 
 -- ---- a run ------------------------------------------------------------------------------------------------------------------------------------------
@@ -441,12 +450,12 @@ function Run:MakeThumb(entry, def)
     local f, o = PickThumbField(entry, def)
     if f == nil then return end
     if o.type == 'color' then
-        entry.thumb = GraphColor.Thumb(f, 64)
+        entry.thumb = GraphColor.Thumb(f, ThumbSize())
         entry.lo, entry.hi = 0, 1
         entry.thumbPort = o.name
         return
     end
-    local path, lo, hi = Fields.Preview(f, 64, { ramp = RAMP[o.type] or 'grey' })
+    local path, lo, hi = Fields.Preview(f, ThumbSize(), { ramp = RAMP[o.type] or 'grey' })
     entry.thumb = path
     entry.lo, entry.hi = lo, hi
     entry.thumbPort = o.name
@@ -554,6 +563,19 @@ end
 
 function Invalidate()
     mainRevision = -1
+end
+
+--- Sets the preview detail (samples a side) and makes the live run start again at it. Returns the cap in use.
+function SetPreviewCap(cap)
+    cap = math.floor(cap)
+    if cap == PreviewCap then return PreviewCap end
+    PreviewCap = cap
+    if Main then
+        Main:Free()
+        Main = false
+    end
+    mainRevision = -1
+    return PreviewCap
 end
 
 function Release()
