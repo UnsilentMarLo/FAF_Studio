@@ -155,7 +155,7 @@ function Add(name)
             Economy = { mass = 0, energy = 0 }, Alliances = {},
             Units = { type = 'GROUP', orders = '', platoon = '',
                       Units = { INITIAL = { type = 'GROUP', orders = '', platoon = '', Units = {} } } },
-            PreBuiltUnits = {},
+            PlatoonBuilders = { next_platoon_builder_id = '0', Builders = {} },
         }
         Map.Doc.save.Armies[name] = army
         table.insert(Team().armies, name)

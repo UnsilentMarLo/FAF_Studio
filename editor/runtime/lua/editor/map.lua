@@ -291,7 +291,7 @@ function SaveAsCore(diskDir, stem, opts)
         if not ok or not res then LOG('EDITOR map preview not written: ' .. tostring(ok and why or res)) end
     end
     local ok = ed_write_file(diskDir .. '/' .. stem .. '_scenario.lua',
-                             Ser.Chunk({ { 'version', 3 }, { 'ScenarioInfo', info } }))
+                             Ser.ScenarioChunk(info))
     ok = ed_write_file(diskDir .. '/' .. stem .. '_save.lua', HEADER .. Ser.Chunk({ { 'Scenario', Doc.save } })) and ok
     ok = ed_write_file(diskDir .. '/' .. stem .. '_script.lua', script) and ok
     if info.TerrainMesh then
