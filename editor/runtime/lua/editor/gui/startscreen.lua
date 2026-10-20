@@ -99,7 +99,7 @@ function Open(opts)
     bg:SetSolidColor(c.window)
     bg.Left:Set(0) bg.Top:Set(0) bg.Width:Set(fw) bg.Height:Set(fh)
     bg.HandleEvent = function(self, event) return true end        -- nothing falls through to the editor underneath
-    local state = { group = g, cards = {}, tip = 1 }
+    local state = { group = g, cards = {}, tip = 1, seenW = fw, seenH = fh }
     current = state
 
     local M = Skin.S(40)
@@ -247,6 +247,18 @@ function Open(opts)
     -- ---- thumbnails arrive one per frame (reading a big .scmap takes a moment) --------------------------------------------------------------
     g:SetNeedsFrameUpdate(true)
     g.OnFrame = function(self, delta)
+        -- the window was resized: the screen is laid out for one size, so it is built again once the size has stopped changing (not on every step of a drag)
+        local nw, nh = frame.Width(), frame.Height()
+        if nw ~= state.seenW or nh ~= state.seenH then
+            state.seenW, state.seenH = nw, nh
+            state.sizeAt = GetSystemTimeSeconds()
+        elseif state.sizeAt and GetSystemTimeSeconds() - state.sizeAt > 0.25 and (nw ~= fw or nh ~= fh) and not state.rebuilding then
+            state.rebuilding = true
+            ForkThread(function()
+                if current == state then Open(opts) end
+            end)
+            return
+        end
         local nextCard = table.remove(state.cards, 1)
         if nextCard then
             local vfs = Thumbs.For(nextCard.path)
