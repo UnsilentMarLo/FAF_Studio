@@ -28,7 +28,8 @@ EDT_API void edt_font_metrics(EdFont* f, float* ascent, float* descent, float* l
 EDT_API int edt_layout(EdFont* f, const wchar_t* text, int len, EdGlyph* out, int cap, float* width);
 // x position (pixels) of the leading edge of every UTF-16 index 0..len (len+1 values).
 EDT_API int edt_positions(EdFont* f, const wchar_t* text, int len, float* xs);
-// Rasterises one glyph at a sub-pixel phase (0..3, quarter pixels). Output is 3 bytes per pixel: R,G,B sub-pixel coverage (ClearType 3x1).
+// Rasterises one glyph at a sub-pixel phase (0..3, quarter pixels). Output is 3 bytes per pixel, R = G = B = grayscale coverage (exact outline coverage, edraster.h;
+// before 2026-10-20 it was ClearType 3x1 averaged to gray). Set EDTEXT_RASTER=dwrite for that older method, EDTEXT_GAMMA, EDTEXT_YSNAP=0: see edtext.cpp.
 // left/top are relative to the glyph origin on the baseline (top is negative above the baseline). Returns 1 on success, 0 if the glyph is empty.
 // If cap is too small, *w and *h are still set and 0 is returned with *needed set via w*h*3.
 EDT_API int edt_raster(EdFont* f, uint32_t face, uint32_t glyph, int phase, int* left, int* top, int* w, int* h, uint8_t* rgb, int cap);

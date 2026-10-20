@@ -165,7 +165,12 @@ function NewHost(frame, ctx)
         -- (scroll positions, edited text and selections would be lost)
         if inst and inst.OnResize and (inst.sizedW ~= w or inst.sizedH ~= h) then
             inst.sizedW, inst.sizedH = w, h
-            local ok, err = pcall(inst.OnResize, inst, w, h)
+            -- A panel that scrolls gets an overlay bar on its right edge (widgets.lua ScrollContent). The panel is told it is that much narrower, so sliders, value fields
+            -- and buttons that end at its right edge stay clear of the bar (they ran under it, hiding the right border of the fields). The space is always kept, not only
+            -- while the bar shows: the layout must not jump when the content grows past the panel.
+            local pw = w
+            if self.contents[id] then pw = math.max(Skin.S(60), w - Skin.S(Skin.size.scrollW) - Skin.S(2)) end
+            local ok, err = pcall(inst.OnResize, inst, pw, h)
             if not ok then LOG('EDITOR gui: panel ' .. tostring(id) .. ' resize failed: ' .. tostring(err)) end
         end
         -- what does not fit the panel scrolls: measure the content and set up the bar

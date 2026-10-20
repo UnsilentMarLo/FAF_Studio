@@ -66,8 +66,8 @@ Panels.Register{
             table.insert(Pn.all, l)
             return l
         end
-        local function Sld(label, min, max, step, fmt, get, set)
-            local s = W.Slider(group, { label = label, compact = true, min = min, max = max, step = step, fmt = fmt, get = get,
+        local function Sld(label, min, max, step, fmt, get, set, tip)
+            local s = W.Slider(group, { label = label, compact = true, min = min, max = max, step = step, fmt = fmt, get = get, tip = tip,
                 set = function(v) set(v) Pn:Refresh() end })
             table.insert(Pn.all, s)
             table.insert(Pn.sliders, s)
@@ -126,7 +126,8 @@ Panels.Register{
                 Sld('Mass pad skirt', 0, 16, 1, '%d', function() return S.massSkirt end, function(v) S.massSkirt = v end),
                 Sld('Hydro pad half size', 1, 12, 0.5, '%.1f', function() return S.hydroHalf end, function(v) S.hydroHalf = v end),
                 Sld('Hydro pad skirt', 0, 16, 1, '%d', function() return S.hydroSkirt end, function(v) S.hydroSkirt = v end),
-                Sld('Ring radius (units from a start)', 5, 100, 1, '%d', function() return S.ringRadius end, function(v) S.ringRadius = v end),
+                Sld('Ring radius (units)', 5, 100, 1, '%d', function() return S.ringRadius end, function(v) S.ringRadius = v end,
+                    'Distance of the ring of mass and hydro pads from the start position, in map units.'),
                 Sld('Cluster distance (units)', 3, 80, 1, '%d', function() return S.clusterDist end, function(v) S.clusterDist = v end),
                 Sld('Strength', 0, 1, 0.05, '%.2f', function() return S.strength end, function(v) S.strength = v end),
             })
