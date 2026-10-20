@@ -61,7 +61,7 @@ local function DefaultArmy(index)
         ArmyIndex = index,
         Units = { type = 'GROUP', orders = '', platoon = '',
                   Units = { INITIAL = { type = 'GROUP', orders = '', platoon = '', Units = {} } } },
-        PreBuiltUnits = {},
+        PlatoonBuilders = { next_platoon_builder_id = '0', Builders = {} },
     }
 end
 
@@ -89,6 +89,14 @@ function Sync(doc)
     for name, _ in doc.save.Armies do
         if Number(name) and not doc.save.MasterChain._MASTERCHAIN_.Markers[name] then doc.save.Armies[name] = nil end
     end
+
+    -- the counters and tables the game's own save files carry (the sim does not read them, the map tools of the game do)
+    for _, army in doc.save.Armies do
+        army.PlatoonBuilders = army.PlatoonBuilders or { next_platoon_builder_id = '0', Builders = {} }
+    end
+    doc.save.next_army_id = doc.save.next_army_id or tostring(table.getn(names) + 1)
+    doc.save.next_group_id = doc.save.next_group_id or '1'
+    doc.save.next_unit_id = doc.save.next_unit_id or '1'
 
     local info = doc.info
     info.Configurations = info.Configurations or {}
