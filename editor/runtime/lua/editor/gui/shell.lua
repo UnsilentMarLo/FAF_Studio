@@ -553,6 +553,11 @@ function Start(name, opts)
     if opts and opts.remember then
         -- the arrangement of the last run: UI scale and workspace (the layout itself is read by ShowWorkspace)
         local scale = UserData.Get('uiScale', false)
+        if type(scale) ~= 'number' then
+            -- first run: follow the Windows display scale the exe passed (EdBootstrap) (the editor is DPI aware, so a 125 % display needs UI 125 % to look as large as before)
+            local dpi = tonumber(ed_read_file('editor_dpi.txt') or '')
+            if dpi and dpi >= 1 and dpi <= 3 then scale = dpi end
+        end
         if type(scale) == 'number' then Skin.SetScale(scale) end
         local last = UserData.Get('workspace', false)
         for _, n in Workspace.Presets() do

@@ -114,15 +114,20 @@ namespace {
 //   EDTEXT_RASTER=dwrite   the previous method: DirectWrite's ClearType texture averaged to gray (softer; for A/B comparison)
 //   EDTEXT_GAMMA=0.72      coverage curve; below 1 gives thin light-on-dark strokes more weight, 1 = none
 //   EDTEXT_YSNAP=0         switch off the x-height snap (glyphs keep their designed height)
+//   EDTEXT_SNAPX=1         whole-pixel glyph positions: every glyph is drawn at the nearest whole pixel (the engine picks one of 4 quarter-pixel phases per glyph; this maps them
+//                          to 2). Vertical stems then always cover the same pixel columns: crisper and evenly weighted, at the price of up to half a pixel of uneven spacing.
 struct RasterSettings {
     bool dwriteGray = false;
     bool ySnap = true;
+    bool snapX = false;
     uint8_t lut[256];
     RasterSettings() {
         const char* r = getenv("EDTEXT_RASTER");
         dwriteGray = r && (r[0] == 'd' || r[0] == 'D');
         const char* y = getenv("EDTEXT_YSNAP");
         ySnap = !(y && y[0] == '0');
+        const char* sx = getenv("EDTEXT_SNAPX");
+        snapX = sx && sx[0] == '1';
         float gamma = 0.72f;
         if (const char* g = getenv("EDTEXT_GAMMA")) { float v = (float)atof(g); if (v >= 0.3f && v <= 2.5f) gamma = v; }
         edr::BuildContrastLut(lut, gamma);
@@ -206,8 +211,10 @@ EDT_API int edt_raster(EdFont* f, uint32_t face, uint32_t glyph, int phase, int*
         if (f->ySnap[face] < 0.f) f->ySnap[face] = measureSnap(f->faces[face], f->px);
         sy = f->ySnap[face];
     }
-    if (!ras.render(phase / 4.f, sy, bm)) return 0;
-    *left = bm.left; *top = bm.top; *w = bm.w; *h = bm.h;
+    // The backend places the bitmap at the whole pixel below the pen and picks phase = round(fraction * 4) (EdTextBackend.cpp): phases 2 and 3 are the nearer to the next pixel.
+    const int shift = (st.snapX && phase >= 2) ? 1 : 0;
+    if (!ras.render(st.snapX ? 0.f : phase / 4.f, sy, bm)) return 0;
+    *left = bm.left + shift; *top = bm.top; *w = bm.w; *h = bm.h;
     if (bm.w * bm.h * 3 > cap) return 0;
     const size_t n = (size_t)bm.w * bm.h;
     for (size_t i = 0; i < n; i++) rgb[i * 3] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = st.lut[bm.a[i]];     // the backend expects R, G, B per pixel: gray = all three equal

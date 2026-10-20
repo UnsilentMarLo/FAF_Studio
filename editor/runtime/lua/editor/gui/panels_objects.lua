@@ -829,7 +829,8 @@ Panels.Register{
                 end
                 text = text .. string.format('   |   project %s: %d error(s), %d warning(s)', Bp.Project, e, w)
             end
-            P.summary:SetText(text)
+            P.text = text
+            if P.w then P:LayoutTop() end       -- the summary's width changed: the buttons beside it may no longer fit
             P.list:Refresh()
             local sel = P.modSel and ModCheck.Issues[P.modSel]
             local fixable = 0
@@ -838,16 +839,35 @@ Panels.Register{
             if sel and sel.fix then P.fix:SetText(string.sub(tostring(sel.fixLabel or 'Fix'), 1, 24)) end
             P.fixAll:SetHidden(fixable == 0)
         end
+        --- The summary text on the left and the three buttons on the right of the same row when both fit; otherwise the buttons go on a row of their own under the summary
+        --- (Maui does not clip: on a narrow panel the buttons used to sit on top of the summary text). The list takes what is left.
+        function P:LayoutTop()
+            local w, h = P.w, P.h
+            local pad, bh, gap = Skin.S(6), Skin.S(22), Skin.S(6)
+            local bw = Skin.S(84) + Skin.S(100) + Skin.S(90) + 2 * gap
+            local sx, sy = Skin.S(10), Skin.S(8)
+            W.Fit(P.summary, P.text or '', w - sx - pad)
+            local top
+            if sx + P.summary.Width() + Skin.S(12) + bw + pad <= w then
+                W.Place(P.pull, group, w - bw - pad, pad, Skin.S(84), bh)
+                W.Place(P.snap, group, w - bw - pad + Skin.S(84) + gap, pad, Skin.S(100), bh)
+                W.Place(P.run, group, w - Skin.S(90) - pad, pad, Skin.S(90), bh)
+                top = Skin.S(34)
+            else
+                local below = sy + P.summary.Height() + Skin.S(4)
+                local bottom = W.Flow(group, { { P.run, Skin.S(90) }, { P.snap, Skin.S(100) }, { P.pull, Skin.S(84) } }, pad, below, w - 2 * pad, bh, gap)
+                top = bottom + pad
+            end
+            P.list:SetRect(pad, top, w - 2 * pad, math.max(Skin.S(40), h - top - Skin.S(28) - pad))
+        end
         function P:OnResize(w, h)
             local pad = Skin.S(6)
+            P.w, P.h = w, h
             W.Place(P.fix, group, pad, h - Skin.S(22) - pad, Skin.S(150), Skin.S(22))
             W.Place(P.fixAll, group, pad + Skin.S(154), h - Skin.S(22) - pad, Skin.S(60), Skin.S(22))
-            W.Place(P.run, group, w - Skin.S(90) - pad, pad, Skin.S(90), Skin.S(22))
-            W.Place(P.snap, group, w - Skin.S(90) - Skin.S(100) - 2 * pad, pad, Skin.S(100), Skin.S(22))
-            W.Place(P.pull, group, w - Skin.S(90) - Skin.S(100) - Skin.S(84) - 3 * pad, pad, Skin.S(84), Skin.S(22))
-            P.list:SetRect(pad, Skin.S(34), w - 2 * pad, h - Skin.S(34) - Skin.S(28) - pad)
             P.rev = -1
             P:Refresh()
+            P:LayoutTop()
         end
         return P
     end,

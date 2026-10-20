@@ -24,11 +24,14 @@ Environment variables, read once when the DLL first rasterises (set them before 
 | `EDTEXT_RASTER=dwrite` | the previous method (ClearType texture averaged to gray) for an A/B comparison |
 | `EDTEXT_GAMMA=0.72` | the coverage curve (0.3 to 2.5; below 1 gives more weight to thin strokes; 1 = none) |
 | `EDTEXT_YSNAP=0` | no x-height snap: glyphs keep the designed height |
+| `EDTEXT_SNAPX=1` | whole-pixel glyph positions: the backend places every bitmap at the whole pixel below the pen and asks for phase = round(fraction * 4); this maps phases 0-1 to the bitmap at x = 0 and 2-3 to the same bitmap one pixel right, so vertical stems always cover the same pixel columns (crisp, evenly weighted; spacing is off by up to half a pixel). Try it if stems look uneven or soft. |
 
 ## Limits
 
-- Unhinted: vertical stems are positioned by the sub-pixel phase (quarter pixels), so a 1 px stem can straddle two columns. A hinted look would need integer positioning in the
-  backend (`EdTextBackend.cpp`, not part of this change).
+- Unhinted: vertical stems are positioned by the sub-pixel phase (quarter pixels), so a 1 px stem can straddle two columns and look dimmer and wider than its neighbour.
+  `EDTEXT_SNAPX=1` removes that (see above).
+- Gray fonts (`ed:Family;g`, used on translucent surfaces) go through the backend's own gray curve (`grayLut`) on top of the DLL's `EDTEXT_GAMMA`; the default `ed:Family` text
+  (drawn by the `TTextLcd` technique with R = G = B) only gets the DLL's curve.
 - Opposite-direction overlapping contours would cancel (same-direction overlaps, which variable fonts have, are fine). Not seen in the fonts checked.
 - The x-height snap changes glyph heights by up to 6 %. If a font looks wrong with it, `EDTEXT_YSNAP=0`.
 
