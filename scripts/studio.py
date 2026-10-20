@@ -2,7 +2,9 @@
 """FAF Studio: set-up, build and check commands of this repository. Everything else has its own script (docs/REPOSITORY.md lists them).
 
     python scripts/studio.py doctor                 what is installed, what is missing
+    python scripts/studio.py build                  EVERYTHING in one go: apply new engine patches, build the engine, build edtext.dll, stage and brand the exe, say what changed
     python scripts/studio.py engine setup           clone the reconstructed engine (engine/BASE.json) and apply our patch series (engine/patches) -> engine/faf-re
+    python scripts/studio.py engine sync            apply the patches of engine/patches that engine/faf-re does not have yet (setup does this too; `git pull` adds patches, it does not apply them)
     python scripts/studio.py engine build           MSBuild the editor engine (Visual Studio + the June 2010 DirectX SDK), then stage it
     python scripts/studio.py engine stage           copy the built exe and DLLs, FAF's init files and the editor's init_editor.lua into engine/run, brand the exe (FAFStudio.exe)
     python scripts/studio.py engine export          write the commits of engine/faf-re on top of the base back to engine/patches (commit them here)
@@ -14,12 +16,15 @@
 Paths and environment variables: scripts/studio_paths.py. The editor runs on top of the FAForever client's installation (FAF_DATA), nothing of the game is copied into this repository.
 """
 import argparse
+import email
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -85,6 +90,19 @@ def cmd_doctor(a):
     row('Forged Alliance install', bool(retail and os.path.isdir(retail)), str(retail))
     row('engine sources', os.path.isdir(os.path.join(P.SDK, 'moho', 'editor')), P.ENGINE_SRC + '   (studio.py engine setup)')
     row('staged engine', os.path.isfile(os.path.join(P.ENGINE_BIN, 'main_x64_la_p2.exe')), P.ENGINE_BIN + '   (studio.py engine stage)')
+    if os.path.isdir(os.path.join(P.ENGINE_SRC, '.git')):
+        try:
+            code, out = git('log', '--format=%s', meta()['base'] + '..HEAD', cwd=P.ENGINE_SRC)
+            have = set(' '.join(line.split()) for line in out.splitlines())
+            patches = sorted(glob.glob(os.path.join(PATCHES, '*.patch')))
+            missing = [os.path.basename(p) for p in patches if patch_subject(p) not in have]
+            row('engine patches applied', not missing, '%d of %d%s' % (len(patches) - len(missing), len(patches), ('   MISSING: ' + ', '.join(missing[:3]) + ('...' if len(missing) > 3 else '') + '   (python scripts/studio.py build applies them)') if missing else ''))
+        except Exception as e:
+            row('engine patches applied', False, str(e)[:100])
+    exe_path = os.path.join(P.ENGINE_BIN, 'FAFStudio.exe')
+    built = os.path.join(P.ENGINE_SRC, 'output', 'main', 'x64', 'Release', 'main_x64_la.exe')
+    if os.path.isfile(exe_path) and os.path.isfile(built):
+        row('FAFStudio.exe is current', os.path.getmtime(exe_path) >= os.path.getmtime(built) - 5, 'FAFStudio.exe %s, built engine %s' % (stamp(exe_path)[:19], stamp(built)[:19]))
     row('generated assets', os.path.isfile(os.path.join(P.ROOT, 'editor', 'runtime', 'maps', 'editor_blank', 'editor_blank.scmap')), 'studio.py generate')
     vc = find_vcvars()
     row('Visual Studio C++ tools', bool(vc), vc or 'only needed to build the engine (FAF_STUDIO_VCVARS)')
@@ -106,6 +124,7 @@ def engine_setup(a):
     if os.path.isdir(os.path.join(dst, '.git')):
         code, out = git('log', '--oneline', '-1', cwd=dst)
         print('engine sources exist:', dst, '\n  HEAD', out)
+        engine_sync(a)
         return 0
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     run(['git', 'clone', '--no-checkout', url, dst])
@@ -121,6 +140,48 @@ def engine_setup(a):
         raise SystemExit('the patch series does not apply to %s at %s: is engine/BASE.json right?' % (url, m['base']))
     print('engine ready: %d patches on top of %s' % (len(patches), m['base'][:10]))
     return 0
+
+
+def patch_subject(path):
+    """The commit subject of a format-patch file (the folded Subject header, without the [PATCH n/m] tag), whitespace normalised."""
+    with open(path, 'rb') as f:
+        msg = email.message_from_binary_file(f)
+    subject = str(email.header.make_header(email.header.decode_header(msg.get('Subject', ''))))
+    subject = re.sub(r'^\s*\[PATCH[^\]]*\]\s*', '', subject)
+    return ' '.join(subject.split())
+
+
+def engine_sync(a=None):
+    """Applies the patches of engine/patches that the engine checkout does not have yet. `git pull` of this repository adds patch files but never touches engine/faf-re, so a
+    build after a pull compiled the OLD engine: that is why the exe did not change. Matching is by commit subject. Returns the number of patches applied."""
+    m = meta()
+    dst = P.ENGINE_SRC
+    if not os.path.isdir(os.path.join(dst, '.git')):
+        raise SystemExit('no engine checkout at %s: python scripts/studio.py engine setup' % dst)
+    patches = sorted(glob.glob(os.path.join(PATCHES, '*.patch')))
+    code, out = git('log', '--format=%s', m['base'] + '..HEAD', cwd=dst)
+    if code != 0:
+        raise SystemExit('the engine checkout %s does not contain the base commit %s (engine/BASE.json): %s' % (dst, m['base'][:10], out[:200]))
+    have = set(' '.join(line.split()) for line in out.splitlines())
+    missing = [p for p in patches if patch_subject(p) not in have]
+    if not missing:
+        print('engine sources: all %d patches of engine/patches are applied' % len(patches))
+        return 0
+    code, out = git('status', '--porcelain', '--untracked-files=no', cwd=dst)
+    if out.strip():
+        raise SystemExit('%d new engine patches (%s ...) but the engine checkout has uncommitted changes, so they cannot be applied:\n%s\n'
+                         'Commit them there (then `engine export`) or stash them, and run this again.' % (len(missing), os.path.basename(missing[0]), out))
+    env = dict(os.environ, GIT_COMMITTER_NAME=os.environ.get('GIT_COMMITTER_NAME', 'FAF Studio'), GIT_COMMITTER_EMAIL=os.environ.get('GIT_COMMITTER_EMAIL', 'faf-studio@localhost'))
+    print('engine sources lack %d patch(es): applying' % len(missing))
+    for p in missing:
+        print('  +', os.path.basename(p))
+    r = run(['git', 'am', '--3way', '--keep-cr'] + missing, cwd=dst, check=False, env=env)
+    if r.returncode != 0:
+        run(['git', 'am', '--abort'], cwd=dst, check=False)
+        raise SystemExit('the new patches do not apply to your engine checkout (it has changes of its own that clash). Nothing was changed. Options: commit your engine changes there and '
+                         'run `engine export`, or move %s away and run `engine setup` for a fresh checkout.' % dst)
+    print('engine sources are up to date: %d patch(es) applied' % len(missing))
+    return len(missing)
 
 
 def engine_export(a):
@@ -146,6 +207,7 @@ def engine_build(a):
     if not dx:
         raise SystemExit('the June 2010 DirectX SDK not found (set FAF_STUDIO_DXSDK, e.g. C:\\Program Files (x86)\\Microsoft DirectX SDK (June 2010))')
     P.need(os.path.join(P.SDK, 'main_ed.vcxproj'), 'engine sources', 'python scripts/studio.py engine setup')
+    engine_sync(a)
     log = os.path.join(P.ENGINE_DIR, 'build.log')
     os.makedirs(P.ENGINE_DIR, exist_ok=True)
     bat = os.path.join(P.ENGINE_DIR, '_build.bat')
@@ -154,6 +216,7 @@ def engine_build(a):
         f.write('msbuild main_ed.vcxproj /nologo /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 "/p:DirectXInclude=%s\\Include" '
                 '"/p:DirectXLibX64=%s\\Lib\\x64" /p:ContinueOnError=true "/flp:logfile=%s;verbosity=minimal;encoding=UTF-8" /p:CL_MPCount=8 /p:FafX64LargeAddress=heap\r\n' % (dx, dx, log))
         f.write('exit /b %ERRORLEVEL%\r\n')
+    started = time.time()
     r = run(['cmd', '/c', bat], check=False)
     errors = 0
     if os.path.isfile(log):
@@ -161,46 +224,85 @@ def engine_build(a):
     print('build exit %d, %d error lines (log: %s)' % (r.returncode, errors, log))
     if r.returncode != 0 or errors:
         return 1
+    exe = os.path.join(P.ENGINE_SRC, 'output', 'main', 'x64', 'Release', 'main_x64_la.exe')
+    if not os.path.isfile(exe) or os.path.getmtime(exe) < started - 2:
+        print('MSBuild reported success but %s was not rebuilt (its time is older than this build). Nothing was staged: the exe in %s stays the old one.' % (exe, P.ENGINE_BIN))
+        return 1
+    print('built %s (%s, %d bytes)' % (exe, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(exe))), os.path.getsize(exe)))
+    if shutil.which('xmake'):
+        try:
+            cmd_edtext(a)        # the text DLL is part of the editor: build it with it, so it cannot be left behind
+        except SystemExit as e:
+            print('edtext.dll was NOT rebuilt (%s): the engine is staged with the DLL that was there' % e)
+    else:
+        print('note: xmake not found, edtext.dll is not rebuilt (https://xmake.io); the DLL in %s stays as it is' % P.ENGINE_BIN)
     return engine_stage(a)
+
+
+def stamp(path):
+    return '%s  %9d bytes' % (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(path))), os.path.getsize(path)) if os.path.isfile(path) else 'missing'
 
 
 def engine_stage(a):
     out = os.path.join(P.ENGINE_SRC, 'output', 'main', 'x64', 'Release')
     exe = P.need(os.path.join(out, 'main_x64_la.exe'), 'the built engine', 'python scripts/studio.py engine build')
     os.makedirs(P.ENGINE_BIN, exist_ok=True)
+    locked = []
+
+    def copy(src, dst):
+        try:
+            shutil.copy2(src, dst)
+        except PermissionError:
+            locked.append(os.path.basename(dst))
+
     target = os.path.join(P.ENGINE_BIN, 'main_x64_la_p2.exe')
     if os.path.exists(target):
         n = 1
         while os.path.exists(os.path.join(P.ENGINE_BIN, 'main_x64_la_p2_prev%d.exe' % n)):
             n += 1
         os.replace(target, os.path.join(P.ENGINE_BIN, 'main_x64_la_p2_prev%d.exe' % n))      # a running instance keeps its hard link; the old build stays for a rollback
-    shutil.copy2(exe, target)
-    shutil.copy2(exe, os.path.join(P.ENGINE_BIN, 'main_x64_la.exe'))
+    copy(exe, target)
+    copy(exe, os.path.join(P.ENGINE_BIN, 'main_x64_la.exe'))
     for dll in glob.glob(os.path.join(out, '*.dll')):
-        shutil.copy2(dll, P.ENGINE_BIN)
+        copy(dll, P.ENGINE_BIN)
     edtext = os.path.join(P.ROOT, 'editor', 'edtext', 'build', 'windows', 'x64', 'release', 'edtext.dll')
     if os.path.isfile(edtext):
-        shutil.copy2(edtext, P.ENGINE_BIN)
+        copy(edtext, P.ENGINE_BIN)
+        sources = [os.path.join(P.ROOT, 'editor', 'edtext', f) for f in ('edtext.cpp', 'edraster.h', 'edtext.h')]
+        if any(os.path.getmtime(f) > os.path.getmtime(edtext) for f in sources if os.path.isfile(f)):
+            print('WARNING: edtext.dll is older than its sources (editor/edtext): run `python scripts/studio.py edtext` (needs xmake)')
     else:
         print('note: no edtext.dll yet (python scripts/studio.py edtext): the editor falls back to the engine fonts')
     # FAF's own init files and the path file: read from the FAForever client at every stage (they are FAF's, not redistributed here)
     for name in ('init_faf.lua', 'SupComDataPath.lua'):
         src = os.path.join(P.FAF_DATA, 'bin', name)
         if os.path.isfile(src):
-            shutil.copy2(src, P.ENGINE_BIN)
+            copy(src, os.path.join(P.ENGINE_BIN, name))
         else:
             print('MISSING %s in the FAForever client (%s): start the client once and run `engine stage` again' % (name, src))
     fa_path = os.path.join(P.FAF_DATA, 'fa_path.lua')
     if os.path.isfile(fa_path):
-        shutil.copy2(fa_path, os.path.join(P.ENGINE_RUN, 'fa_path.lua'))
-    shutil.copy2(os.path.join(P.ROOT, 'editor', 'runtime', 'init_editor.lua'), P.ENGINE_BIN)
-    run([sys.executable, os.path.join(HERE, 'brand_exe.py')], check=False)
+        copy(fa_path, os.path.join(P.ENGINE_RUN, 'fa_path.lua'))
+    copy(os.path.join(P.ROOT, 'editor', 'runtime', 'init_editor.lua'), os.path.join(P.ENGINE_BIN, 'init_editor.lua'))
+    r = run([sys.executable, os.path.join(HERE, 'brand_exe.py')], check=False, capture_output=True, text=True)
+    print((r.stdout or '').strip())
+    if (r.stdout or '').find('running or locked') >= 0 or r.returncode != 0:
+        locked.append('FAFStudio.exe')
+        if r.stderr:
+            print(r.stderr.strip())
+    print()
     print('staged in', P.ENGINE_BIN)
+    for name in ('FAFStudio.exe', 'main_x64_la_p2.exe', 'main_x64_la.exe', 'edtext.dll', 'init_editor.lua'):
+        print('  %-20s %s' % (name, stamp(os.path.join(P.ENGINE_BIN, name))))
+    if locked:
+        print('\nNOT UPDATED (locked: a running editor or a stuck process holds them): ' + ', '.join(sorted(set(locked))))
+        print('Close every FAF Studio / main_x64_la window (Task Manager > Details: FAFStudio.exe, main_x64_la*.exe), then run `python scripts/studio.py engine stage` again.')
+        return 1
     return 0
 
 
 def cmd_engine(a):
-    return {'setup': engine_setup, 'build': engine_build, 'stage': engine_stage, 'export': engine_export}[a.what](a)
+    return {'setup': engine_setup, 'sync': lambda x: engine_sync(x) and 0, 'build': engine_build, 'stage': engine_stage, 'export': engine_export}[a.what](a)
 
 
 # ---- edtext, generate, check ----------------------------------------------------------------------------------------------------------------
@@ -256,8 +358,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='c', required=True)
     sub.add_parser('doctor').set_defaults(f=cmd_doctor)
+    sub.add_parser('build').set_defaults(f=engine_build)
     p = sub.add_parser('engine')
-    p.add_argument('what', choices=['setup', 'build', 'stage', 'export'])
+    p.add_argument('what', choices=['setup', 'sync', 'build', 'stage', 'export'])
     p.set_defaults(f=cmd_engine)
     sub.add_parser('edtext').set_defaults(f=cmd_edtext)
     sub.add_parser('generate').set_defaults(f=cmd_generate)
