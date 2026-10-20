@@ -23,7 +23,7 @@ local Fields = import('/lua/editor/fields.lua')
 live = {}
 
 -- node geometry in logical pixels at zoom 1
-local NW, HEAD, ROW, THUMB, PAD, STAT = 160, 22, 17, 72, 6, 14
+local NW, HEAD, ROW, THUMB, PAD, STAT = 160, 22, 17, 72, 6, 18       -- STAT: the status line under the ports (a 'small' text is 14-15 px tall)
 local PORT = 9
 local MINZ, MAXZ = 0.35, 1.6
 
@@ -52,9 +52,14 @@ local function Rows(node)
     return math.max(table.getn(Nodes.Inputs(node.type)), table.getn(VisibleOutputs(node.type)), 4)
 end
 
+--- Height of the body between the header and the status strip: the port rows, or the thumbnail when that is taller (it is 72 px, four rows are 68).
+local function BodyH(node)
+    return math.max(Rows(node) * ROW, THUMB)
+end
+
 local function NodeH(node)
     if node.type == 'frame' then return node.params.h or 320 end
-    return HEAD + PAD + Rows(node) * ROW + STAT
+    return HEAD + PAD + BodyH(node) + STAT
 end
 
 local function NodeW(node)
@@ -313,17 +318,29 @@ Panels.Register{
             end
             local nw = math.floor(NW * z)
             In(v.header, 0, 0, nw, math.floor(HEAD * z))
-            local tz = math.floor(THUMB * z)
-            local tx = math.floor((nw - tz) / 2)
+            local half = math.floor(PORT * z / 2)
+            local ps = math.max(5, math.floor(PORT * z))
+            -- The thumbnail sits between the port labels: it starts right of the longest input label and ends left of the longest output label (the labels are fixed-size text, so
+            -- at zoom 1 a name like "edge0" is wider than the gap beside a centred thumbnail). It shrinks when the labels leave less than THUMB; the labels are hidden below zoom 0.75.
+            local inW, outW = 0, 0
+            if z >= 0.75 then
+                for _, port in v.ins do inW = math.max(inW, port.label.Width()) end
+                for _, port in v.outs do outW = math.max(outW, port.label.Width()) end
+            end
+            local gap = Skin.S(3)
+            local lo = (inW > 0) and (ps + inW + gap) or 0
+            local hi = (outW > 0) and (nw - ps - outW - gap) or nw
+            local tz = math.max(Skin.S(16), math.min(math.floor(THUMB * z), hi - lo))
+            local tx = math.max(lo, math.min(math.floor((nw - tz) / 2), hi - tz))
             local ty = math.floor((HEAD + PAD) * z)
             In(v.thumbBg, tx, ty, tz, tz)
             In(v.thumb, tx, ty, tz, tz)
             v.title:SetText(node.label or (def and def.label) or node.type)
             W.Fit(v.title, node.label or (def and def.label) or node.type, nw - Skin.S(10))
             In(v.title, Skin.S(5), math.floor((math.floor(HEAD * z) - v.title.Height()) / 2))
-            In(v.status, Skin.S(5), math.floor((HEAD + PAD + Rows(node) * ROW) * z) + 1)
-            local half = math.floor(PORT * z / 2)
-            local ps = math.max(5, math.floor(PORT * z))
+            -- the status line is centred in the strip below the ports and the thumbnail, inside the frame (it used to start inside the thumbnail's rows and ran over the bottom edge)
+            local stripTop = math.floor((HEAD + PAD + BodyH(node)) * z)
+            In(v.status, Skin.S(5), stripTop + math.max(0, math.floor((math.floor(STAT * z) - v.status.Height()) / 2)))
             for i, port in v.ins do
                 local cy = math.floor((HEAD + PAD + (i - 1) * ROW + ROW / 2) * z)
                 In(port.dot, -half, cy - half, ps, ps)
@@ -903,6 +920,7 @@ Panels.Register{
             if ok and gal.Make then gal.Make() end
         end))
         Pn.seedLabel = W.Label(group, 'seed 0000', 0, 0, { color = c.text })
+        Pn.seedW = Pn.seedLabel.Width()     -- the toolbar reserves the width of the widest seed text: a seed that grows from 'seed 4' to 'seed 9999' used to run into the Seed + button
         Add(Btn('Seed -', 50, function() Graph.SetSeed(Graph.Current.seed - 1) Pn:Tick(true) end)).seedAfter = true
         Add(Btn('Seed +', 50, function() Graph.SetSeed(Graph.Current.seed + 1) Pn:Tick(true) end))
         Add(Btn('Random', 56, function() Graph.SetSeed(math.random(0, 9999)) Pn:Tick(true) end))
@@ -977,7 +995,7 @@ Panels.Register{
                 if b.seedAfter then table.insert(items, self.seedLabel) end
             end
             for _, it in items do
-                local iw = it.Width()
+                local iw = (it == self.seedLabel) and self.seedW or it.Width()
                 if x > pad and x + iw > w - pad then
                     x = pad
                     y = y + rowH
