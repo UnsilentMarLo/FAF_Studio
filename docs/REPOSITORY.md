@@ -31,7 +31,8 @@ union (`.gitattributes`). Details: `docs/EDITOR_PARALLEL.md`.
 ## Engine changes
 
 The native code lives in `engine/faf-re/src/sdk/moho/editor/` (a checkout made by `studio.py engine setup`). Work there on the branch `editor`, commit, then
-`python scripts/studio.py engine export` rewrites `engine/patches/` and you commit the patch files here. `engine build` compiles and stages the result. Never commit an exe.
+`python scripts/studio.py engine export` rewrites `engine/patches/` and you commit the patch files here. `python scripts/studio.py build` is the one command that brings the engine up to date: it applies patches added by a `git pull` (`engine sync`), compiles, builds `edtext.dll`, stages and brands `FAFStudio.exe` and
+prints the timestamps of what it staged. `engine build` alone does the engine part. Never commit an exe.
 
 ## Packaging and release
 

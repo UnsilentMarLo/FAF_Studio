@@ -17,13 +17,17 @@ The editor needs the FAForever client installed (its game data, `init_faf.lua`, 
 git clone <this repository> FAF_Studio
 cd FAF_Studio
 python scripts/studio.py doctor                # what is installed, what is missing
-python scripts/studio.py engine setup          # clone the reconstructed engine, apply engine/patches
-python scripts/studio.py engine build          # MSBuild (Visual Studio C++ tools, DirectX SDK June 2010), then stage into engine/run
-python scripts/studio.py edtext                # DirectWrite text backend (xmake)
+python scripts/studio.py engine setup          # first time only: clone the reconstructed engine, apply engine/patches
+python scripts/studio.py build                 # THE command after every pull: applies new engine patches, builds the engine (Visual Studio C++ tools, DirectX SDK June 2010),
+                                               # builds edtext.dll (xmake), stages into engine/run and brands FAFStudio.exe; prints what was updated and what could not be
 python scripts/studio.py generate              # git-ignored generated assets (icons, cursors, layer textures, blank maps)
 python scripts/editor_inst.py new dev          # a test instance
 python scripts/editor_inst.py start dev        # starts the editor (window 1280x720; --size 1920x1080)
 ```
+
+`git pull` adds patch files to `engine/patches` but never touches your `engine/faf-re` checkout: only `studio.py build` (or `engine sync`) applies them. A build that skips that step
+compiles the old engine and the exe does not change. The exe is updated when `studio.py build` ends with the list of staged files and no "NOT UPDATED" line (a running FAF Studio or
+main_x64_la process locks the exe: close it first).
 
 Without a build environment, take a staged engine (`engine/run`) from a teammate or use a packaged build (`python scripts/package_editor.py`): the Lua side
 (`editor/runtime`) runs on any staged engine, so most work (panels, tools, tests) needs no compiler.
