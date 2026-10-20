@@ -25,7 +25,7 @@ Tool = {
     stamp = 'Presses the picture of the chosen stamp into the ground along a stroke (add, subtract, max, min, replace). Pick the stamp in the Stamps panel.',
     stamp_paint = 'Paints the active terrain layer through the picture of the chosen stamp. Pick the stamp in the Stamps panel.',
     paint = 'Paints the chosen texture layer (Layers panel) on the ground.',
-    erase = 'Takes the chosen texture layer away under the brush, so the layer below shows.',
+    erase = 'Removes the chosen texture layer under the brush, so the layer below shows.',
     ttype = 'Paints terrain types: how the ground sounds and how units treat it (Terrain type panel).',
     ramp = 'Drag from one point to another: the ground between them becomes a straight slope, as wide as the brush.',
     paths = 'Draws spline paths (roads, rivers, ridges) on the terrain. Click to add points; the Paths panel sets what they do.',
@@ -86,7 +86,7 @@ Panel = {
     icons = 'Renders the strategic icon of a unit and writes it into the project.',
     interop = 'Import and export of heightmaps and masks (Gaea, World Machine, Blender ...).',
     erosion = 'Erosion presets and solvers, with a live preview; Apply is one undo step.',
-    fields = 'Low level field engine: step by step terrain shaping.',
+    fields = 'Low level field engine: step-by-step terrain shaping.',
     maskgen = 'Makes masks from slope, height, curvature and more, and applies them to layers.',
     recipes = 'Terrain texturing presets: grass, dirt, rock, snow from slope and height rules.',
     scatter = 'Fills the map with props by rules: density, slope, spacing.',
@@ -110,7 +110,7 @@ Panel = {
     themes = 'A library of terrain texture sets; click one to try it, Apply makes it permanent.',
     watermotion = 'The water ramp, cube map and wave normal maps, and how fast and where the waves move; also the strategic view colours.',
     imager = 'The strategic view: contour spacing and the colours of the zoomed out map.',
-    unitwiz = 'The wizard that makes a new unit or changes a unit step by step.',
+    unitwiz = 'The wizard that makes a new unit or changes a unit step-by-step.',
     brushes = 'A sample panel list of brush names (framework demo).',
 }
 

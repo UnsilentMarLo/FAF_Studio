@@ -62,7 +62,16 @@ Panels.Register{
         P.layerRow = {}
         for i, loopCat in Filter.CATEGORIES do
             local cat = loopCat      -- closures share the loop variable (nil after the loop): the button needs its own copy
-            local b = Btn(cat, Skin.S(96), Skin.S(24), function() Filter.Toggle(cat) end, { toggle = true })
+            local b = Btn(cat, Skin.S(96), Skin.S(24), function()
+                Filter.Toggle(cat)
+                -- 'Paths' covers both kinds: the AI path node markers and the terrain paths of the Paths panel (their splines, points and handles)
+                if cat == 'Paths' then
+                    pcall(function()
+                        import('/lua/editor/pathtool.lua').Show = not Filter.Hidden.Paths
+                        import('/lua/editor/paths.lua').Touch()
+                    end)
+                end
+            end, { toggle = true })
             P.layers[cat] = b
             table.insert(P.layerRow, { b, Skin.S(96) })
         end
@@ -144,8 +153,7 @@ Panels.Register{
             end
             P.grid:SetOn(Grid.Visible)
             P.slope:SetOn(Slope.Visible)
-            for cat, b in P.layers or {} do b:SetOn(not Filter.Hidden[cat]) end
-            P.path:SetOn(Slope.Kind == 'path')
+            for cat, b in P.layers or {} do b:SetOn(not Filter.Hidden[cat]) end            P.path:SetOn(Slope.Kind == 'path')
             P.build:SetOn(Slope.Kind == 'build')
             P.size:SetText(string.format('%d x %d cells', Slope.Window, Slope.Window))
             P.limit:SetText(string.format('%.2f', Slope.Limit))

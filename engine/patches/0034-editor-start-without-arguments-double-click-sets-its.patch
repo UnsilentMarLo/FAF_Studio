@@ -1,4 +1,4 @@
-From 9f792ee1489b40a6bca789b1a1a397caad439bbb Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Tue, 20 Oct 2026 10:41:00 +0000
 Subject: [PATCH] editor: start without arguments (double click) sets itself
@@ -17,16 +17,6 @@ tests/EdBootstrapTest.cpp builds the module on its own (mingw / Wine / MSVC).
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
----
- src/sdk/main_ed.vcxproj                       |   9 +-
- src/sdk/moho/app/WinMain.cpp                  |  39 ++
- src/sdk/moho/editor/EdBootstrap.cpp           | 492 ++++++++++++++++++
- src/sdk/moho/editor/EdBootstrap.h             |  43 ++
- src/sdk/moho/editor/tests/EdBootstrapTest.cpp | 185 +++++++
- 5 files changed, 764 insertions(+), 4 deletions(-)
- create mode 100644 src/sdk/moho/editor/EdBootstrap.cpp
- create mode 100644 src/sdk/moho/editor/EdBootstrap.h
- create mode 100644 src/sdk/moho/editor/tests/EdBootstrapTest.cpp
 
 diff --git a/src/sdk/main_ed.vcxproj b/src/sdk/main_ed.vcxproj
 index 27d163a..73911c8 100644
@@ -878,6 +868,3 @@ index 0000000..b006b31
 +  std::printf("%s\n", gFailed == 0 ? "ALL PASS" : "FAILURES");
 +  return gFailed == 0 ? 0 : 1;
 +}
--- 
-2.43.0
-

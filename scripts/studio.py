@@ -3,6 +3,8 @@
 
     python scripts/studio.py doctor                 what is installed, what is missing
     python scripts/studio.py build                  EVERYTHING in one go: apply new engine patches, build the engine, build edtext.dll, stage and brand the exe, say what changed
+    python scripts/studio.py deps                   the engine's third-party libraries (boost, wxWindows, LuaPlus, zlib, WildMagic, FFmpeg) are NOT in git: find them (an older checkout, FAF_STUDIO_DEPS),
+                                                    link them into engine/faf-re/dependencies, download FFmpeg when it is the only thing missing; `build` runs this first
     python scripts/studio.py engine setup           clone the reconstructed engine (engine/BASE.json) and apply our patch series (engine/patches) -> engine/faf-re
     python scripts/studio.py engine sync            apply the patches of engine/patches that engine/faf-re does not have yet (setup does this too; `git pull` adds patches, it does not apply them)
     python scripts/studio.py engine build           MSBuild the editor engine (Visual Studio + the June 2010 DirectX SDK), then stage it
@@ -25,6 +27,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -99,6 +103,9 @@ def cmd_doctor(a):
             row('engine patches applied', not missing, '%d of %d%s' % (len(patches) - len(missing), len(patches), ('   MISSING: ' + ', '.join(missing[:3]) + ('...' if len(missing) > 3 else '') + '   (python scripts/studio.py build applies them)') if missing else ''))
         except Exception as e:
             row('engine patches applied', False, str(e)[:100])
+    if os.path.isdir(P.ENGINE_SRC):
+        miss = deps_missing()
+        row('engine dependencies', not miss, ('all %d in engine/faf-re/dependencies' % len(DEPENDENCIES)) if not miss else 'MISSING: ' + ', '.join(miss) + '   (python scripts/studio.py deps)')
     exe_path = os.path.join(P.ENGINE_BIN, 'FAFStudio.exe')
     built = os.path.join(P.ENGINE_SRC, 'output', 'main', 'x64', 'Release', 'main_x64_la.exe')
     if os.path.isfile(exe_path) and os.path.isfile(built):
@@ -140,6 +147,150 @@ def engine_setup(a):
         raise SystemExit('the patch series does not apply to %s at %s: is engine/BASE.json right?' % (url, m['base']))
     print('engine ready: %d patches on top of %s' % (len(patches), m['base'][:10]))
     return 0
+
+
+# ---- third-party libraries of the engine -----------------------------------------------------------------------------------------------------
+
+# name under engine/faf-re/dependencies -> a file that proves it is complete enough. None of these are in git (upstream vendors them as private .7z archives; see
+# engine/faf-re/dependencies/patches/*.md for what each one is): boost 1.34.1 (headers and 12 thread sources), LuaPlus Build 1081, zlib 1.2.3 (13 files), wxWindows 2.4.2 (patched, with
+# lib\x64\wxmswu.lib), WildMagic 3.8 (Foundation.vcxproj is a project reference), FFmpeg 7.1.x shared LGPL (include, lib\*.lib, bin\*.dll; docs/FAF_SFD_COMPATIBILITY.md).
+DEPENDENCIES = [
+    ('boost_1_34_1', 'boost/config.hpp'),
+    ('LuaPlus_Build1081', 'Src/LuaPlus/include'),
+    ('zlib-1.2.3', 'include'),
+    ('wxWindows-2.4.2', 'include/wx'),
+    ('WildMagic3p8', 'Foundation/Foundation.vcxproj'),
+    ('ffmpeg/x64', 'include/libavcodec/avcodec.h'),
+]
+
+
+def deps_dir():
+    return os.path.join(P.ENGINE_SRC, 'dependencies')
+
+
+def deps_missing():
+    return [name for name, proof in DEPENDENCIES if not os.path.exists(os.path.join(deps_dir(), name, proof))]
+
+
+def deps_candidates():
+    """Folders that may hold a prepared `dependencies` tree: FAF_STUDIO_DEPS (the dependencies folder, or an engine checkout that has one), then the places an earlier workspace
+    of this project kept it, next to this checkout (Documents\\SupCom_Dev_Workspace\\engine_decomp\\faf-re-upstream\\dependencies and the like)."""
+    out = []
+    env = os.environ.get('FAF_STUDIO_DEPS')
+    if env:
+        out += [env, os.path.join(env, 'dependencies')]
+    parent = os.path.dirname(P.ROOT)
+    for pattern in ('*/engine_decomp/*/dependencies', '*/engine_decomp/*/*/dependencies', '*/engine/faf-re/dependencies', '*/dependencies', '*/engine_decomp/_deps_src', '*/engine_decomp/_deps_src/*'):
+        out += sorted(glob.glob(os.path.join(parent, pattern)))
+    out += sorted(glob.glob(os.path.join(P.ROOT, 'engine_decomp', '*', 'dependencies')))
+    here = os.path.realpath(deps_dir())
+    seen, result = set(), []
+    for c in out:
+        r = os.path.realpath(c)
+        if os.path.isdir(r) and r != here and r not in seen:
+            seen.add(r)
+            result.append(r)
+    return result
+
+
+def link_dir(link, target):
+    """A folder link (junction on Windows: no administrator rights, no copy), else a copy."""
+    os.makedirs(os.path.dirname(link), exist_ok=True)
+    if os.path.lexists(link):
+        return False
+    if os.name == 'nt':
+        r = subprocess.run(['cmd', '/c', 'mklink', '/J', link, target], capture_output=True, text=True)
+        if r.returncode == 0:
+            return True
+    else:
+        try:
+            os.symlink(target, link)
+            return True
+        except OSError:
+            pass
+    shutil.copytree(target, link)
+    return True
+
+
+def fetch_ffmpeg():
+    """FFmpeg 7.1.x LGPL shared build for Windows x64 (BtbN/FFmpeg-Builds: include, lib\\*.lib import libraries, bin\\*.dll) into dependencies/ffmpeg/x64. The asset is looked up
+    in the release list at run time (its file name changes with every build). Returns True on success."""
+    dst = os.path.join(deps_dir(), 'ffmpeg', 'x64')
+    print('looking for an FFmpeg 7.1 LGPL shared build (BtbN/FFmpeg-Builds) ...')
+    try:
+        req = urllib.request.Request('https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=8', headers={'User-Agent': 'faf-studio', 'Accept': 'application/vnd.github+json'})
+        releases = json.load(urllib.request.urlopen(req, timeout=60))
+        asset = None
+        for rel in releases:
+            for a in rel.get('assets', []):
+                name = a['name']
+                if name.endswith('.zip') and 'win64-lgpl-shared-7.1' in name and 'n7.1' in name:
+                    asset = a
+                    break
+            if asset:
+                break
+        if not asset:
+            print('no ffmpeg-n7.1...-win64-lgpl-shared-7.1.zip asset in the latest releases of BtbN/FFmpeg-Builds')
+            return False
+        zpath = os.path.join(P.ENGINE_DIR, asset['name'])
+        os.makedirs(P.ENGINE_DIR, exist_ok=True)
+        print('downloading %s (%.0f MB)' % (asset['name'], asset['size'] / 1e6))
+        urllib.request.urlretrieve(asset['browser_download_url'], zpath)
+    except Exception as e:
+        print('download failed: %s' % e)
+        return False
+    tmp = os.path.join(P.ENGINE_DIR, '_ffmpeg_unpack')
+    shutil.rmtree(tmp, ignore_errors=True)
+    with zipfile.ZipFile(zpath) as z:
+        z.extractall(tmp)
+    top = [d for d in os.listdir(tmp) if os.path.isdir(os.path.join(tmp, d))]
+    src = os.path.join(tmp, top[0]) if top else tmp
+    if not os.path.isfile(os.path.join(src, 'include', 'libavcodec', 'avcodec.h')) or not glob.glob(os.path.join(src, 'lib', 'avcodec*.lib')):
+        print('the archive has no include/libavcodec and lib/avcodec*.lib: not a development package')
+        return False
+    shutil.rmtree(dst, ignore_errors=True)
+    os.makedirs(dst)
+    for sub in ('include', 'lib', 'bin'):
+        if os.path.isdir(os.path.join(src, sub)):
+            shutil.copytree(os.path.join(src, sub), os.path.join(dst, sub))
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.remove(zpath)
+    print('FFmpeg is in', dst, '(LGPL shared build: its license texts and source offer have to travel with a distributed package)')
+    return True
+
+
+def cmd_deps(a=None):
+    """Makes every third-party library of the engine available in engine/faf-re/dependencies; returns 0 when nothing is missing afterwards."""
+    if not os.path.isdir(P.ENGINE_SRC):
+        raise SystemExit('no engine checkout at %s: python scripts/studio.py engine setup' % P.ENGINE_SRC)
+    missing = deps_missing()
+    if not missing:
+        print('engine dependencies: all %d present in %s' % (len(DEPENDENCIES), deps_dir()))
+        return 0
+    print('engine dependencies missing: ' + ', '.join(missing))
+    candidates = deps_candidates()
+    for name in list(missing):
+        proof = dict(DEPENDENCIES)[name]
+        for c in candidates:
+            if os.path.exists(os.path.join(c, name, proof)):
+                if link_dir(os.path.join(deps_dir(), name), os.path.join(c, name)):
+                    print('  linked %-18s -> %s' % (name, os.path.join(c, name)))
+                    break
+    missing = deps_missing()
+    if 'ffmpeg/x64' in missing:
+        fetch_ffmpeg()
+        missing = deps_missing()
+    if not missing:
+        print('engine dependencies: complete')
+        return 0
+    print()
+    print('STILL MISSING in %s: %s' % (deps_dir(), ', '.join(missing)))
+    print('These libraries are not in git (upstream keeps them as private archives). If you built the engine before, they are in the old engine checkout of that workspace')
+    print('(for example ...\\SupCom_Dev_Workspace\\engine_decomp\\faf-re-upstream\\dependencies): point FAF_STUDIO_DEPS at that `dependencies` folder and run this again, e.g.')
+    print('    set FAF_STUDIO_DEPS=C:\\Users\\<you>\\Documents\\SupCom_Dev_Workspace\\engine_decomp\\faf-re-upstream\\dependencies')
+    print('    python scripts/studio.py deps')
+    print('What each one is and how it is patched: engine/faf-re/dependencies/patches/*.md; FFmpeg: engine/faf-re/docs/FAF_SFD_COMPATIBILITY.md.')
+    return 1
 
 
 def patch_subject(path):
@@ -208,6 +359,9 @@ def engine_build(a):
         raise SystemExit('the June 2010 DirectX SDK not found (set FAF_STUDIO_DXSDK, e.g. C:\\Program Files (x86)\\Microsoft DirectX SDK (June 2010))')
     P.need(os.path.join(P.SDK, 'main_ed.vcxproj'), 'engine sources', 'python scripts/studio.py engine setup')
     engine_sync(a)
+    if cmd_deps(a) != 0:
+        print('\nThe engine cannot be built until the libraries above are in place; nothing was compiled.')
+        return 1
     log = os.path.join(P.ENGINE_DIR, 'build.log')
     os.makedirs(P.ENGINE_DIR, exist_ok=True)
     bat = os.path.join(P.ENGINE_DIR, '_build.bat')
@@ -358,6 +512,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='c', required=True)
     sub.add_parser('doctor').set_defaults(f=cmd_doctor)
+    sub.add_parser('deps').set_defaults(f=cmd_deps)
     sub.add_parser('build').set_defaults(f=engine_build)
     p = sub.add_parser('engine')
     p.add_argument('what', choices=['setup', 'sync', 'build', 'stage', 'export'])

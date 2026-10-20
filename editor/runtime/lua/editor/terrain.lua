@@ -32,6 +32,34 @@ Brush = {
     level = nil,       -- flatten target (world units); nil = height under the first dab of the stroke
 }
 
+--- A box blur of the w x h grid `src` (1-based, row after row), half width `kr` samples, the edge samples repeated; running sums, so the cost does not grow with kr.
+local function BoxBlur(src, w, h, kr)
+    local n = 2 * kr + 1
+    local tmp, out = {}, {}
+    for z = 0, h - 1 do
+        local row = z * w
+        local sum = 0
+        for k = -kr, kr do
+            sum = sum + src[row + math.min(math.max(k, 0), w - 1) + 1]
+        end
+        for x = 0, w - 1 do
+            tmp[row + x + 1] = sum / n
+            sum = sum + src[row + math.min(x + kr + 1, w - 1) + 1] - src[row + math.max(x - kr, 0) + 1]
+        end
+    end
+    for x = 0, w - 1 do
+        local sum = 0
+        for k = -kr, kr do
+            sum = sum + tmp[math.min(math.max(k, 0), h - 1) * w + x + 1]
+        end
+        for z = 0, h - 1 do
+            out[z * w + x + 1] = sum / n
+            sum = sum + tmp[math.min(z + kr + 1, h - 1) * w + x + 1] - tmp[math.max(z - kr, 0) * w + x + 1]
+        end
+    end
+    return out
+end
+
 local strokeId = 0
 local strokeLevel = nil
 local strokeOpen = false
@@ -211,6 +239,13 @@ function DabOne(cx, cz, slot, image)
     end
 
     local changed = 0
+    -- smooth: the ground under the brush goes toward a blurred copy of itself. The blur widens with the strength (3 x 3 at low strength, up to a quarter of the radius at most 6 samples at the
+    -- highest), two passes, so one dab at full strength really flattens the bumps (the old single 3 x 3 average barely moved them); the blur is made once per dab, not once per sample.
+    local blurred
+    if mode == 'smooth' then
+        local kr = 1 + math.floor(math.min(1, math.abs(strength) / 10) * math.max(0, math.min(r * 0.25, 6) - 1) + 0.5)
+        blurred = BoxBlur(BoxBlur(before, w, h, kr), w, h, kr)
+    end
     if mode == 'erode' then
         -- thermal erosion: ground steeper than the talus slope between a sample and its lowest neighbour slides down; a few passes per dab,
         -- weighted by the brush and scaled by the strength
@@ -271,21 +306,9 @@ function DabOne(cx, cz, slot, image)
                     local k = math.min(1, strength * 0.2 * weight) * dir
                     value = value + (strokeLevel * WORD - value) * k
                 elseif mode == 'smooth' then
-                    local sum = 0
-                    local count = 0
-                    for oz = -1, 1 do
-                        for ox = -1, 1 do
-                            local nx = x + ox
-                            local nz = z + oz
-                            if nx >= x0 and nx <= x1 and nz >= z0 and nz <= z1 then
-                                sum = sum + before[(nz - z0) * w + (nx - x0) + 1]
-                                count = count + 1
-                            end
-                        end
-                    end
-                    -- inverted: sharpen (away from the mean)
+                    -- inverted: sharpen (away from the blurred ground)
                     local k = math.min(1, strength * 0.2 * weight) * dir
-                    value = value + (sum / count - value) * k
+                    value = value + (blurred[i] - value) * k
                 elseif mode == 'noise' then
                     value = value + dir * Noise(x, z, strokeId) * strength * weight * WORD
                 end

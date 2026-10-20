@@ -61,7 +61,7 @@ end, 5)
 -- 'Open recent' is added by feature_release.lua (order 6)
 Menu.Extend('menubar.File', function()
     return {
-        { command = 'file.recover', enabled = function() return import('/lua/editor/maps.lua').AutosavePath() ~= false end, why = 'no autosave yet' },
+        { command = 'file.recover', enabled = function() return import('/lua/editor/maps.lua').AutosavePath() ~= false end, why = 'there is no autosaved map yet' },
     }
 end, 7)
 Menu.Extend('menubar.File', function()
@@ -454,7 +454,7 @@ Menu.Extend('context.world', function(ctx)
         local Paths = import('/lua/editor/paths.lua')
         local cur = Paths.CurrentPath()
         if cur and table.getn(cur.points) > 0 then
-            table.insert(items, { title = 'Focus camera on the current path', run = function()
+            table.insert(items, { title = 'Focus camera on current path', run = function()
                 local x, z = Paths.SelectionCenter()
                 if x then Camera.FocusOn(x, z) end
             end })

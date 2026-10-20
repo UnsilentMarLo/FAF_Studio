@@ -42,7 +42,7 @@ function CopyDiagnostics()
     d:Label(clip and 'The diagnostics are on the clipboard and in this file:' or 'The diagnostics are in this file; attach it to your bug report:', 14, 40, { color = c.text })
     local label = d:Label(file, 14, 64, { color = c.textDim, size = 'small' })
     W.Fit(label, file, d.width - Skin.S(28))
-    d:Label('Version, settings, the open map, monitors, the log tail and the newest crash report.', 14, 90, { color = c.textDim, size = 'small' })
+    d:Label('Version, settings, open map, monitors, the end of the log and the newest crash report.', 14, 90, { color = c.textDim, size = 'small' })
     d:Button('OK', 14, 124, 100, 28, function() Dialog.Close() end)
 end
 
@@ -59,8 +59,8 @@ local function AutosaveOffer(done)
     local c = Skin.color
     local d = Dialog.Open('Unsaved work from the last session', 520, 170, function() if done then done() end end)
     local name = (pending.map and pending.map ~= '') and ("'" .. pending.map .. "'") or 'a map'
-    d:Label('The editor was closed (or stopped) with unsaved changes. The autosave of ' .. name, 14, 40, { color = c.text })
-    d:Label('is still here. Restore it now?', 14, 60, { color = c.text })
+    d:Label('The editor was closed (or stopped) with unsaved changes. An autosave of ' .. name, 14, 40, { color = c.text })
+    d:Label('is available. Restore it now?', 14, 60, { color = c.text })
     d:Button('Restore it', 14, 120, 120, 28, function()
         d.onClose = nil
         Dialog.Close()
@@ -104,13 +104,13 @@ end
 
 -- ---- commands and menu ---------------------------------------------------------------------------------------------------------------------
 
-Commands.Register{ id = 'help.diagnostics', title = 'Help: save diagnostics for a bug report', run = function() CopyDiagnostics() end }
+Commands.Register{ id = 'help.diagnostics', title = 'Help: save diagnostics for bug report', run = function() CopyDiagnostics() end }
 
 local function ResetSettings()
     local d = Dialog.Open('Reset user settings', 520, 190)
     local c = Skin.color
-    d:Label('This forgets your layouts, UI size, hotkeys, recent maps and tool settings.', 14, 40, { color = c.text })
-    d:Label('Your maps, mod projects and backups are not touched.', 14, 60, { color = c.text })
+    d:Label('This clears your layouts, UI size, hotkeys, recent maps and tool settings.', 14, 40, { color = c.text })
+    d:Label('Your maps, mod projects and backups are not affected.', 14, 60, { color = c.text })
     d:Label('User folder: ' .. UserData.Dir(), 14, 86, { color = c.textDim, size = 'small' })
     d:Button('Reset', 14, 140, 110, 28, function()
         local cleared = UserData.Reset()
@@ -121,7 +121,7 @@ local function ResetSettings()
 end
 
 Commands.Register{ id = 'help.reset_settings', title = 'Help: reset user settings...', run = function() ResetSettings() end }
-Commands.Register{ id = 'help.userfolder', title = 'Help: where are my settings?', run = function()
+Commands.Register{ id = 'help.userfolder', title = 'Help: open settings folder', run = function()
     Say('user folder: ' .. UserData.Dir() .. '   installation: ' .. tostring(Crash.Root()))
 end }
 

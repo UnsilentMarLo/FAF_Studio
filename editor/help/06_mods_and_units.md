@@ -7,7 +7,7 @@ The Mod workspace changes units without copying them: your changes are written a
 ## First steps
 
 1. Mod workspace. In the Units panel pick a unit (filter by name or id).
-2. Unit lab panel: New project (a name of letters, digits, space, - and _) or Open an existing project. Projects live in the modproj folder of the editor.
+2. Unit lab panel: New project (letters, digits, space, - and _ only) or Open an existing project. Projects live in the modproj folder of the editor.
 3. Edit unit: the list shows the unit's fields; pick one and change it with the slider (or type the value). The game's own value stays visible beside it.
 4. Write generates the project's merge blueprints. Test writes them, enables the project for this map and reloads the session so the changes are live in the Viewport.
 
@@ -24,4 +24,4 @@ Derive unit... in the Unit lab makes a new unit from an existing one: give it an
 ## Good to know
 
 - Mods are applied when a session starts: "Apply & reload" in the Mods panel (and Test) autosaves the map and reopens it.
-- The Mods panel also lists the game mods you want loaded for this map.
+- The Mods panel also lists the game mods you want to load for this map.

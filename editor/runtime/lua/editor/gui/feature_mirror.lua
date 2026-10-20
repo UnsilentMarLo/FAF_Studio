@@ -7,7 +7,7 @@ local Commands = import('/lua/editor/gui/commands.lua')
 local Menu = import('/lua/editor/gui/menu.lua')
 local Tools = import('/lua/editor/tools.lua')
 
-Commands.Register{ id = 'edit.mirror.half', title = 'Edit: mirror the whole half...', run = function()
+Commands.Register{ id = 'edit.mirror.half', title = 'Edit: mirror one half onto the other...', run = function()
     import('/lua/editor/gui/dialogs_mirror.lua').Open()
 end }
 

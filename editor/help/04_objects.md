@@ -6,14 +6,14 @@ The Objects workspace has the tools for everything that stands on the map.
 
 ## Tools
 
-- Select: click a marker or an area to select it; drag on empty ground to draw a selection box; Shift adds or removes. A press on a selected object drags the whole selection.
+- Select: click a marker or an area to select it; drag on empty ground to draw a selection box; Shift adds or removes. Dragging a selected object moves the whole selection.
 - Marker: pick a type in the Markers panel (mass, hydrocarbon, expansion, rally points and more), click to place. Resource markers snap to the build grid.
 - Start position: places the next army (ARMY_1, ARMY_2, ...).
 - Area: drag a rectangle; areas are used by missions and scripts.
-- Unit tool and Select units: pick a unit in the Units panel; the army button chooses whose it is. Select units works like Select: click, Shift, drag a box.
+- Unit tool and Select units: pick a unit in the Units panel; the army button chooses which army owns it. Select units works like Select: click, Shift, drag a box.
 - Prop brush, Erase props, Select props: the Props panel lists the prop blueprints; the Properties panel has radius, density, spacing and scale range of the brush. Select props picks single props or a box of them.
 - Decal brush, Erase decals, Select decals: the same for decals.
-- Ruler measures distances.
+- Ruler: measures distances.
 
 ## Editing
 

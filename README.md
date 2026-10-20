@@ -25,6 +25,10 @@ python scripts/editor_inst.py new dev          # a test instance
 python scripts/editor_inst.py start dev        # starts the editor (window 1280x720; --size 1920x1080)
 ```
 
+The engine's third-party libraries (boost 1.34.1, wxWindows 2.4.2, LuaPlus 1081, zlib 1.2.3, WildMagic 3.8, FFmpeg 7.1) are **not in git**: `studio.py build` first runs `studio.py deps`, which links them
+into `engine/faf-re/dependencies` from an earlier engine checkout of yours (`FAF_STUDIO_DEPS` = that `dependencies` folder; the old `SupCom_Dev_Workspace\engine_decomp\faf-re-upstream\dependencies` is
+found by itself when it lies next to this checkout) and downloads FFmpeg if that is all that is missing. `studio.py doctor` lists what is missing.
+
 `git pull` adds patch files to `engine/patches` but never touches your `engine/faf-re` checkout: only `studio.py build` (or `engine sync`) applies them. A build that skips that step
 compiles the old engine and the exe does not change. The exe is updated when `studio.py build` ends with the list of staged files and no "NOT UPDATED" line (a running FAF Studio or
 main_x64_la process locks the exe: close it first).

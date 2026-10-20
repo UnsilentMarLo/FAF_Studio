@@ -121,7 +121,7 @@ function PickGroup(army, done)
     PickName('Unit group of ' .. tostring(army), names, Units.Group, function(name)
         if name == '(new group...)' then
             NameDialog('New unit group', 'Name (letters, digits, _), e.g. WAVE1', function(n)
-                if string.find(n, '[^%w_]') then Say('group names take letters, digits and _ only') return end
+                if string.find(n, '[^%w_]') then Say('group names can only contain letters, digits and _') return end
                 done(n)
             end)
         else
@@ -553,7 +553,7 @@ local LINE_PARAMS = {
     { key = 'seconds', label = 'Shown for (seconds)', kind = 'number', default = 5, min = 1, max = 60 },
     { key = 'bank', label = 'Voice-over sound bank (optional, e.g. XGG)', kind = 'text' },
     { key = 'cue', label = 'Voice-over cue (optional)', kind = 'text' },
-    { key = 'vid', label = 'Video of /movies (optional, e.g. UEF_Commander.sfd)', kind = 'text' },
+    { key = 'vid', label = 'Video from /movies (optional, e.g. UEF_Commander.sfd)', kind = 'text' },
     { key = 'faction', label = 'Portrait faction (optional: UEF, Aeon, Cybran, Seraphim)', kind = 'text' },
 }
 

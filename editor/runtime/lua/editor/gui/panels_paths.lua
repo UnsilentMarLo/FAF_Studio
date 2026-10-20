@@ -13,7 +13,7 @@ local CurveWidget = import('/lua/editor/gui/curvewidget.lua')
 
 live = {}
 
-state = { live = false, lastPreview = -1, lastTime = 0, text = '', pathable = false, listIndex = 0, snapIndex = 1 }
+state = { live = false, all = false, lastKey = '', lastPreview = -1, lastTime = 0, text = '', pathable = false, listIndex = 0, snapIndex = 1 }
 
 local SNAPS = { 0, 1, 2, 4, 8 }
 local SIDES = { 'both', 'left', 'right', 'center' }
@@ -26,6 +26,23 @@ end
 
 local function Tick()
     return GetSystemTimeSeconds()
+end
+
+--- The paths a preview shows: every path (All paths switched on) or the selected one; nil when there is none.
+function PreviewIds()
+    if state.all then
+        local ids = {}
+        for _, p in Paths.List do table.insert(ids, p.id) end
+        if table.getn(ids) > 0 then return ids end
+        return nil
+    end
+    return Paths.Current and Paths.Current or nil
+end
+
+--- What the live preview depends on besides the model: which path is selected (unless every path is shown).
+function PreviewKey()
+    if state.all then return 'all' end
+    return 'one:' .. tostring(Paths.Current)
 end
 
 local function PointValue(key, default)
@@ -162,6 +179,8 @@ Panels.Register{
             get = function() return PathValue('strength', 1) end, set = function(v) Paths.SetField('strength', v) end })
         Pn.sErosion = W.Slider(group, { label = 'Bank erosion (thermal passes, 0 = off)', compact = true, min = 0, max = 80, step = 1, fmt = '%d',
             get = function() return PathValue('erosion', 0) end, set = function(v) Paths.SetField('erosion', v) end })
+        Pn.sBlend = W.Slider(group, { label = 'Blend into ground (units, 0 = off)', compact = true, min = 0, max = 60, step = 0.5, fmt = '%.1f',
+            get = function() return PathValue('blend', 0) end, set = function(v) Paths.SetField('blend', v) end })
         Pn.sTension = W.Slider(group, { label = 'Curve tension', compact = true, min = 0.2, max = 2, step = 0.05, fmt = '%.2f',
             get = function() return PathValue('tension', 1) end, set = function(v) Paths.SetField('tension', v) end })
 
@@ -176,7 +195,7 @@ Panels.Register{
         Pn.sBank = W.Slider(group, { label = 'Bank angle (deg)', compact = true, min = -45, max = 45, step = 0.5, fmt = '%.1f',
             get = function() return PointValue('bank', 0) end, set = function(v) Paths.SetPoint('bank', v) end })
         Pn.bAbs = Btn('Absolute height', 100, function(self) Paths.SetAbsolute(self.on) Sync() end, { toggle = true })
-        Pn.bAll = Btn('Select all points', 100, function()
+        Pn.bSelAll = Btn('Select all points', 100, function()
             local p = Paths.CurrentPath()
             if p then
                 Paths.Sel = {}
@@ -276,6 +295,13 @@ Panels.Register{
             get = function() return SubValue('decals', 'size', 6) end, set = function(v) Paths.SetScatter('decals', 'size', v) end })
 
         -- ---- the result
+        Pn.bAll = Btn('All paths', 70, function(self)
+            state.all = self.on
+            if Paths.HasPreview() then Paths.RevertPreview() end
+            state.lastPreview = -1
+            Say(self.on and 'previews show every path together' or 'previews show the selected path only')
+            Sync()
+        end, { toggle = true })
         Pn.bLive = Btn('Live preview', 84, function(self)
             state.live = self.on
             if not self.on then Paths.RevertPreview() end
@@ -283,14 +309,16 @@ Panels.Register{
             Sync()
         end, { toggle = true })
         Pn.bPreview = Btn('Preview', 56, function()
-            if Paths.Current then
-                local ok, err = Paths.Preview(Paths.Current)
-                Say(ok and 'preview on the terrain; Apply keeps it, Revert takes it away' or ('preview failed: ' .. tostring(err)))
+            local ids = PreviewIds()
+            if ids then
+                local ok, err = Paths.Preview(ids)
+                Say(ok and 'preview on the terrain; Apply keeps it, Revert removes it' or ('preview failed: ' .. tostring(err)))
                 state.lastPreview = Paths.DataRevision
+                state.lastKey = PreviewKey()
             end
             Sync()
         end)
-        Pn.bRevert = Btn('Revert preview', 90, function() Paths.RevertPreview() Say('preview taken off') Sync() end)
+        Pn.bRevert = Btn('Revert preview', 90, function() Paths.RevertPreview() Say('preview removed') Sync() end)
         Pn.bApply = Btn('Apply', 52, function()
             if Paths.Current then
                 local n, err = Paths.Apply(Paths.Current)
@@ -355,7 +383,7 @@ Panels.Register{
                 W.Fit(Pn.propName, 'prop: ' .. (SubValue('scatter', 'bp', '') ~= '' and SubValue('scatter', 'bp', '') or '(pick one with the prop brush first)'), (Pn.w or 300) - Skin.S(16))
                 W.Fit(Pn.decalName, 'decal: ' .. (SubValue('decals', 'tex', '') ~= '' and SubValue('decals', 'tex', '') or '(pick one with the decal brush first)'), (Pn.w or 300) - Skin.S(16))
             end
-            for _, s in { Pn.sStrength, Pn.sErosion, Pn.sTension, Pn.sW, Pn.sF, Pn.sH, Pn.sBank, Pn.sGrade, Pn.sLayer1, Pn.sLayer2, Pn.sLayerStrength,
+            for _, s in { Pn.sStrength, Pn.sErosion, Pn.sBlend, Pn.sTension, Pn.sW, Pn.sF, Pn.sH, Pn.sBank, Pn.sGrade, Pn.sLayer1, Pn.sLayer2, Pn.sLayerStrength,
                           Pn.sPropSpacing, Pn.sPropOff, Pn.sDecalSpacing, Pn.sDecalSize } do
                 s:Refresh()
             end
@@ -406,13 +434,14 @@ Panels.Register{
             Flow({ self.bMode, self.bKind, self.bClosed, self.bSym, self.bInterp })
             Slider(self.sStrength)
             Slider(self.sErosion)
+            Slider(self.sBlend)
             Slider(self.sTension)
             Line(self.pointTitle)
             Slider(self.sW)
             Slider(self.sF)
             Slider(self.sH)
             Slider(self.sBank)
-            Flow({ self.bAbs, self.bAll })
+            Flow({ self.bAbs, self.bSelAll })
             Flow({ self.bLimit, self.bPathable })
             Slider(self.sGrade)
             Line(self.gradeText, Skin.S(22))
@@ -435,7 +464,7 @@ Panels.Register{
             Line(self.decalName)
             Slider(self.sDecalSpacing)
             Slider(self.sDecalSize)
-            Flow({ self.bLive, self.bPreview, self.bRevert, self.bApply, self.bBake, self.bUnapply })
+            Flow({ self.bAll, self.bLive, self.bPreview, self.bRevert, self.bApply, self.bBake, self.bUnapply })
             Line(self.status)
             Line(self.status3)
             Line(self.status2)
@@ -450,10 +479,17 @@ Panels.Register{
 function Refresh()
     local pn = live.paths
     if pn and pn.Refresh then pcall(function() pn:Refresh() end) end
-    if state.live and Paths.Current and Paths.DataRevision ~= state.lastPreview and Tick() - state.lastTime > 0.3 then
+    -- the preview follows the model and the selection: another path selected shows that path at once (no off and on again)
+    if state.live and (Paths.DataRevision ~= state.lastPreview or PreviewKey() ~= state.lastKey) and Tick() - state.lastTime > 0.3 then
         state.lastTime = Tick()
-        local ok, err = Paths.Preview(Paths.Current)
+        local ids = PreviewIds()
+        if ids then
+            local ok, err = Paths.Preview(ids)
+            if not ok then state.text = 'preview: ' .. tostring(err) end
+        else
+            Paths.RevertPreview()
+        end
         state.lastPreview = Paths.DataRevision
-        if not ok then state.text = 'preview: ' .. tostring(err) end
+        state.lastKey = PreviewKey()
     end
 end

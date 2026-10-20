@@ -277,7 +277,7 @@ Catalogue = {
     { id = 'dialogue_table', family = 'action', title = 'Play a dialogue (from the Strings panel)',
       params = { { key = 'name', label = 'Dialogue', kind = 'dialogue' } },
       emit = function(n) return { 'ScenarioFramework.Dialogue(Strings[' .. Q(n.name) .. '], nil, true)' } end },
-    { id = 'coop_commanders', family = 'coop', title = 'Coop: spawn the player commanders',
+    { id = 'coop_commanders', family = 'coop', title = 'Coop: spawn player commanders',
       params = { { key = 'unit', label = 'Unit name in the army (Commander)', kind = 'text', default = 'Commander' },
                  { key = 'byFaction', label = 'Use UEFPlayer / AeonPlayer / CybranPlayer by faction', kind = 'bool', default = true },
                  { key = 'effect', label = 'Arrival effect', kind = 'choice', choices = { 'Warp', 'Gate', 'none' }, default = 'Warp' },
@@ -345,7 +345,7 @@ Catalogue = {
           if n.result == 'lose' then return { 'ScenarioFramework.EndOperation(false, false, false)' } end
           return { 'ScenarioFramework.EndOperation(true, true, true)' }
       end },
-    { id = 'next_stage', family = 'flow', title = 'Start the next stage',
+    { id = 'next_stage', family = 'flow', title = 'Start next stage',
       params = {},
       emit = function(n, C) return { C.nextCall or '-- (no next stage)' } end },
 
@@ -432,7 +432,7 @@ Catalogue = {
     { id = 'cam_marker', family = 'action', title = 'Cutscene camera: move to a camera marker',
       params = { { key = 'marker', label = 'Camera Info marker', kind = 'marker', mtype = 'Camera Info' }, { key = 'seconds', label = 'Seconds', kind = 'number', default = 4, min = 0, max = 120 } },
       emit = function(n) return { 'Cinematics.CameraMoveToMarker(ScenarioUtils.GetMarker(' .. Q(n.marker) .. '), ' .. N(n.seconds, 4) .. ')' } end },
-    { id = 'cam_reset', family = 'action', title = 'Cutscene camera: back to the player',
+    { id = 'cam_reset', family = 'action', title = 'Cutscene camera: return to player',
       params = {},
       emit = function() return { 'Cinematics.CameraReset()' } end },
 

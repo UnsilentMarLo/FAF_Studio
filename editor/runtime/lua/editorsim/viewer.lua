@@ -48,6 +48,16 @@ function Register(Callbacks)
         } do
             pcall(call)
         end
+        -- belt and braces for a unit that is somewhere it does not belong (a ship on land, a submarine in shallow water): whatever the engine or the unit's scripts do to its health, it is put back
+        unit:ForkThread(function(self)
+            while not self.Dead do
+                pcall(function()
+                    local max = self:GetMaxHealth()
+                    if self:GetHealth() < max then self:SetHealth(self, max) end
+                end)
+                WaitTicks(5)
+            end
+        end)
         WriteInfo(unit, data.path)
     end
 

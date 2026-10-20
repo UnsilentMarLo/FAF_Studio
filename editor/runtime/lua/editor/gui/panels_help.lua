@@ -25,7 +25,7 @@ Panels.Register{
 
         P.back = W.Button(group, 'Back', 0, 0, Skin.S(60), Skin.S(22), function() P:Home() end)
         P.field = W.TextField(group, 0, 0, 100, Skin.S(22), { onChange = function(text) P.query = text P:Search() end })
-        P.hint = W.Label(group, 'Search the help', 0, 0, { color = c.textDim, size = 'small' })
+        P.hint = W.Label(group, 'Search help', 0, 0, { color = c.textDim, size = 'small' })
         P.list = W.VirtualList(group, {
             rowH = 40,
             extra = true,
@@ -56,7 +56,7 @@ Panels.Register{
 
         function P:Search()
             self.results = Help.Search(self.query)
-            self.hint:SetText(self.query == '' and 'Search the help' or (table.getn(self.results) .. ' topics'))
+            self.hint:SetText(self.query == '' and 'Search help' or (table.getn(self.results) .. ' topics'))
             if self.view == 'topic' then self.view = 'home' end
             self:Layout()
         end

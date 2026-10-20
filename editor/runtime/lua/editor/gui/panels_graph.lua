@@ -261,7 +261,7 @@ Panels.Register{
                 if event.Type == 'ButtonPress' then
                     local mods = event.Modifiers or {}
                     if mods.Middle or mods.Right then
-                        Pn.StartPan(event)
+                        Pn.StartPan(event, mods.Right and function(x, y) Pn.ContextMenu('node', nodeId, x, y) end or nil)
                     else
                         Pn.StartNodeDrag(event, nodeId)
                     end
@@ -283,7 +283,11 @@ Panels.Register{
                     Watch(self, event)
                     if event.Type == 'ButtonPress' then
                         local mods = event.Modifiers or {}
-                        if mods.Middle or mods.Right then Pn.StartPan(event) else Pn.StartWire(event, nodeId, side, p.name) end
+                        if mods.Middle or mods.Right then
+                            Pn.StartPan(event, mods.Right and function(x, y) Pn.ContextMenu('port', nodeId, x, y, { side = side, name = p.name }) end or nil)
+                        else
+                            Pn.StartWire(event, nodeId, side, p.name)
+                        end
                         return true
                     end
                     return false
@@ -310,11 +314,14 @@ Panels.Register{
         --- Places the children of a node at the zoom (relative to the frame).
         local function Geometry(v, node, z)
             local def = Nodes.Defs[node.type]
+            v.geo = {}                 -- every part's offset and size inside the node: a node cut by the canvas edge places them itself (ShowCut)
+            v.isLabel = {}
             local function In(ctl, dx, dy, w, h)
                 ctl.Left:Set(function() return v.frame.Left() + dx end)
                 ctl.Top:Set(function() return v.frame.Top() + dy end)
                 if w then ctl.Width:Set(w) end
                 if h then ctl.Height:Set(h) end
+                v.geo[ctl] = { dx, dy, w, h }
             end
             local nw = math.floor(NW * z)
             In(v.header, 0, 0, nw, math.floor(HEAD * z))
@@ -345,11 +352,13 @@ Panels.Register{
                 local cy = math.floor((HEAD + PAD + (i - 1) * ROW + ROW / 2) * z)
                 In(port.dot, -half, cy - half, ps, ps)
                 In(port.label, ps, cy - math.floor(port.label.Height() / 2))
+                v.isLabel[port.label] = true
             end
             for i, port in v.outs do
                 local cy = math.floor((HEAD + PAD + (i - 1) * ROW + ROW / 2) * z)
                 In(port.dot, nw - half - 1, cy - half, ps, ps)
                 In(port.label, nw - ps - port.label.Width() - 2, cy - math.floor(port.label.Height() / 2))
+                v.isLabel[port.label] = true
             end
             v.zoomDone = z
             v.rows = Rows(node)
@@ -446,12 +455,48 @@ Panels.Register{
             end
         end
 
+        --- A node the canvas edge cuts: its parts that fit are shown where they belong, the solid ones (header, picture background) cut to the canvas, the picture cropped with its texture
+        --- coordinates; text and port dots that would cross the edge are hidden (Maui does not clip, so they would be drawn over the toolbar).
+        function Pn:ShowCut(v, sx, sy, lod)
+            local cw, ch = self.cw, self.ch
+            for ctl, gm in v.geo do
+                local w, h = gm[3] or ctl.Width(), gm[4] or ctl.Height()
+                local ax, ay = sx + gm[1], sy + gm[2]
+                local inside = ax >= 0 and ay >= 0 and ax + w <= cw and ay + h <= ch
+                if not lod and (ctl == v.status or v.isLabel[ctl]) then
+                    ctl:Hide()
+                elseif ctl == v.header or ctl == v.thumbBg or ctl == v.thumb then
+                    local x0, y0, x1, y1 = math.max(0, ax), math.max(0, ay), math.min(cw, ax + w), math.min(ch, ay + h)
+                    if x1 <= x0 or y1 <= y0 or (ctl == v.thumb and not inside and v.noUV) then
+                        ctl:Hide()
+                    else
+                        Put(ctl, x0, y0, x1 - x0, y1 - y0)
+                        if ctl == v.thumb then
+                            local ok = not v.noUV and pcall(function() ctl:SetUV((x0 - ax) / w, (y0 - ay) / h, (x1 - ax) / w, (y1 - ay) / h) end)
+                            if ok then v.uvSet = true elseif not inside then v.noUV = true ctl:Hide() return end
+                        end
+                        ctl:Show()
+                    end
+                elseif inside then
+                    Put(ctl, ax, ay)
+                    ctl:Show()
+                else
+                    ctl:Hide()
+                end
+            end
+        end
+
+        --- Puts the picture back to its whole texture and the parts to their places inside the frame (after a cut).
+        function Pn:EndCut(v)
+            if v.uvSet then
+                pcall(function() v.thumb:SetUV(0, 0, 1, 1) end)
+                v.uvSet = false
+            end
+            v.zoomDone = -1
+        end
+
         function Pn:LayoutNode(v, n, sx, sy, sw, sh, z, lod)
             do
-                if v.zoomDone ~= z or v.rows ~= Rows(n) or (v.lastLabel or '') ~= (n.label or '') then
-                    Geometry(v, n, z)
-                    v.lastLabel = n.label or ''
-                end
                 local state
                 if sx + sw < 0 or sy + sh < 0 or sx > self.cw or sy > self.ch then
                     state = 'off'
@@ -459,6 +504,11 @@ Panels.Register{
                     state = lod and 'full' or 'low'
                 else
                     state = 'cut'
+                end
+                if v.state == 'cut' and state ~= 'cut' then self:EndCut(v) end
+                if v.zoomDone ~= z or v.rows ~= Rows(n) or (v.lastLabel or '') ~= (n.label or '') then
+                    Geometry(v, n, z)
+                    v.lastLabel = n.label or ''
                 end
                 if state == 'off' then
                     Gone(v.frame)
@@ -476,16 +526,13 @@ Panels.Register{
                         Gone(v.sel)
                     end
                 end
-                if state ~= v.state then
-                    if state == 'full' then
-                        ShowParts(v, true)
-                    elseif state == 'low' then
-                        ShowParts(v, true)
-                    else
-                        ShowParts(v, false)
-                    end
-                    v.state = state
+                if state == 'cut' then
+                    self:ShowCut(v, sx, sy, lod)
+                    v.title:SetColor(c.text)
+                elseif state ~= v.state then
+                    ShowParts(v, state ~= 'off')
                 end
+                v.state = state
                 if state == 'full' or state == 'low' then
                     v.title:SetColor(c.text)
                     if state == 'low' then
@@ -610,10 +657,17 @@ Panels.Register{
             PostDragger(GetFrame(0), event.KeyCode, d)
         end
 
-        function Pn.StartPan(event)
+        --- Pan with the middle or right button. `onClick(x, y)` is called when the button is released without the pointer having moved (a right click: the context menu).
+        function Pn.StartPan(event, onClick)
             local view = View()
+            local startX, startY, moved = event.MouseX, event.MouseY, false
             Pn.DragPanBegin(event.MouseX, event.MouseY)
-            Begin(event, function(x, y) Pn.DragPan(x, y) end, function(x, y) end)
+            Begin(event, function(x, y)
+                if math.abs(x - startX) + math.abs(y - startY) > 3 then moved = true end
+                Pn.DragPan(x, y)
+            end, function(x, y)
+                if x and not moved and onClick then onClick(x, y) end
+            end)
         end
         function Pn.DragPanBegin(x, y)
             local view = View()
@@ -623,6 +677,88 @@ Panels.Register{
             local p = Pn.pan
             if not p then return end
             Pn:SetView(p.vx + (x - p.x), p.vy + (y - p.y))
+        end
+
+        -- ---- context menus (right click without a drag) ------------------------------------------------------------------------------------
+        local ContextMenu = import('/lua/editor/gui/menu.lua')
+
+        --- Graph coordinates of a screen position (for "Paste here").
+        local function GraphPoint(mx, my)
+            local v = View()
+            return (mx - bg.Left() - v.x) / v.zoom, (my - bg.Top() - v.y) / v.zoom
+        end
+
+        --- The menu of what was right clicked: kind 'node' (id), 'port' (id, port = { side, name }), 'wire' (index in `id`) or 'canvas'. The clicked node joins the selection first, so
+        --- the commands act on what the user sees highlighted.
+        function Pn.ContextMenu(kind, id, mx, my, port)
+            local items = {}
+            local function Add(title, run, opts)
+                local item = { title = title, run = function() run() Pn:Tick(true) end }
+                if opts then for k, v in opts do item[k] = v end end
+                table.insert(items, item)
+            end
+            local function Sep() table.insert(items, { separator = true }) end
+            if kind == 'node' then
+                if not Graph.Sel[id] then
+                    Graph.SelectOne(id, false)
+                    Pn:Layout()
+                end
+                local ids = Graph.SelectedList()
+                local count = table.getn(ids)
+                local node = Graph.NodeById(id)
+                local many = count > 1
+                Add(many and ('Show node as mask') or 'Show as mask', function()
+                    Graph.SelectOne(id, false)
+                    state.mask = true
+                    if Pn.bMask then Pn.bMask:SetOn(true) end
+                end, { tip = 'Show the result of this node on the terrain as a mask (the Mask view button).', enabled = not IsFrame(node) })
+                Sep()
+                Add(many and ('Duplicate ' .. count .. ' nodes') or 'Duplicate', function() Graph.Duplicate(ids) end, { tip = 'Copies the selected nodes with the wires between them, a little to the side.' })
+                Add('Copy', function() Graph.CopyNodes(ids) end, { tip = 'Puts the selected nodes on the graph clipboard; Paste here (right click on the canvas) places them.' })
+                Add(node.off and (many and 'Enable the nodes' or 'Enable') or (many and 'Bypass the nodes' or 'Bypass'), function()
+                    local off = not node.off
+                    for _, nid in ids do Graph.SetOff(nid, off) end
+                end, { tip = 'A bypassed node passes nothing on and is skipped by the evaluation; enable it again to use it.', enabled = not IsFrame(node), checked = node.off and true or false })
+                Add('Disconnect all wires', function()
+                    local set = {}
+                    for _, nid in ids do set[nid] = true end
+                    Graph.Edit('disconnect nodes', function()
+                        local wires = Graph.Current.wires
+                        for i = table.getn(wires), 1, -1 do
+                            if set[wires[i][1]] or set[wires[i][3]] then table.remove(wires, i) end
+                        end
+                    end)
+                end, { tip = 'Removes every wire into and out of the selected nodes.' })
+                Sep()
+                Add(many and ('Delete ' .. count .. ' nodes') or 'Delete', function() Graph.Remove(ids) end, { tip = 'Deletes the selected nodes and their wires (Undo brings them back).' })
+            elseif kind == 'port' then
+                if port.side == 'in' then
+                    Add('Disconnect this input', function() Graph.Disconnect(id, port.name) end, { enabled = Graph.WireInto(id, port.name) ~= nil, why = 'nothing is wired here' })
+                else
+                    Add('Disconnect this output', function()
+                        Graph.Edit('disconnect output', function()
+                            local wires = Graph.Current.wires
+                            for i = table.getn(wires), 1, -1 do
+                                if wires[i][1] == id and wires[i][2] == port.name then table.remove(wires, i) end
+                            end
+                        end)
+                    end)
+                end
+            elseif kind == 'wire' then
+                Add('Delete wire', function() Graph.RemoveWire(id) end)
+            else
+                local gx, gy = GraphPoint(mx, my)
+                Add('Paste here', function() Graph.Paste(gx, gy) end, { enabled = Graph.Clipboard and true or false, why = 'nothing copied' })
+                Add('Select all', function()
+                    local all = {}
+                    for _, n in Graph.Current.nodes do table.insert(all, n.id) end
+                    Graph.Select(all, false)
+                end)
+                Add('Fit the view to the graph', function() Pn:Fit() end)
+                Sep()
+                Add('Add a node ...', function() pcall(function() import('/lua/editor/gui/shell.lua').FocusPanel('graphpalette') end) end, { tip = 'Opens the node palette: a click on a node there adds it to the graph.' })
+            end
+            ContextMenu.Show(GetFrame(0), mx, my, items)
         end
 
         function Pn.StartNodeDrag(event, id)
@@ -842,7 +978,10 @@ Panels.Register{
             if event.Type == 'ButtonPress' then
                 local mods = event.Modifiers or {}
                 if mods.Middle or mods.Right then
-                    Pn.StartPan(event)
+                    Pn.StartPan(event, mods.Right and function(x, y)
+                        local wi = Pn.HitWire(x - bg.Left(), y - bg.Top())
+                        if wi then Pn.ContextMenu('wire', wi, x, y) else Pn.ContextMenu('canvas', nil, x, y) end
+                    end or nil)
                 else
                     local wi = Pn.HitWire(event.MouseX - bg.Left(), event.MouseY - bg.Top())
                     if wi then
@@ -894,7 +1033,7 @@ Panels.Register{
                 state.shownRevision = Graph.DataRevision
             else
                 GRun.RevertTerrain()
-                state.text = 'preview taken off'
+                state.text = 'preview removed'
             end
             Pn:Tick(true)
         end, { toggle = true }))
@@ -902,7 +1041,7 @@ Panels.Register{
             GRun.RevertTerrain()
             state.onTerrain = false
             Pn.bTerrain:SetOn(false)
-            state.text = 'preview taken off'
+            state.text = 'preview removed'
             Pn:Tick(true)
         end))
         Pn.bMask = Add(Btn('Mask view', 74, function(self)
@@ -913,6 +1052,17 @@ Panels.Register{
         Add(Btn('Undo', 44, function() Graph.Undo() Pn:Tick(true) end))
         Add(Btn('Redo', 44, function() Graph.Redo() Pn:Tick(true) end))
         Add(Btn('Fit', 34, function() Pn:Fit() end))
+        Pn.bDetail = Add(Btn('Detail ' .. GRun.PreviewCap, 80, function(self)
+            local caps, nextCap = GRun.PreviewCaps, nil
+            for i = 1, table.getn(caps) do
+                if caps[i] == GRun.PreviewCap then nextCap = caps[i + 1] or caps[1] end
+            end
+            GRun.SetPreviewCap(nextCap or caps[1])
+            self:SetText('Detail ' .. GRun.PreviewCap)
+            Pn.thumbVer = {}
+            state.text = 'preview detail ' .. GRun.PreviewCap .. ' samples a side'
+            Pn:Tick(true)
+        end))
         Add(Btn('Variations', 74, function()
             local shell = import('/lua/editor/gui/shell.lua')
             shell.FocusPanel('graphgallery')

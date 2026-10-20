@@ -2,7 +2,7 @@
 --
 --   Open()      builds the page (also File > Start screen); Close() / IsOpen()
 --
--- Left: the things to do (new map, open, my maps folder, release a map, mod project, recover the autosave, take the tour, help). Right: new map sizes, recent maps with
+-- Left: the things to do (new map, open, my maps folder, release a map, mod project, recover autosaved map, tutorial, help). Right: new map sizes, recent maps with
 -- the preview picture of the .scmap (thumbs.lua) and a tip. "Show at start" is the setting `startScreen` of the user folder (userdata.lua).
 --
 -- Lua 5.0 dialect.
@@ -67,7 +67,7 @@ local function ModProject()
         end,
     })
     list:SetRect(Skin.S(8), Skin.S(54), Skin.S(404), Skin.S(130))
-    if table.getn(names) == 0 then d:Label('No project yet: make the first one below.', 14, 60, { color = c.textDim, size = 'small' }) end
+    if table.getn(names) == 0 then d:Label('No project yet. Create the first one below.', 14, 60, { color = c.textDim, size = 'small' }) end
     d:Label('New project (letters, digits, space, - and _)', 14, 200, { color = c.textDim })
     local field = d:Field(14, 222, 390, 22, { text = '' })
     local say = d:Label('', 14, 296, { color = c.error, size = 'small' })
@@ -112,7 +112,7 @@ function Open(opts)
     title.Depth:Set(function() return g.Depth() + 20 end)
     local sub = W.Label(g, Version.Text() == Version.Name and '' or string.sub(Version.Text(), string.len(Version.Name) + 2), M, M + Skin.S(40), { color = c.textDim, size = 'small' })
     sub.Depth:Set(function() return g.Depth() + 20 end)
-    W.Label(g, 'Make Supreme Commander maps, missions and mods.', M, M + Skin.S(58), { color = c.textDim, size = 'small' })
+    W.Label(g, 'Create Supreme Commander maps, missions and mods.', M, M + Skin.S(58), { color = c.textDim, size = 'small' })
 
     local y = M + Skin.S(100)
     local bh, gap = Skin.S(34), Skin.S(8)
@@ -128,13 +128,13 @@ function Open(opts)
     Btn('Mod project...', ModProject)
     local autosave = Maps.AutosavePath()
     if autosave then
-        Btn('Recover the autosave', function()
+        Btn('Recover autosaved map', function()
             Close()
             Maps.Recover()
         end)
     end
     y = y + Skin.S(10)
-    Btn('Take the tour', function()
+    Btn('Tutorial', function()
         Close()
         pcall(function() import('/lua/editor/gui/tour.lua').Start() end)
     end)
@@ -186,7 +186,7 @@ function Open(opts)
     local cols = math.max(1, math.floor((rw + Skin.S(12)) / (cardW + Skin.S(12))))
     local areaBottom = fh - M - bh - gap - Skin.S(96) - Skin.S(12)
     if table.getn(recent) == 0 then
-        W.Label(g, 'No maps yet. Start a new map above, or open one from the left.', rx, ry + Skin.S(8), { color = c.textDim, size = 'small' })
+        W.Label(g, 'No maps yet. Create a new map above, or open one from the left.', rx, ry + Skin.S(8), { color = c.textDim, size = 'small' })
     end
     for i, m in recent do
         local col, row = math.mod(i - 1, cols), math.floor((i - 1) / cols)

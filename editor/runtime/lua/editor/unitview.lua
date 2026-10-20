@@ -10,6 +10,7 @@
 --   SetStage(name) / Stage     'viewer' | 'map';   Close()  takes everything down and restores the camera and the terrain
 --   Spawn(id[, keepCamera])    the unit on the stage, then (a thread) the camera frames it;   Remove()   Id, EntityId, X, Z, Y0
 --   Show.<name>                range, senses, footprint (+ skirt), hitbox (3D box of the engine's collision extents), bones, grid;   Refresh() redraws the static drawings, OnFrame() the bones (every frame)
+--   Show.lock                  the camera is held on the unit every frame (LockCamera): panning is undone, rotating and zooming work around the unit, the distance stays within a few radii
 --   Frame(mode)                'iso' (3/4 from the front left), 'front', 'back', 'side', 'top', 'unit' (= iso), 'range';   Orbit(dHeading, dPitch), Fit()   camera on the unit's centre, zoomed to its bounds
 --   Bones / BoneSel            the bones of the shown unit as the renderer poses them this frame (ed_unit_bones): { name, index, parent, x, y, z, fx, fy, fz, ux, uy, uz }
 --   LODs(id) / ShowLOD(n)      the mesh LODs and the camera distance for one of them (thread);  Colors / SetColor(name);  Lights / SetLight(name)
@@ -22,7 +23,7 @@ Id = false
 EntityId = false
 X, Z = 0, 0
 Y0 = 0                   -- ground height under the unit
-Show = { range = true, senses = false, footprint = true, hitbox = true, bones = false, grid = true }
+Show = { range = true, senses = false, footprint = true, hitbox = true, bones = false, grid = true, lock = true }   -- lock: the camera stays on the unit (orbit and zoom only)
 Bones = {}
 BoneSel = false          -- the picked bone (its name)
 LODInfo = false          -- the measured LOD range of the shown unit (see ShowLOD); false until one was measured
@@ -34,6 +35,8 @@ local boneIds = {}
 local infoPath = 'ed_view_info.txt'
 local saved = false      -- the terrain flags are switched (the viewer stage is on)
 local origCamera = false -- the map's camera, saved by the first Spawn and put back by Close
+local lockC = false      -- the centre and radius the lock holds the camera on: set by Aim, so a turning turret does not shake the view
+local aimUntil = 0       -- the lock waits while Aim is still settling the camera
 
 local function Overlay() return rawget(_G, 'ed_overlay_set') ~= nil end
 
@@ -141,16 +144,71 @@ local function StageSpot()
     return StageSpotFor(w - 1, objects)
 end
 
+--- A naval unit needs water under it (on land the engine treats it as beached). The deepest open water of the map within the first `limit` samples scanned, as x, z, waterElevation; nil when the map has no
+--- water at least `need` deep. `get(x, z)` is the terrain height, `size` the map's cell count a side; pure, the self test calls it with a fake terrain.
+function WaterSpotFor(get, size, water, need)
+    local best, bx, bz = need - 0.001, nil, nil
+    local step = math.max(4, math.floor(size / 64))
+    local m = math.min(24, math.floor(size / 8))
+    for z = m, size - m, step do
+        for x = m, size - m, step do
+            local depth = water - get(x, z)
+            if depth > best then
+                -- open water: the ring around it is water too, so the unit has room to float
+                local ok = true
+                for _, d in { { -10, 0 }, { 10, 0 }, { 0, -10 }, { 0, 10 } } do
+                    if water - get(x + d[1], z + d[2]) < need then ok = false break end
+                end
+                if ok then best, bx, bz = depth, x, z end
+            end
+        end
+    end
+    if not bx then return nil end
+    return bx, bz, water
+end
+
+local function IsNaval(bp)
+    local mt = bp.Physics and bp.Physics.MotionType
+    if mt == 'RULEUMT_Water' or mt == 'RULEUMT_SurfacingSub' then return true end
+    for _, c in bp.Categories or {} do
+        if c == 'NAVAL' then return true end
+    end
+    return false
+end
+
+--- The spot a naval unit stands on: the deepest open water of the map (x, z, surface height), else nil (the unit then stands on the stage's ordinary spot and the sim keeps it unharmed).
+local function WaterSpot()
+    local size = ed_terrain_info()
+    if not size then return nil end
+    local ok, water = pcall(function() return import('/lua/editor/world.lua').Get().water_elev end)
+    if not (ok and water) then return nil end
+    return WaterSpotFor(MapGround, size - 1, water, 6)
+end
+
 --- The terrain, sky and water of the map are not drawn on the viewer stage (console variables of the engine, process wide: put back by StageOff and by every fresh session).
+local iconLens = false   -- the icon generator is rendering: the stage keeps the game's own lens
+
+local function Lens(steady)
+    if iconLens then steady = false end
+    -- the game camera cannot come closer than a zoom of 5 and widens the view to 65 degrees there: a small unit stays a speck. The stage lets it come close with a steady 35 degree lens.
+    if steady then
+        ConExecute('cam_NearZoom 0.2') ConExecute('cam_NearFOV 35') ConExecute('cam_FarFOV 35')
+    else
+        ConExecute('cam_NearZoom 5') ConExecute('cam_NearFOV 65') ConExecute('cam_FarFOV 60')
+    end
+end
+
 local function Flags(on)
     local v = on and 'true' or 'false'
     for _, name in { 'ren_Terrain', 'ren_SkyDome', 'ren_Water', 'ren_WorldBorder' } do ConExecute(name .. ' ' .. v) end
-    -- the game camera cannot come closer than a zoom of 5 and widens the view to 65 degrees there: a small unit stays a speck. The stage lets it come close with a steady 35 degree lens.
-    if on then
-        ConExecute('cam_NearZoom 5') ConExecute('cam_NearFOV 65') ConExecute('cam_FarFOV 60')
-    else
-        ConExecute('cam_NearZoom 0.2') ConExecute('cam_NearFOV 35') ConExecute('cam_FarFOV 35')
-    end
+    Lens(not on)
+end
+
+--- The icon generator measured its camera constants with the game's own lens; while it renders, the stage's steady lens is taken off (on = true) and put back afterwards (on = false).
+function IconLens(on)
+    iconLens = on and true or false
+    if saved then Lens(true) end
+    aimUntil = GetSystemTimeSeconds() + 0.5
 end
 
 local function StageOn()
@@ -340,6 +398,7 @@ end
 
 --- Called every frame by overlay.lua: the bones follow the animation exactly (the renderer's own interpolated pose).
 function OnFrame()
+    if lockC then pcall(LockCamera) end
     if Show.bones and EntityId and Overlay() then
         DrawBones()
     elseif next(boneIds) then
@@ -355,6 +414,7 @@ function Remove(final)
         SimCallback({ Func = 'EdViewClear', Args = { x = X, z = Z, radius = 90, final = final and true or false } }, false)
     end
     Id, EntityId, Info = false, false, false
+    lockC = false
     Bones, BoneSel = {}, false
     Clear()
     ClearBones()
@@ -389,6 +449,10 @@ function Spawn(id, keepCamera)
         StageOff()
         X, Z = LabSpot()
         Y0 = MapGround(X, Z)
+    end
+    if IsNaval(bp) then
+        local wx, wz, surface = WaterSpot()
+        if wx then X, Z, Y0 = wx, wz, surface end
     end
     ed_write_file(infoPath, '')
     SimCallback({ Func = 'EdViewSpawn', Args = { bp = id, army = 'ARMY_1', x = X, y = Y0, z = Z, heading = 0, path = infoPath } }, false)
@@ -460,6 +524,8 @@ function Aim(heading, pitch, fit)
         local cam = GetCamera('WorldCamera')
         local cx, cy, cz, radius = Bounds()
         if not cx then return end
+        lockC = { cx, cy, cz, radius }
+        aimUntil = GetSystemTimeSeconds() + 0.08 * 5 + 0.5
         local gy = Ground(X, Z)
         local left, top, right, bottom = PanelRect()
         local zoom = fit and math.max(radius * 4, 3) or math.max(cam:GetTargetZoom() or 10, 3)
@@ -502,7 +568,45 @@ function Aim(heading, pitch, fit)
             end
         end
         Zoom = zoom
+        aimUntil = GetSystemTimeSeconds() + 0.1
     end)
+end
+
+--- Holds the camera on the unit (called every frame): the focus point is put back where the line of sight meets the unit's centre, so right-drag panning and the move keys do nothing, while rotating and
+--- the wheel work around the unit. The pitch stays between 0.05 and 1.5, the eye between 1.3 and 40 radii from the centre.
+function LockCamera()
+    if not (Show.lock and Id and EntityId and lockC) or iconLens or GetSystemTimeSeconds() < aimUntil then return end
+    local fov, eye, fx, fy, fz, hd, pt, tz, vx, vy, vw, vh = ed_camera_info()
+    if not fov or not vh or vh <= 0 then return end
+    local cx, cy, cz, radius = lockC[1], lockC[2], lockC[3], lockC[4]
+    local cam = GetCamera('WorldCamera')
+    local gy = Ground(X, Z)
+    local p = math.max(0.05, math.min(1.5, pt))
+    local _, _, _, s = FocusFor(cx, cy, cz, hd, p, gy, 0, 0, 0)
+    local depth = eye - s
+    local ox, oy = 0, 0
+    local left, top, right, bottom = PanelRect()
+    if left then
+        ox = (left + right) / 2 - (vx + vw / 2)
+        oy = (top + bottom) / 2 - (vy + vh / 2)
+    end
+    local upp = 2 * math.max(depth, 0.1) * math.tan(fov / 2) / vh
+    local gx, gyy, gz = FocusFor(cx, cy, cz, hd, p, gy, ox, oy, upp)
+    local dx, dy, dz = gx - fx, gyy - fy, gz - fz
+    local err = math.sqrt(dx * dx + dy * dy + dz * dz)
+    -- the eye's distance from the unit's centre: too close sees inside the model, too far loses it
+    local want = tz
+    if depth > 0 then
+        local lo, hi = radius * 1.3, radius * 40
+        if depth < lo then want = tz * (lo + s) / eye elseif depth > hi then want = tz * (hi + s) / eye end
+    end
+    local zoomOff = want ~= tz
+    if err > math.max(0.05, 0.02 * math.max(depth, 1)) or p ~= pt or zoomOff then
+        Heading, Pitch = hd, p
+        cam:SnapTo(Vector(gx, gyy, gz), { hd, p, 0 }, want)
+    else
+        Heading, Pitch = hd, pt
+    end
 end
 
 local PRESETS = { iso = { 3.7, 0.55 }, unit = { 3.7, 0.55 }, front = { 3.1416, 0.12 }, back = { 0, 0.12 }, side = { 4.7124, 0.12 }, top = { 3.1416, 1.45 } }
