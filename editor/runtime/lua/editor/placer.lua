@@ -556,6 +556,7 @@ function UpdateMoves(ui)
         end
     elseif tool == 'unit_select' then
         local off = Units().DragOffset
+        if off then off = { Units().SnapDelta(off[1], off[2]) } end        -- the preview stands where the unit will land: on the build grid
         if off or turn then
             skip = {}
             local want = {}

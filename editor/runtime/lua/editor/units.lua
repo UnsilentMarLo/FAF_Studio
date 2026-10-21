@@ -322,7 +322,25 @@ local function Transform(label, change)
     return true
 end
 
+--- A move of the selection by (dx, dz) put on the build grid: the first selected unit goes to the nearest grid spot of its footprint (unitfit.Snap: odd footprints on a cell centre, even
+--- ones on a corner) and the others move by the same amount, so a group keeps its layout. Without a selection, or when the blueprint is unknown, the delta is kept.
+function SnapDelta(dx, dz)
+    for _, sel in Selection do
+        local u = Find(sel)
+        if u then
+            local ok, sx, sz = pcall(function()
+                local Fit = import('/lua/editor/unitfit.lua')
+                return Fit.Snap(Fit.Blueprint(u.bp), u.x + dx, u.z + dz, u.heading)
+            end)
+            if ok and sx then return sx - u.x, sz - u.z end
+            return dx, dz
+        end
+    end
+    return dx, dz
+end
+
 local function MoveSelectedOnly(dx, dz)
+    dx, dz = SnapDelta(dx, dz)
     return Transform('move units', function(u) u.x, u.z = u.x + dx, u.z + dz return u end)
 end
 
