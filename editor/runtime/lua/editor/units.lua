@@ -71,31 +71,59 @@ function Armies()
     return names
 end
 
---- The table of the units of an army's group (INITIAL by default; created when `create`), or nil when the army or group does not exist.
-local function UnitTable(army, create, group)
-    group = group or 'INITIAL'
+--- The GROUP table of a group path ('INITIAL', 'M2_Transition/M2_Dostya_Base_Defenders': groups of a mission map nest to any depth; the path joins the names with '/'),
+--- created on the way when `create`. nil when it does not exist.
+local function GroupNode(army, path, create)
     if not Map.Doc then return nil end
     local a = Map.Doc.save.Armies and Map.Doc.save.Armies[army]
     if not a then return nil end
-    if create then
-        a.Units = a.Units or { type = 'GROUP', orders = '', platoon = '', Units = {} }
-        a.Units.Units = a.Units.Units or {}
-        a.Units.Units[group] = a.Units.Units[group] or { type = 'GROUP', orders = '', platoon = '', Units = {} }
-        a.Units.Units[group].Units = a.Units.Units[group].Units or {}
+    if create then a.Units = a.Units or { type = 'GROUP', orders = '', platoon = '', Units = {} } end
+    local node = a.Units
+    if not node then return nil end
+    for seg in string.gfind(path or 'INITIAL', '[^/]+') do
+        node.Units = node.Units or (create and {} or nil)
+        local child = node.Units and node.Units[seg]
+        if type(child) ~= 'table' or (child.type ~= 'GROUP' and not create) then child = nil end
+        if not child then
+            if not create then return nil end
+            child = { type = 'GROUP', orders = '', platoon = '', Units = {} }
+            node.Units[seg] = child
+        end
+        node = child
     end
-    return a.Units and a.Units.Units and a.Units.Units[group] and a.Units.Units[group].Units
+    return node
 end
 
---- The names of the groups of an army (top level of its unit tree, INITIAL first).
+--- The table of the units of an army's group (INITIAL by default; created when `create`), or nil when the army or group does not exist.
+local function UnitTable(army, create, group)
+    local node = GroupNode(army, group or 'INITIAL', create)
+    if not node then return nil end
+    if create then node.Units = node.Units or {} end
+    return node.Units
+end
+
+--- The group paths of an army (INITIAL first, then every group below it and the others, nested ones as 'outer/inner', sorted).
 function Groups(army)
     local list = {}
     local a = Map.Doc and Map.Doc.save.Armies and Map.Doc.save.Armies[army]
-    for name, g in (a and a.Units and a.Units.Units) or {} do
-        if type(g) == 'table' and g.type == 'GROUP' and name ~= 'INITIAL' then table.insert(list, name) end
+    local function Walk(node, prefix)
+        for name, g in node.Units or {} do
+            if type(g) == 'table' and g.type == 'GROUP' then
+                local path = prefix .. name
+                if path ~= 'INITIAL' then table.insert(list, path) end
+                Walk(g, path .. '/')
+            end
+        end
     end
+    if a and a.Units then Walk(a.Units, '') end
     table.sort(list)
     table.insert(list, 1, 'INITIAL')
     return list
+end
+
+--- Does the game create the units of this group by itself when the map starts (INITIAL and everything below it)? The script spawns the others.
+function GameSpawns(group)
+    return group == 'INITIAL' or string.sub(group or '', 1, 8) == 'INITIAL/'
 end
 
 --- All units of the map: list of { army, group, name, bp, x, z, y, heading }.
@@ -375,7 +403,7 @@ end
 function SpawnGroupEntities()
     local n = 0
     for _, u in All() do
-        if u.group ~= 'INITIAL' and u.group ~= 'WRECKAGE' then SpawnEntity(u) n = n + 1 end
+        if not GameSpawns(u.group) and u.group ~= 'WRECKAGE' and string.sub(u.group or '', 1, 9) ~= 'WRECKAGE/' then SpawnEntity(u) n = n + 1 end
     end
     return n
 end
