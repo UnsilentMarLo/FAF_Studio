@@ -346,6 +346,18 @@ do
             end
             local reason = ''
             if not ok then
+                -- a marker that already carries its extractor (Mass) or generator (Hydrocarbon) is in use, not blocked: the structure standing there is what makes the build check say no
+                local reach = (it.type == 'Hydrocarbon') and 4 or 2
+                local list = GetUnitsInRect(Rect(it.x - reach, it.z - reach, it.x + reach, it.z + reach))
+                local want = (it.type == 'Hydrocarbon') and categories.HYDROCARBON or categories.MASSEXTRACTION
+                for _, u in list or {} do
+                    if not u.Dead and EntityCategoryContains(want, u) then
+                        local p = u:GetPosition()
+                        if math.abs(p[1] - it.x) <= reach and math.abs(p[3] - it.z) <= reach then ok = true break end
+                    end
+                end
+            end
+            if not ok then
                 local half = it.size / 2
                 local wet = false
                 for dx = -1, 1 do
