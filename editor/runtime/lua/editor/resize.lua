@@ -30,7 +30,7 @@ local Map = import('/lua/editor/map.lua')
 local Maps = import('/lua/editor/maps.lua')
 local Ser = import('/lua/editor/luaser.lua')
 
-Sizes = { 128, 256, 512, 1024, 2048 }
+Sizes = { 128, 256, 512, 1024, 2048, 4096 }
 
 --- The dialog's settings (kept while the editor runs).
 Options = { size = 512, mode = 'canvas', ax = 0.5, az = 0.5, fill = 'edge', level = 25, playable = 'keep' }

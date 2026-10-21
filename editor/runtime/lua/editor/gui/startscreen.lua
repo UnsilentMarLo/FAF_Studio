@@ -157,7 +157,7 @@ function Open(opts)
     local count = table.getn(Maps.Sizes)
     local tw = math.floor((rw - tileGap * (count - 1)) / count)
     local th = Skin.S(64)
-    local subtitles = { 'a small, quick map: 1v1, practice', 'the usual 1v1 and 2v2 size', 'big maps for 4+ players' }
+    local subtitles = { 'a small, quick map: 1v1, practice', 'the usual 1v1 and 2v2 size', 'big maps for 4+ players', 'huge maps, many players', 'the largest the game supports' }
     for i, s in Maps.Sizes do
         local index = i
         local tile = Bitmap(g)
@@ -168,6 +168,10 @@ function Open(opts)
             if event.Type == 'MouseEnter' then self:SetSolidColor(c.buttonHi) return true
             elseif event.Type == 'MouseExit' then self:SetSolidColor(c.button) return true
             elseif event.Type == 'ButtonPress' then
+                if not Maps.TemplateReady(Maps.Sizes[index].template) then
+                    pcall(function() import('/lua/editor/gui/shell.lua').Say('the blank map for ' .. Maps.Sizes[index].label .. ' is not installed: run  python scripts/studio.py generate') end)
+                    return true
+                end
                 Maps_().Guard(function() Close() Maps.New(index, 'My map') end)
                 return true
             end
