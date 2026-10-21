@@ -58,6 +58,23 @@ function Run()
     for _, r in N.state.rows do if r.kind == 'val' and r.facet == 'group' then groups[r.value] = r.count end end
     check('names get prefix groups', groups.Mass == 30 and groups.ARMY == 20)
     Dialog.Close()
+    -- shader browser data
+    local Shaders = import('/lua/editor/shaders.lua')
+    local pbr = Shaders.Find('Terrain201B')
+    check('a numbered shader is described from its name', pbr.family == 'splat' and string.find(pbr.instructions, 'Biplanar', 1, true) ~= nil and pbr.listed == true and pbr.summary ~= '', pbr.family)
+    check('a known shader has notes', Shaders.Find('TTerrainXP').listed == true and Shaders.Find('TTerrainXP').instructions ~= '')
+    local unknown = Shaders.Find('SomeNewShader')
+    check('a shader nobody described still gets an entry', unknown.id == 'SomeNewShader' and unknown.listed == false)
+    local SB = import('/lua/editor/gui/shaderbrowser.lua')
+    local pool = { Shaders.Find('TTerrain'), Shaders.Find('TTerrainXP'), Shaders.Find('Terrain250') }
+    check('the shader search needs every word', table.getn(SB.Filter(pool, 'half mask')) >= 1 and table.getn(SB.Filter(pool, 'half qqqzz')) == 0)
+    -- map sizes
+    local Maps = import('/lua/editor/maps.lua')
+    local i5 = Maps.SizeForKm(5)
+    local i80, n80 = Maps.SizeForKm(80)
+    local i25, n25 = Maps.SizeForKm(2.5)
+    check('map sizes in kilometres map to templates', i5 == 1 and i80 == 5 and n80 == 4096 and i25 == 0 and n25 == 128, tostring(i5) .. ' ' .. tostring(i80))
+    check('a size the terrain does not support is refused', Maps.SizeForKm(7) == nil and Maps.SizeForKm(160) == nil and Maps.SizeForKm('x') == nil)
     if table.getn(fails) == 0 then return 'PASS browser (' .. checks .. ' checks)' end
     return 'FAIL browser: ' .. table.concat(fails, '; ')
 end

@@ -6,6 +6,7 @@
 --     opts.getCount()         number of items
 --     opts.bind(cell, index, selected)   fills a pooled cell: cell.thumb (Bitmap: SetTexture / SetSolidColor), cell.text = the name (the grid fits and places the label under the picture), cell.badge (Text, top right: SetText), cell.mark (Text centred on the picture: SetText, for tiles without a picture)
 --     opts.onSelect(index)    a click;  opts.onActivate(index)  a double click;  opts.onContext(index, x, y)  right click;  opts.onHover(index | nil)  pointer over / left a cell
+--     opts.onScroll()         called on every wheel step / scrollbar move, before the cells are drawn (a browser holds back its background work with it)
 --     opts.canDrag(index)     true when the item may be dragged out;  opts.ghost(index) -> texture path | colour string;  opts.onDrop(index, x, y, frame)   (position in the grid's window; frame = that window's root frame)
 --   grid:SetRect(x, y, w, h)  grid:Refresh()  grid:SetSelected(i)  grid:ScrollTo(i)  grid:Destroy()  grid.cols  grid.offset (first visible row, 0 based)  grid:Cells() visible cells
 --
@@ -56,13 +57,35 @@ function Create(parent, opts)
         G:Refresh()
     end
 
+    -- The offset changed by the wheel / the scrollbar: draw the cells. Several wheel steps in one frame (or a drag faster than the cells can be bound) would rebind every cell once per event:
+    -- at most one draw per 30 ms, the rest is folded into one trailing draw.
+    local MIN_DRAW = 0.03
+    local function Scrolled()
+        if opts.onScroll then opts.onScroll() end
+        if G.pending then return end
+        local wait = MIN_DRAW - (GetSystemTimeSeconds() - (G.drawnAt or 0))
+        if wait <= 0 then
+            G:Refresh()
+            return
+        end
+        G.pending = true
+        ForkThread(function()
+            WaitSeconds(wait)
+            G.pending = false
+            if not G.destroyed then
+                local ok, err = pcall(G.Refresh, G)
+                if not ok then WARN('Grid refresh: ' .. tostring(err)) end
+            end
+        end)
+    end
+
     local function Wheel(self, event)
         if event.Type == 'WheelRotation' then
             if MaxOffset() == 0 and parent.scroll then return parent.scroll.Wheel(self, event) end
             local dir = 1
             if event.WheelRotation > 0 then dir = -1 end
             G.offset = math.max(0, math.min(MaxOffset(), G.offset + dir))
-            G:Refresh()
+            Scrolled()
             return true
         end
         return false
@@ -171,7 +194,39 @@ function Create(parent, opts)
         local col = c.panel
         if cell.index and cell.index == G.selected then col = c.select
         elseif cell.hot then col = c.hover end
-        cell.bg:SetSolidColor(col)
+        if cell.col ~= col then
+            cell.col = col
+            cell.bg:SetSolidColor(col)
+        end
+    end
+
+    -- the scrollbar thumb: one handler for the life of the grid (it reads the state when the drag starts)
+    G.thumbBar.HandleEvent = function(self, event)
+        if event.Type == 'MouseEnter' then
+            G.hotBar = true
+            self:SetSolidColor(c.accent)
+            return true
+        elseif event.Type == 'MouseExit' then
+            G.hotBar = false
+            self:SetSolidColor(c.textDim)
+            return true
+        elseif event.Type == 'ButtonPress' then
+            local total, vis = TotalRows(), Rows()
+            local thumbH = math.max(Skin.S(24), math.floor(G.h * vis / math.max(1, total)))
+            local range = G.h - thumbH
+            local startY, startOffset = event.MouseY, G.offset
+            local drag = Dragger()
+            drag.OnMove = function(d, x, y)
+                local per = range / math.max(1, total - vis)
+                local delta = math.floor((y - startY) / math.max(0.001, per) + 0.5)
+                G.offset = math.max(0, math.min(MaxOffset(), startOffset + delta))
+                Scrolled()
+            end
+            drag.OnRelease = function(d, x, y) d:Destroy() end
+            PostDragger(self:GetRootFrame(), event.KeyCode, drag)
+            return true
+        end
+        return false
     end
 
     function G:UpdateScrollbar()
@@ -186,36 +241,18 @@ function Create(parent, opts)
         local thumbH = math.max(Skin.S(24), math.floor(trackH * vis / total))
         local range = trackH - thumbH
         local ty = math.floor(range * G.offset / math.max(1, total - vis))
-        G.track:SetSolidColor('50000000')
+        if G.barX ~= G.w - sw or G.barH ~= trackH or G.barW ~= sw then
+            G.barX, G.barH, G.barW = G.w - sw, trackH, sw
+            G.track:SetSolidColor('50000000')
+            W.Place(G.track, G.root, G.w - sw, 0, sw, trackH)
+        end
         G.thumbBar:SetSolidColor(G.hotBar and c.accent or c.textDim)
-        W.Place(G.track, G.root, G.w - sw, 0, sw, trackH)
-        W.Place(G.thumbBar, G.root, G.w - sw, ty, sw, thumbH)
+        if G.thumbY ~= ty or G.thumbH ~= thumbH or G.thumbX ~= G.w - sw then
+            G.thumbY, G.thumbH, G.thumbX = ty, thumbH, G.w - sw
+            W.Place(G.thumbBar, G.root, G.w - sw, ty, sw, thumbH)
+        end
         G.track:Show()
         G.thumbBar:Show()
-        G.thumbBar.HandleEvent = function(self, event)
-            if event.Type == 'MouseEnter' then
-                G.hotBar = true
-                self:SetSolidColor(c.accent)
-                return true
-            elseif event.Type == 'MouseExit' then
-                G.hotBar = false
-                self:SetSolidColor(c.textDim)
-                return true
-            elseif event.Type == 'ButtonPress' then
-                local startY, startOffset = event.MouseY, G.offset
-                local drag = Dragger()
-                drag.OnMove = function(d, x, y)
-                    local per = range / math.max(1, total - vis)
-                    local delta = math.floor((y - startY) / math.max(0.001, per) + 0.5)
-                    G.offset = math.max(0, math.min(MaxOffset(), startOffset + delta))
-                    G:Refresh()
-                end
-                drag.OnRelease = function(d, x, y) d:Destroy() end
-                PostDragger(self:GetRootFrame(), event.KeyCode, drag)
-                return true
-            end
-            return false
-        end
     end
 
     function G:Refresh()
@@ -233,54 +270,76 @@ function Create(parent, opts)
         EnsureCells(rows * cols)
         local cw = math.floor(usable / cols)
         G.cw = cw
+        -- The geometry of a cell depends on the layout only, not on what it shows: it is applied when the layout changed (a resize, another cell size, list / grid), not on every scroll step
+        -- (each Left / Top / Width / Height set re-evaluates the controls that depend on it).
+        local pad = Skin.S(3)
+        local innerW, innerH = cw - Skin.S(2), G.cellH - Skin.S(2)
+        local side, textLeft
+        if G.listMode then
+            side = innerH - 2 * pad
+            textLeft = side + 2 * pad + Skin.S(4)
+        else
+            side = math.min(innerW - 2 * pad, innerH - Skin.S(16) - pad)
+            textLeft = pad
+        end
+        local lay = G.lay
+        if not lay or lay.cw ~= cw or lay.ch ~= G.cellH or lay.list ~= G.listMode or lay.side ~= side or lay.cols ~= cols or lay.rows ~= rows then
+            G.lay = { cw = cw, ch = G.cellH, list = G.listMode, side = side, cols = cols, rows = rows }
+            G.layId = (G.layId or 0) + 1
+        end
+        local layId = G.layId
+        local labelW = innerW - textLeft - Skin.S(G.listMode and 28 or 6)
         for i = 1, table.getn(G.cells) do
             local cell = G.cells[i]
             local slot = i - 1
             local index = G.offset * cols + slot + 1
             if slot < rows * cols and index <= count then
-                local r, col = math.floor(slot / cols), math.mod(slot, cols)
                 cell.index = index
-                W.Place(cell.bg, G.root, col * cw, r * G.cellH, cw - Skin.S(2), G.cellH - Skin.S(2))
+                if cell.layId ~= layId then
+                    cell.layId = layId
+                    local r, col = math.floor(slot / cols), math.mod(slot, cols)
+                    W.Place(cell.bg, G.root, col * cw, r * G.cellH, cw - Skin.S(2), G.cellH - Skin.S(2))
+                    if G.listMode then
+                        -- list: the picture at the left, the name beside it, vertically centred
+                        cell.thumb.Left:Set(function() return cell.bg.Left() + pad end)
+                        cell.thumb.Top:Set(function() return cell.bg.Top() + pad end)
+                    else
+                        -- grid: the picture is square and as wide as the cell allows; the name sits under it
+                        cell.thumb.Left:Set(function() return cell.bg.Left() + math.floor((innerW - side) / 2) end)
+                        cell.thumb.Top:Set(function() return cell.bg.Top() + pad end)
+                    end
+                    cell.side = side
+                    cell.thumb.Width:Set(side) cell.thumb.Height:Set(side)
+                    cell.label.Left:Set(function() return cell.bg.Left() + textLeft end)
+                    if G.listMode then
+                        local lh = cell.label.Height()
+                        cell.label.Top:Set(function() return cell.bg.Top() + math.floor((innerH - lh) / 2) end)
+                    else
+                        cell.label.Top:Set(function() return cell.bg.Top() + pad + side + Skin.S(2) end)
+                    end
+                    cell.badge.Top:Set(function() return cell.bg.Top() + Skin.S(3) end)
+                    cell.mw, cell.bw = nil, nil          -- (the centred mark and the right aligned badge are placed below)
+                end
                 cell.bg:Show()
                 cell.thumb:Show()
                 cell.label:Show()
                 cell.badge:Show()
                 cell.mark:Show()
-                local pad = Skin.S(3)
-                local innerW, innerH = cw - Skin.S(2), G.cellH - Skin.S(2)
-                local side, textLeft, textTop
-                if G.listMode then
-                    -- list: the picture at the left, the name beside it, vertically centred
-                    side = innerH - 2 * pad
-                    cell.thumb.Left:Set(function() return cell.bg.Left() + pad end)
-                    cell.thumb.Top:Set(function() return cell.bg.Top() + pad end)
-                    textLeft = side + 2 * pad + Skin.S(4)
-                else
-                    -- grid: the picture is square and as wide as the cell allows; the name sits under it
-                    side = math.min(innerW - 2 * pad, innerH - Skin.S(16) - pad)
-                    cell.thumb.Left:Set(function() return cell.bg.Left() + math.floor((innerW - side) / 2) end)
-                    cell.thumb.Top:Set(function() return cell.bg.Top() + pad end)
-                    textLeft = pad
-                end
-                cell.side = side
-                cell.thumb.Width:Set(side) cell.thumb.Height:Set(side)
                 opts.bind(cell, index, index == G.selected)
-                local text = cell.text or ''
-                W.Fit(cell.label, text, innerW - textLeft - Skin.S(G.listMode and 28 or 6))
-                cell.label.Left:Set(function() return cell.bg.Left() + textLeft end)
-                if G.listMode then
-                    local lh = cell.label.Height()
-                    cell.label.Top:Set(function() return cell.bg.Top() + math.floor((innerH - lh) / 2) end)
-                else
-                    cell.label.Top:Set(function() return cell.bg.Top() + pad + side + Skin.S(2) end)
-                end
+                W.FitCached(cell.label, cell.text or '', labelW)
+                -- the mark (centred on the picture) and the badge (right aligned) follow the width of their text: placed again when it changed
                 local mw, mh = cell.mark.Width(), cell.mark.Height()
-                local tl, tt = cell.thumb.Left, cell.thumb.Top
-                cell.mark.Left:Set(function() return tl() + math.floor((side - mw) / 2) end)
-                cell.mark.Top:Set(function() return tt() + math.floor((side - mh) / 2) end)
+                if cell.mw ~= mw then
+                    cell.mw = mw
+                    local tl, tt = cell.thumb.Left, cell.thumb.Top
+                    cell.mark.Left:Set(function() return tl() + math.floor((side - mw) / 2) end)
+                    cell.mark.Top:Set(function() return tt() + math.floor((side - mh) / 2) end)
+                end
                 local bw = cell.badge.Width()
-                cell.badge.Left:Set(function() return cell.bg.Right() - bw - Skin.S(5) end)
-                cell.badge.Top:Set(function() return cell.bg.Top() + Skin.S(3) end)
+                if cell.bw ~= bw then
+                    cell.bw = bw
+                    cell.badge.Left:Set(function() return cell.bg.Right() - bw - Skin.S(5) end)
+                end
                 G:StyleCell(cell)
             else
                 cell.index = nil
@@ -293,6 +352,7 @@ function Create(parent, opts)
             end
         end
         G:UpdateScrollbar()
+        G.drawnAt = GetSystemTimeSeconds()
     end
 
     function G:SetRect(x, y, w, h)
@@ -324,6 +384,7 @@ function Create(parent, opts)
     end
 
     function G:Destroy()
+        G.destroyed = true
         G.root:Destroy()
     end
     return G

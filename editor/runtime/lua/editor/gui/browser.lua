@@ -10,6 +10,8 @@
 --
 --   Open{ title, entries, facets, fav, current, none, view, memory, done }      entries: list of { key, name, sub, tags = { facet = value }, folder = 'a/b/c' (optional: a folder
 --         tree is added to the sidebar), thumb = texture path (optional), color = 'ffrrggbb' (a tile without a picture), source = path shown under the name }
+--         (optional: reduce = true, with thumb = a big DDS: the list and grid show a 96 x 96 copy that assetthumbs.lua makes in the background and keeps on disk; the large preview loads the real texture once the
+--         pointer rests)
 --         facets: { { id, label }, ... } the categories (a facet nobody has a value for is left out)
 --         fav: a kind of favourites.lua ('units', 'textures' ...) switches Starred / Recent and the star on;  none: text of an extra "no choice" entry (key NONE)
 --         current: the key marked in the list;  view: 'list' | 'grid' (default);  memory: key to remember the view under;  done(entry) is called with the chosen entry
@@ -25,6 +27,7 @@ local W = import('/lua/editor/gui/widgets.lua')
 local Skin = import('/lua/editor/gui/skin.lua')
 local Fav = import('/lua/editor/favourites.lua')
 local UserData = import('/lua/editor/userdata.lua')
+local Thumbs = import('/lua/editor/assetthumbs.lua')
 
 NONE = '*none*'
 last = false          -- the open browser { state, rebuild, take, entries }: for the self test
@@ -48,12 +51,24 @@ local function Prepare(e)
     return e
 end
 
+local Cat = false
+
 --- The picture of an entry: a texture path, or nil.
 local function ThumbOf(e)
-    if e.thumb then return e.thumb end
+    if e.thumb then
+        -- a big texture is not loaded for a row: its reduced copy is (nil until the background worker made it)
+        if e.reduce and ed_dds_thumb then return Thumbs.Request('textures', e.thumb, e.thumb) end
+        return e.thumb
+    end
     if e.kind and e.key and e.search then
-        local ok, tex = pcall(function() return import('/lua/editor/assetcat.lua').Thumb(e) end)
-        if ok then return tex end
+        if not Cat then
+            local ok, mod = pcall(import, '/lua/editor/assetcat.lua')
+            if ok then Cat = mod end
+        end
+        if Cat then
+            local ok, tex = pcall(Cat.Thumb, e)
+            if ok then return tex end
+        end
     end
     return nil
 end
@@ -73,7 +88,11 @@ function Open(spec)
     local totalH = math.min(plain and 520 or 620, math.floor(frame.Height() / sc) - 50)
     local sideW = 210
     local previewW = (totalW >= 820 and not plain) and 230 or 0
-    local d = Dialog.Open(spec.title or 'Choose', totalW, totalH)
+    local closed = false
+    local d = Dialog.Open(spec.title or 'Choose', totalW, totalH, function()
+        closed = true
+        Thumbs.Unlisten('browser')
+    end)
     local entries = {}
     for _, e in spec.entries or {} do table.insert(entries, Prepare(e)) end
     if spec.none then
@@ -109,6 +128,7 @@ function Open(spec)
     local S = {
         filters = {}, folder = false, onlyFav = false, recent = false, query = '', shown = {}, rows = {}, collapsed = {},
         view = UserData.Get(memory, spec.view or 'grid'), hover = false,
+        scrolledAt = 0, pvToken = 0, pvTex = false,
     }
     if previewW == 0 then S.view = 'list' end
     if plain then S.view = 'list' end
@@ -249,18 +269,53 @@ function Open(spec)
 
     -- ---- the views -------------------------------------------------------------------------------------------------------------------------
     local side
+    local function SetPreviewPicture(tex, color)
+        if tex then
+            if S.pvTex ~= tex then
+                S.pvTex = tex
+                preview:SetTexture(tex)
+            end
+        else
+            S.pvTex = false
+            preview:SetSolidColor(color)
+        end
+    end
+
+    -- The large picture is a big texture: loading it blocks the frame, so it is not loaded for every row the pointer passes while the list scrolls or the pointer sweeps over the grid, but once it
+    -- rests (the reduced copy of the entry, when there is one, is shown at once).
     local function ShowPreview(e)
         if not preview then return end
         if not e then return end
         S.hover = e
         local tex = (not e.none) and ThumbOf(e) or nil
-        if tex then preview:SetTexture(tex) else preview:SetSolidColor(e.color or c.panelAlt) end
-        W.Fit(pName, e.name, Skin.S(previewW - 20))
-        W.Fit(pSub, e.sub or '', Skin.S(previewW - 20))
+        local full = (not e.none and e.reduce and e.thumb) or nil
+        local scrolling = GetSystemTimeSeconds() - S.scrolledAt < 0.25
+        S.pvToken = S.pvToken + 1
+        local token = S.pvToken
+        local later, delay
+        if full and full ~= tex then
+            if S.pvTex ~= full then
+                SetPreviewPicture(tex, e.color or c.panelAlt)
+                later, delay = full, scrolling and 0.3 or 0.12
+            end
+        elseif tex and scrolling and S.pvTex ~= tex then
+            SetPreviewPicture(false, e.color or c.panelAlt)
+            later, delay = tex, 0.3
+        else
+            SetPreviewPicture(tex, e.color or c.panelAlt)
+        end
+        if later then
+            ForkThread(function()
+                WaitSeconds(delay)
+                if token == S.pvToken and not closed then SetPreviewPicture(later, e.color or c.panelAlt) end
+            end)
+        end
+        W.FitCached(pName, e.name, Skin.S(previewW - 20))
+        W.FitCached(pSub, e.sub or '', Skin.S(previewW - 20))
         local tags = {}
         for _, f in facets do if e.tags[f[1]] then table.insert(tags, e.tags[f[1]]) end end
-        W.Fit(pTags, table.concat(tags, ', '), Skin.S(previewW - 20))
-        W.Fit(pPath, e.source or (e.folder and (e.folder .. '/' .. tostring(e.name))) or '', Skin.S(previewW - 20))
+        W.FitCached(pTags, table.concat(tags, ', '), Skin.S(previewW - 20))
+        W.FitCached(pPath, e.source or (e.folder and (e.folder .. '/' .. tostring(e.name))) or '', Skin.S(previewW - 20))
         if star then star:SetText((spec.fav and Fav.Is(spec.fav, e.key)) and 'Unstar' or 'Star') end
     end
 
@@ -277,31 +332,62 @@ function Open(spec)
         local tx = Skin.S(8)
         local tex = (not e.none) and ThumbOf(e) or nil
         if row.thumb then
-            if tex then row.thumb:SetTexture(tex) else row.thumb:SetSolidColor(e.color or c.panelAlt) end
+            if tex then
+                if row.tex ~= tex then
+                    row.tex = tex
+                    row.solid = false
+                    row.thumb:SetTexture(tex)
+                end
+            else
+                local col = e.color or c.panelAlt
+                if row.tex or row.solid ~= col then
+                    row.tex = false
+                    row.solid = col
+                    row.thumb:SetSolidColor(col)
+                end
+            end
             tx = row.bg.Height() + Skin.S(6)
         end
-        W.Fit(row.text, e.name, math.max(Skin.S(40), row.bg.Width() - tx - Skin.S(90)))
-        row.text:SetColor((selectedKey and e.key == selectedKey) and c.accent or c.text)
-        local th = row.text.Height()
-        row.text.Left:Set(function() return row.bg.Left() + tx end)
-        if plain then
-            local ty = math.floor((row.bg.Height() - th) / 2)
-            row.text.Top:Set(function() return row.bg.Top() + ty end)
-        else
-            row.text.Top:Set(function() return row.bg.Top() + Skin.S(4) end)
-            if not row.sub then row.sub = W.Label(row.bg, '', 0, 0, { color = c.textDim, size = 'small' }) end
-            W.Fit(row.sub, e.sub or '', math.max(Skin.S(40), row.bg.Width() - tx - Skin.S(90)))
-            row.sub.Left:Set(function() return row.bg.Left() + tx end)
-            row.sub.Top:Set(function() return row.bg.Top() + Skin.S(4) + th + Skin.S(1) end)
+        -- (the positions below depend on the layout and the font only, not on the entry: set when they change, not on every scroll step)
+        local maxW = math.max(Skin.S(40), row.bg.Width() - tx - Skin.S(90))
+        W.FitCached(row.text, e.name, maxW)
+        local tcol = (selectedKey and e.key == selectedKey) and c.accent or c.text
+        if row.tcol ~= tcol then
+            row.tcol = tcol
+            row.text:SetColor(tcol)
         end
+        local th = row.text.Height()
+        if not plain and not row.sub then
+            row.sub = W.Label(row.bg, '', 0, 0, { color = c.textDim, size = 'small' })
+            row.tx = nil
+        end
+        if row.tx ~= tx or row.th ~= th then
+            row.tx, row.th = tx, th
+            row.text.Left:Set(function() return row.bg.Left() + tx end)
+            if plain then
+                local ty = math.floor((row.bg.Height() - th) / 2)
+                row.text.Top:Set(function() return row.bg.Top() + ty end)
+            else
+                row.text.Top:Set(function() return row.bg.Top() + Skin.S(4) end)
+                row.sub.Left:Set(function() return row.bg.Left() + tx end)
+                row.sub.Top:Set(function() return row.bg.Top() + Skin.S(4) + th + Skin.S(1) end)
+            end
+        end
+        if not plain then W.FitCached(row.sub, e.sub or '', maxW) end
         if row.extra then
             local tags = {}
             for _, f in facets do if e.tags[f[1]] then table.insert(tags, e.tags[f[1]]) end end
             row.extra:SetText(plain and '' or ((spec.fav and not e.none and Fav.Is(spec.fav, e.key) and '* ' or '') .. table.concat(tags, ' ')))
-            row.extra:SetColor(c.textDim)
+            if not row.extraStyled then
+                row.extraStyled = true
+                row.extra:SetColor(c.textDim)
+                row.extra.Top:Set(function() return row.bg.Top() + (plain and math.floor((row.bg.Height() - row.extra.Height()) / 2) or Skin.S(4)) end)
+            end
             local w2 = row.extra.Width()
-            row.extra.Left:Set(function() return row.bg.Right() - w2 - Skin.S(8) end)
-            row.extra.Top:Set(function() return row.bg.Top() + (plain and math.floor((row.bg.Height() - row.extra.Height()) / 2) or Skin.S(4)) end)
+            if row.ew ~= w2 then
+                row.ew = w2
+                row.extra.Left:Set(function() return row.bg.Right() - w2 - Skin.S(8) end)
+            end
         end
     end
 
@@ -309,9 +395,34 @@ function Open(spec)
         local e = S.shown[index]
         if not e then return end
         local tex = (not e.none) and ThumbOf(e) or nil
-        if tex then cell.thumb:SetTexture(tex) else cell.thumb:SetSolidColor(e.color or c.panelAlt) end
-        if cell.mark then cell.mark:SetText((not tex) and string.upper(string.sub(tostring(e.name), 1, 4)) or '') end
-        if cell.badge then cell.badge:SetText((spec.fav and not e.none and Fav.Is(spec.fav, e.key)) and '*' or '') end
+        if tex then
+            if cell.tex ~= tex then
+                cell.tex = tex
+                cell.solid = false
+                cell.thumb:SetTexture(tex)
+            end
+        else
+            local col = e.color or c.panelAlt
+            if cell.tex or cell.solid ~= col then
+                cell.tex = false
+                cell.solid = col
+                cell.thumb:SetSolidColor(col)
+            end
+        end
+        if cell.mark then
+            local m = (not tex) and string.upper(string.sub(tostring(e.name), 1, 4)) or ''
+            if cell.markText ~= m then
+                cell.markText = m
+                cell.mark:SetText(m)
+            end
+        end
+        if cell.badge then
+            local b = (spec.fav and not e.none and Fav.Is(spec.fav, e.key)) and '*' or ''
+            if cell.badgeText ~= b then
+                cell.badgeText = b
+                cell.badge:SetText(b)
+            end
+        end
         cell.text = e.name
     end
 
@@ -392,6 +503,12 @@ function Open(spec)
     local bGrid = d:Button('Grid', sideW + 8 + resW - 54, 30, 54, 22, function() S.view = 'grid' UserData.Set(memory, 'grid') ApplyView() Rebuild() end,
         { tip = 'Show the results as a grid of pictures.' })
 
+    -- the lists scroll: no picture is made in the background and no large preview is loaded until the wheel rests
+    local function Scrolled()
+        S.scrolledAt = GetSystemTimeSeconds()
+        Thumbs.Hold(0.2)
+    end
+
     -- the sidebar
     side = W.VirtualList(d.group, {
         rowH = 22, extra = true,
@@ -402,16 +519,29 @@ function Open(spec)
             local indent = Skin.S(8 + (r.depth or 0) * 12)
             local label = r.label
             if r.kind == 'head' then label = (r.collapsed and '+ ' or '- ') .. string.upper(string.sub(r.label, 1, 1)) .. string.sub(r.label, 2) end
-            W.Fit(row.text, label, math.max(Skin.S(40), row.bg.Width() - indent - Skin.S(46)))
-            row.text:SetColor((r.kind == 'head') and c.textDim or ((r.on and c.accent) or c.text))
+            W.FitCached(row.text, label, math.max(Skin.S(40), row.bg.Width() - indent - Skin.S(46)))
+            local tcol = (r.kind == 'head') and c.textDim or ((r.on and c.accent) or c.text)
+            if row.tcol ~= tcol then
+                row.tcol = tcol
+                row.text:SetColor(tcol)
+            end
             local ty = math.floor((row.bg.Height() - row.text.Height()) / 2)
-            row.text.Left:Set(function() return row.bg.Left() + indent end)
-            row.text.Top:Set(function() return row.bg.Top() + ty end)
+            if row.indent ~= indent or row.ty ~= ty then
+                row.indent, row.ty = indent, ty
+                row.text.Left:Set(function() return row.bg.Left() + indent end)
+                row.text.Top:Set(function() return row.bg.Top() + ty end)
+                row.extra.Top:Set(function() return row.bg.Top() + ty end)
+            end
             row.extra:SetText(r.count and tostring(r.count) or '')
-            row.extra:SetColor(c.textDim)
+            if not row.extraStyled then
+                row.extraStyled = true
+                row.extra:SetColor(c.textDim)
+            end
             local w2 = row.extra.Width()
-            row.extra.Left:Set(function() return row.bg.Right() - w2 - Skin.S(8) end)
-            row.extra.Top:Set(function() return row.bg.Top() + ty end)
+            if row.ew ~= w2 then
+                row.ew = w2
+                row.extra.Left:Set(function() return row.bg.Right() - w2 - Skin.S(8) end)
+            end
         end,
         onSelect = function(index)
             local r = S.rows[index]
@@ -441,6 +571,7 @@ function Open(spec)
         rowH = plain and 26 or 40, thumb = not plain, extra = true,
         getCount = function() return table.getn(S.shown) end,
         bind = Bind,
+        onScroll = Scrolled,
         onSelect = function(index) Take(S.shown[index]) end,
         onHover = function(index) if index then ShowPreview(S.shown[index]) end end,
     })
@@ -450,6 +581,7 @@ function Open(spec)
         cellW = 96, cellH = 112,
         getCount = function() return table.getn(S.shown) end,
         bind = CellBind,
+        onScroll = Scrolled,
         onSelect = function(index) Take(S.shown[index]) end,
         onHover = function(index) if index then ShowPreview(S.shown[index]) end end,
     })
@@ -499,6 +631,13 @@ function Open(spec)
     d:Button('Cancel', totalW - 100, totalH - 34, 86, 24, function() Dialog.Close() end, { tip = 'Close without choosing.' })
     d:Label('Click an entry to take it. Enter takes the first result. Esc closes.', 14, totalH - 30, { color = c.textDim, size = 'small' })
 
+    -- pictures that were made in the background: draw the visible rows again (assetthumbs.lua calls this at most every 0.2 s)
+    Thumbs.Listen('browser', function()
+        if closed then return end
+        if S.view == 'grid' then grid:Refresh() else list:Refresh() end
+        if S.hover and previewW > 0 then ShowPreview(S.hover) end
+    end)
+
     Rebuild()
     field:AcquireFocus()
     last = { state = S, rebuild = Rebuild, take = Take, entries = entries }
@@ -541,7 +680,7 @@ function OpenTextures(spec)
                 seen[key] = true
                 local name = string.gsub(path, '^.*/', '')
                 local folder = string.gsub(string.gsub(path, '/[^/]*$', ''), '^/', '')
-                table.insert(entries, { key = path, name = name, sub = folder, folder = folder, source = path, thumb = (spec.thumbs ~= false) and path or nil,
+                table.insert(entries, { key = path, name = name, sub = folder, folder = folder, source = path, thumb = (spec.thumbs ~= false) and path or nil, reduce = (spec.thumbs ~= false),
                                         tags = { type = TextureKind(key) } })
             end
         end

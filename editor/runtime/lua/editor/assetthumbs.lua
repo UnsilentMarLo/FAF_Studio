@@ -10,6 +10,8 @@
 --   Request(kind, key, source) -> vfs path | nil   the picture when it is in the cache; else nil and the request is queued (the most recent requests are served first)
 --   Cached(kind, key, source)  -> vfs path | nil   only what is on disk
 --   Listen(id, fn) / Unlisten(id)  fn is called (at most every 0.2 s) when pictures were made, so a panel can redraw
+--   Hold(seconds)              the background worker makes no picture for this long (a list that is being scrolled calls it on every wheel step: decoding a big DDS blocks the
+--                              frame, and the rows that scroll by are not wanted anyway)
 --   Pause(on)                  the renders wait while the unit viewer / a capture / a stroke needs the renderer
 --   Stats()                    { queued, made, failed, rendered, hits }
 --   Clear()                    forgets what is queued and failed (the files stay)
@@ -34,6 +36,11 @@ local queued = {}        -- id -> true
 local natives = {}       -- queued decals / textures
 local renders = {}       -- queued props
 local running = false
+local holdUntil = 0
+local nameCache = {}     -- kind|key -> { name, at, version, source }: Name() reads the source's time stamp from the disk and hashes the name three times, too much for every row of every scroll step
+local NAME_TTL = 5       -- seconds a cache name is trusted (a source file that changes is noticed after that)
+local MAX_NATIVE_QUEUE = 200
+local MAX_RENDER_QUEUE = 24
 local counts = { made = 0, failed = 0, rendered = 0, hits = 0 }
 local changedAt = false
 local infoPath = 'ed_thumb_info.txt'
@@ -77,8 +84,19 @@ local function Exists(name)
     return ok
 end
 
-function Cached(kind, key, source)
+--- Name() remembered for NAME_TTL seconds. Returns the name and the request id.
+local function NameOf(kind, key, source)
+    local id = kind .. '|' .. key
+    local now = GetSystemTimeSeconds()
+    local c = nameCache[id]
+    if c and c.version == Version and c.source == source and now - c.at < NAME_TTL then return c.name, id end
     local name = Name(kind, key, source)
+    nameCache[id] = { name = name, at = now, version = Version, source = source }
+    return name, id
+end
+
+function Cached(kind, key, source)
+    local name = NameOf(kind, key, source)
     if Exists(name) and Mount() then
         counts.hits = counts.hits + 1
         return '/edassets/' .. name
@@ -121,7 +139,7 @@ local function MakeNative(req)
     end
     local disk = ed_vfs_to_disk(req.source)
     local path = Dir() .. '/' .. req.name
-    local w = disk and ed_dds_thumb(disk, path, Size)
+    local w = disk and ed_dds_thumb and ed_dds_thumb(disk, path, Size)
     if w then
         known[req.name] = true
         counts.made = counts.made + 1
@@ -292,14 +310,14 @@ local function Worker()
     while true do
         local t0 = GetSystemTimeSeconds()
         local served = 0
-        while table.getn(natives) > 0 and GetSystemTimeSeconds() - t0 < 0.012 do
+        while table.getn(natives) > 0 and GetSystemTimeSeconds() - t0 < 0.012 and t0 >= holdUntil do
             local req = table.remove(natives)
             queued[req.id] = nil
             pcall(MakeNative, req)
             served = served + 1
         end
         if served > 0 then Changed() end
-        if table.getn(natives) == 0 and table.getn(renders) > 0 then
+        if table.getn(natives) == 0 and table.getn(renders) > 0 and t0 >= holdUntil then
             if CanRender() then
                 local req = table.remove(renders)
                 queued[req.id] = nil
@@ -336,27 +354,45 @@ local function Start()
 end
 
 function Request(kind, key, source)
-    local name = Name(kind, key, source)
+    local name, id = NameOf(kind, key, source)
+    if known[name] and Mount() then
+        counts.hits = counts.hits + 1
+        return '/edassets/' .. name
+    end
+    local waiting = queued[id]
+    if waiting then
+        -- asked again: the most recent request goes to the end (served first); a request that is last already stays
+        local list = (kind == 'props') and renders or natives
+        local n = table.getn(list)
+        if list[n] ~= waiting then
+            for i = n - 1, 1, -1 do
+                if list[i] == waiting then table.remove(list, i) table.insert(list, waiting) break end
+            end
+        end
+        return nil
+    end
+    if failedNames[name] then return nil end              -- failed before
     if Exists(name) and Mount() then
         counts.hits = counts.hits + 1
         return '/edassets/' .. name
     end
-    if failedNames[name] then return nil end              -- failed before
-    local id = kind .. '|' .. key
-    if queued[id] then
-        -- asked again: the most recent request goes to the end (served first)
-        local list = (kind == 'props') and renders or natives
-        for i, r in list do
-            if r.id == id then table.remove(list, i) table.insert(list, r) break end
-        end
-        return nil
-    end
-    queued[id] = true
     Mount()
     local req = { id = id, kind = kind, key = key, source = source, name = name }
-    if kind == 'props' then table.insert(renders, req) else table.insert(natives, req) end
+    queued[id] = req
+    local list = (kind == 'props') and renders or natives
+    table.insert(list, req)
+    -- a long scroll asks for thousands of pictures that are gone from the screen again before they are made: only the most recent requests are kept
+    if table.getn(list) > ((kind == 'props') and MAX_RENDER_QUEUE or MAX_NATIVE_QUEUE) then
+        local old = table.remove(list, 1)
+        queued[old.id] = nil
+    end
     Start()
     return nil
+end
+
+--- The worker makes no picture for `seconds` (see the header).
+function Hold(seconds)
+    holdUntil = GetSystemTimeSeconds() + (seconds or 0.15)
 end
 
 --- Test helper: renders one prop now (a THREAD) and returns the trace of the fitting steps.
@@ -409,6 +445,7 @@ end
 function Clear()
     natives, renders, queued = {}, {}, {}
     failedNames = {}
+    nameCache = {}
 end
 
 --- Test helper: forget what is known in memory (the files stay).
@@ -416,6 +453,8 @@ function Reset()
     Clear()
     known = {}
     failedNames = {}
+    nameCache = {}
+    holdUntil = 0
     mounted = false
     counts = { made = 0, failed = 0, rendered = 0, hits = 0 }
 end

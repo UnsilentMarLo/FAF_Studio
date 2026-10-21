@@ -386,8 +386,9 @@ function Button(parent, text, x, y, w, h, onClick, opts)
 end
 
 --- Virtual list: `opts.getCount()` items, `opts.bind(row, index, selected)` fills a pooled row (row.text is a Text control;
---- `row.bg` the row background), `opts.onSelect(index)`, `opts.onContext(index, x, y)` (right click), `opts.onHover(index)`, `opts.thumb = true` (a square `row.thumb` Bitmap at the left of each row), `opts.rowH` logical pixels. Scrolls by whole rows with the wheel
---- and an overlay scrollbar on the right edge. Methods: SetRect(x, y, w, h), Refresh(), SetSelected(i), ScrollTo(i), Destroy().
+--- `row.bg` the row background), `opts.onSelect(index)`, `opts.onContext(index, x, y)` (right click), `opts.onHover(index)`, `opts.thumb = true` (a square `row.thumb` Bitmap at the left of each row), `opts.rowH` logical pixels,
+--- `opts.onScroll()` (called on every wheel step / scrollbar move, before the rows are drawn). Scrolls by whole rows with the wheel
+--- and an overlay scrollbar on the right edge; several wheel steps within 30 ms are drawn once. Methods: SetRect(x, y, w, h), Refresh(), SetSelected(i), ScrollTo(i), Destroy().
 function VirtualList(parent, opts)
     local c = Skin.color
     local L = {
@@ -424,6 +425,28 @@ function VirtualList(parent, opts)
         return math.max(0, Count() - Visible())
     end
 
+    -- The offset changed by the wheel / the scrollbar: draw the rows. A wheel that delivers several steps per frame, or a drag that moves the pointer faster than the rows can be bound,
+    -- would rebind every row once per event: at most one draw per 30 ms, the rest is folded into one trailing draw.
+    local MIN_DRAW = 0.03
+    local function Scrolled()
+        if opts.onScroll then opts.onScroll() end
+        if L.pending then return end
+        local wait = MIN_DRAW - (GetSystemTimeSeconds() - (L.drawnAt or 0))
+        if wait <= 0 then
+            L:Refresh()
+            return
+        end
+        L.pending = true
+        ForkThread(function()
+            WaitSeconds(wait)
+            L.pending = false
+            if not L.destroyed then
+                local ok, err = pcall(L.Refresh, L)
+                if not ok then WARN('VirtualList refresh: ' .. tostring(err)) end
+            end
+        end)
+    end
+
     local function Wheel(self, event)
         if event.Type == 'WheelRotation' then
             -- a list that has nothing to scroll leaves the wheel to the panel that holds it
@@ -431,7 +454,7 @@ function VirtualList(parent, opts)
             local dir = 1
             if event.WheelRotation > 0 then dir = -1 end
             L.offset = math.max(0, math.min(MaxOffset(), L.offset + dir * 3))
-            L:Refresh()
+            Scrolled()
             return true
         end
         return false
@@ -498,6 +521,35 @@ function VirtualList(parent, opts)
         row.bg:SetSolidColor(col)
     end
 
+    -- the scrollbar thumb: one handler for the life of the list (it reads the state when the drag starts)
+    L.thumb.HandleEvent = function(self, event)
+        if event.Type == 'MouseEnter' then
+            L.thumbHot = true
+            self:SetSolidColor(c.accent)
+            return true
+        elseif event.Type == 'MouseExit' then
+            L.thumbHot = false
+            self:SetSolidColor(c.textDim)
+            return true
+        elseif event.Type == 'ButtonPress' then
+            local count, vis = Count(), Visible()
+            local thumbH = math.max(Skin.S(24), math.floor(L.h * vis / math.max(1, count)))
+            local range = L.h - thumbH
+            local startY, startOffset = event.MouseY, L.offset
+            local drag = Dragger()
+            drag.OnMove = function(d, x, y)
+                local per = range / math.max(1, count - vis)
+                local delta = math.floor((y - startY) / math.max(0.001, per) + 0.5)
+                L.offset = math.max(0, math.min(MaxOffset(), startOffset + delta))
+                Scrolled()
+            end
+            drag.OnRelease = function(d, x, y) d:Destroy() end
+            PostDragger(self:GetRootFrame(), event.KeyCode, drag)
+            return true
+        end
+        return false
+    end
+
     function L:UpdateScrollbar()
         local count, vis = Count(), Visible()
         if count <= vis then
@@ -511,36 +563,18 @@ function VirtualList(parent, opts)
         local range = trackH - thumbH
         local ty = math.floor(range * L.offset / math.max(1, count - vis))
         local tx = L.w - sw
-        L.track:SetSolidColor('50000000')
+        if L.barX ~= tx or L.barH ~= trackH or L.barW ~= sw then
+            L.barX, L.barH, L.barW = tx, trackH, sw
+            L.track:SetSolidColor('50000000')
+            Place(L.track, L.root, tx, 0, sw, trackH)
+        end
         L.thumb:SetSolidColor(L.thumbHot and c.accent or c.textDim)
-        Place(L.track, L.root, tx, 0, sw, trackH)
-        Place(L.thumb, L.root, tx, ty, sw, thumbH)
+        if L.thumbY ~= ty or L.thumbH ~= thumbH or L.thumbX ~= tx then
+            L.thumbY, L.thumbH, L.thumbX = ty, thumbH, tx
+            Place(L.thumb, L.root, tx, ty, sw, thumbH)
+        end
         L.track:Show()
         L.thumb:Show()
-        L.thumb.HandleEvent = function(self, event)
-            if event.Type == 'MouseEnter' then
-                L.thumbHot = true
-                self:SetSolidColor(c.accent)
-                return true
-            elseif event.Type == 'MouseExit' then
-                L.thumbHot = false
-                self:SetSolidColor(c.textDim)
-                return true
-            elseif event.Type == 'ButtonPress' then
-                local startY, startOffset = event.MouseY, L.offset
-                local drag = Dragger()
-                drag.OnMove = function(d, x, y)
-                    local per = range / math.max(1, count - vis)
-                    local delta = math.floor((y - startY) / math.max(0.001, per) + 0.5)
-                    L.offset = math.max(0, math.min(MaxOffset(), startOffset + delta))
-                    L:Refresh()
-                end
-                drag.OnRelease = function(d, x, y) d:Destroy() end
-                PostDragger(self:GetRootFrame(), event.KeyCode, drag)
-                return true
-            end
-            return false
-        end
     end
 
     function L:Refresh()
@@ -554,7 +588,11 @@ function VirtualList(parent, opts)
             local index = L.offset + i
             if i <= vis and index <= count then
                 row.index = index
-                Place(row.bg, L.root, 0, (i - 1) * L.rowH, rowW, L.rowH)
+                local gy = (i - 1) * L.rowH
+                if row.gy ~= gy or row.gw ~= rowW or row.gh ~= L.rowH then
+                    row.gy, row.gw, row.gh = gy, rowW, L.rowH
+                    Place(row.bg, L.root, 0, gy, rowW, L.rowH)
+                end
                 row.bg:Show()
                 row.text:Show()
                 if row.extra then row.extra:Show() end
@@ -570,6 +608,7 @@ function VirtualList(parent, opts)
             end
         end
         L:UpdateScrollbar()
+        L.drawnAt = GetSystemTimeSeconds()
     end
 
     function L:SetRect(x, y, w, h)
@@ -591,6 +630,7 @@ function VirtualList(parent, opts)
     end
 
     function L:Destroy()
+        L.destroyed = true
         L.root:Destroy()
     end
     return L
@@ -647,13 +687,34 @@ end
 --- long would run into the next panel).
 function Fit(label, text, maxW)
     label:SetText(text)
-    if label.Width() <= maxW then return end
-    local n = string.len(text)
-    while n > 1 do
-        n = n - 1
-        label:SetText(string.sub(text, 1, n) .. '...')
-        if label.Width() <= maxW then return end
+    if label.Width() <= maxW or string.len(text) < 2 then return end
+    -- the longest cut that fits (the width grows with the length: a binary search, a handful of measurements instead of one per character); at least one character and "..."
+    local lo, hi = 1, string.len(text) - 1
+    while lo < hi do
+        local mid = math.floor((lo + hi + 1) / 2)
+        label:SetText(string.sub(text, 1, mid) .. '...')
+        if label.Width() <= maxW then lo = mid else hi = mid - 1 end
     end
+    label:SetText(string.sub(text, 1, lo) .. '...')
+end
+
+local fitCache, fitCount = {}, 0
+
+--- Fit() for rows that are bound again and again (a scrolled list): the cut text is remembered per (font height, width, text), so a name seen before costs no measuring, and a label that
+--- shows the text already is not touched.
+function FitCached(label, text, maxW)
+    text = tostring(text or '')
+    local key = label.Height() .. '|' .. maxW .. '|' .. text
+    local cut = fitCache[key]
+    if cut == nil then
+        Fit(label, text, maxW)
+        cut = label:GetText()
+        if fitCount >= 8000 then fitCache, fitCount = {}, 0 end
+        fitCache[key] = cut
+        fitCount = fitCount + 1
+        return
+    end
+    if label:GetText() ~= cut then label:SetText(cut) end
 end
 
 --- Word-wrapped text: one label per line, `maxW` pixels wide at most, `lineH` pixels apart, nothing below `maxBottom` when given. Returns the list of labels and the y below

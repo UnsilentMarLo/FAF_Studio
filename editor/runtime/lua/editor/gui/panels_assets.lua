@@ -139,12 +139,40 @@ Panels.Register{
             bind = function(cell, index, selected)
                 local e = P.shown[index]
                 local tex = Cat.Thumb(e)
-                if tex then cell.thumb:SetTexture(tex) else cell.thumb:SetSolidColor(TileColor(e)) end
-                cell.mark:SetText(tex and '' or string.upper(string.sub(e.sub ~= '' and e.kind == 'units' and e.sub or e.name, 1, 4)))
+                -- (a cell keeps what it shows: a picture is set again only when it changed)
+                if tex then
+                    if cell.tex ~= tex then
+                        cell.tex = tex
+                        cell.solid = false
+                        cell.thumb:SetTexture(tex)
+                    end
+                else
+                    local col = TileColor(e)
+                    if cell.tex or cell.solid ~= col then
+                        cell.tex = false
+                        cell.solid = col
+                        cell.thumb:SetSolidColor(col)
+                    end
+                end
+                local mark = tex and '' or string.upper(string.sub(e.sub ~= '' and e.kind == 'units' and e.sub or e.name, 1, 4))
+                if cell.markText ~= mark then
+                    cell.markText = mark
+                    cell.mark:SetText(mark)
+                end
                 cell.text = e.name
-                cell.label:SetColor(Cat.IsActive(e) and c.accent or c.text)
-                cell.badge:SetText(Fav.Is(e.kind, e.key) and '*' or '')
+                local lcol = Cat.IsActive(e) and c.accent or c.text
+                if cell.lcol ~= lcol then
+                    cell.lcol = lcol
+                    cell.label:SetColor(lcol)
+                end
+                local badge = Fav.Is(e.kind, e.key) and '*' or ''
+                if cell.badgeText ~= badge then
+                    cell.badgeText = badge
+                    cell.badge:SetText(badge)
+                end
             end,
+            -- a scrolling grid asks for many pictures that are gone again a moment later: the background worker waits until the wheel rests
+            onScroll = function() Thumbs.Hold(0.2) end,
             onHover = function(index)
                 P.hover = index and P.shown[index] or nil
                 P:ShowPreview(P.hover or P.selected)
@@ -213,6 +241,7 @@ Panels.Register{
 
         function P:ShowPreview(e)
             if not e then
+                P.pvTex = false
                 P.pThumb:SetSolidColor(c.panelAlt)
                 P.pName:SetText('Nothing selected')
                 P.pSub:SetText('')
@@ -221,17 +250,25 @@ Panels.Register{
                 return
             end
             local tex = Cat.Thumb(e)
-            if tex then P.pThumb:SetTexture(tex) else P.pThumb:SetSolidColor(TileColor(e)) end
+            if tex then
+                if P.pvTex ~= tex then
+                    P.pvTex = tex
+                    P.pThumb:SetTexture(tex)
+                end
+            else
+                P.pvTex = false
+                P.pThumb:SetSolidColor(TileColor(e))
+            end
             local textW = P.textW or Skin.S(120)
-            W.Fit(P.pName, e.name, textW)
-            W.Fit(P.pSub, KindLabel(e.kind) .. (e.sub ~= '' and ('  -  ' .. e.sub) or ''), textW)
+            W.FitCached(P.pName, e.name, textW)
+            W.FitCached(P.pSub, KindLabel(e.kind) .. (e.sub ~= '' and ('  -  ' .. e.sub) or ''), textW)
             local tags = {}
             for _, f in Cat.Facets(e.kind) do
                 if e.tags[f[1]] then table.insert(tags, e.tags[f[1]]) end
             end
-            W.Fit(P.pTags, table.concat(tags, ', '), textW)
+            W.FitCached(P.pTags, table.concat(tags, ', '), textW)
             local path = e.source or e.key
-            W.Fit(P.pPath, string.gsub(path, '^.*/', ''), textW)
+            W.FitCached(P.pPath, (string.gsub(path, '^.*/', '')), textW)
             P.star:SetText(Fav.Is(e.kind, e.key) and 'Unstar' or 'Star')
         end
 
