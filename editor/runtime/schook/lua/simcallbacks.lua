@@ -90,7 +90,8 @@ do
             end
         end
 
-        local props = GetReclaimablesInRect(rect)
+        -- the UI says when the map has no props at all (ed_prop_count() == 0, sim.lua): then the rectangle is not searched
+        local props = (not data.noProps) and GetReclaimablesInRect(rect) or nil
         if props then
             for _, e in props do
                 if e and not e:BeenDestroyed() then
@@ -181,6 +182,13 @@ do
         if ok and unit and data.group and data.group ~= 'INITIAL' and string.sub(data.group, 1, 8) ~= 'INITIAL/' then
             ScenarioInfo.EditorGroupUnits = ScenarioInfo.EditorGroupUnits or {}
             table.insert(ScenarioInfo.EditorGroupUnits, unit)
+        end
+    end
+
+    --- Map load: EdSpawnUnit for a list of units (data.list, each one the Args of an EdSpawnUnit call): one callback for a few hundred units instead of one each.
+    Callbacks.EdSpawnUnits = function(data)
+        for _, u in data.list or {} do
+            Callbacks.EdSpawnUnit(u)
         end
     end
 

@@ -354,7 +354,10 @@ function Button(parent, text, x, y, w, h, onClick, opts)
         self.label:SetColor((self.on and c.textOn) or opts.color or c.text)
     end
     b.SetOn = function(self, on)
+        -- panels set the state of every button on each refresh tick: an unchanged state is not painted again (a colour and a text colour per call)
+        if self.on == on and self.painted then return end
         self.on = on
+        self.painted = true
         self:Refresh()
     end
     b.SetText = function(self, s)
@@ -775,6 +778,7 @@ function Slider(parent, opts)
     end
     local function Apply(v)
         opts.set(Snap(v))
+        S.drawnKey = nil
         S:Refresh()
     end
 
@@ -803,7 +807,7 @@ function Slider(parent, opts)
     S.field = TextField(parent, 0, 0, Skin.S(52), Skin.S(22), {
         onEnter = function(text)
             local v = tonumber(text)
-            if v then Apply(v) else S:Refresh() end
+            if v then Apply(v) else S.drawnKey = nil S:Refresh() end
         end,
         tip = Detail('Type a value and press Enter.'),
     })
@@ -847,6 +851,7 @@ function Slider(parent, opts)
     end
 
     function S:Place(x, y, w)
+        S.drawnKey = nil
         S.x, S.y, S.w = x, y, w
         CullBox(y, Skin.S(44))    -- all parts of the slider appear and disappear together at the edge of a scrolled panel
         local bh, gap, fw = Skin.S(22), Skin.S(4), Skin.S(52)
@@ -876,6 +881,11 @@ function Slider(parent, opts)
 
     function S:Refresh()
         local v = opts.get()
+        -- Panels refresh all their sliders four times a second: a slider whose value and place did not change is not laid out again (two Place calls rebuild four layout closures,
+        -- and the field's text is set again). Place, Apply and a refused entry clear the key.
+        local key = tostring(v) .. '|' .. tostring(S.trackLeft) .. '|' .. tostring(S.trackW) .. '|' .. tostring(S.y)
+        if key == S.drawnKey then return end
+        S.drawnKey = key
         local t = ToT(v)
         local bh, th, tw = Skin.S(22), Skin.S(6), Skin.S(10)
         CullBox(S.y or 0, Skin.S(44))

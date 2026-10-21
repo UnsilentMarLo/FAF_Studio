@@ -101,7 +101,7 @@ function Context(skip)
     if ok and x0 then ctx.play = { x0, z0, x1, z1 } else ctx.play = { 0, 0, ctx.w, ctx.h } end
     ctx.grid = {}
     local n = 0
-    for _, u in Units().All() do
+    for _, u in Units().CachedAll() do
         local bp = Blueprint(u.bp)
         if bp and IsStructure(bp) and not (skip and skip[u.army .. '|' .. u.name]) then
             local foot, skirt = Rects(bp, u.x, u.z, u.heading)

@@ -147,6 +147,14 @@ function NewHost(frame, ctx)
             holder.Left:Set(-20000)
             holder.Top:Set(-20000)
         end
+        -- A panel behind another tab is not refreshed by the shell's tick (its lists were re-bound and its sliders re-placed four times a second for nothing): its Refresh does
+        -- nothing until the tab is shown again (PlaceHolder gives it back).
+        local inst = H.instances[id]
+        if inst and not inst.hiddenTab and not inst.dead and inst.Refresh then
+            inst.hiddenTab = true
+            inst.shownRefresh = inst.Refresh
+            inst.Refresh = function() end
+        end
     end
 
     function H:PlaceHolder(id, x, y, w, h)
@@ -161,6 +169,13 @@ function NewHost(frame, ctx)
         if not holder then return end
         W.Place(holder, self.root, x, y, w, h)
         local inst = self.instances[id]
+        if inst and inst.hiddenTab then
+            -- the tab is back: its Refresh works again, and runs once now (what changed while it was behind another tab)
+            inst.hiddenTab = false
+            inst.Refresh = inst.shownRefresh
+            inst.shownRefresh = nil
+            if inst.Refresh and inst.sizedW ~= nil then pcall(inst.Refresh, inst) end
+        end
         -- a panel is only told when its size really changed: switching tabs or re-laying the dock out must not rebuild its controls
         -- (scroll positions, edited text and selections would be lost)
         if inst and inst.OnResize and (inst.sizedW ~= w or inst.sizedH ~= h) then

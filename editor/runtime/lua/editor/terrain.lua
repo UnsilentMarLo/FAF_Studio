@@ -65,6 +65,10 @@ local strokeLevel = nil
 local strokeOpen = false
 local strokeTurn = 0       -- the random extra turn of the shape mask in this stroke (degrees)
 
+-- The derived numbers of the round profile for the last (radius, falloff, softMin): Weight is called once per sample of a dab (and of a preview), so the clamps and
+-- min / max calls are done when one of the three changes, not per call.
+local wRadius, wFalloff, wSoft, wInner, wWidth = nil, nil, nil, 0, 1
+
 --- The weight of a dab `distance` world units from the brush centre. `softMin` (default 1) is the narrowest edge the brush may have, one cell of
 --- the grid it works on, so a flat brush does not leave a staircase.
 local function Weight(distance, radius, softMin, dx, dz)
@@ -75,13 +79,35 @@ local function Weight(distance, radius, softMin, dx, dz)
         return Brushes.Weight(Brushes.Active, dx, dz, radius, strokeTurn)       -- a shape mask replaces the falloff profile
     end
     local f = Brush.falloff
-    if f < 0 then f = 0 elseif f > 1 then f = 1 end
-    local width = math.min(radius, math.max(radius * f, softMin or 1))
-    local inner = radius - width
-    if distance <= inner then
+    local soft = softMin or 1
+    if radius ~= wRadius or f ~= wFalloff or soft ~= wSoft then
+        wRadius, wFalloff, wSoft = radius, f, soft
+        if f < 0 then f = 0 elseif f > 1 then f = 1 end
+        wWidth = math.min(radius, math.max(radius * f, soft))
+        wInner = radius - wWidth
+    end
+    if distance <= wInner then
         return 1
     end
-    return 0.5 * (1 + math.cos(PI * (distance - inner) / width))
+    return 0.5 * (1 + math.cos(PI * (distance - wInner) / wWidth))
+end
+
+local PROFILE_STEPS = 8
+local profileRadius, profileFalloff, profileTable = nil, nil, nil
+
+--- The round brush's weight at the distances k / 8 (k = 0 ..), as a table [0 ..] cached for the current radius and falloff: the brush preview (overlay.lua) reads it with a
+--- linear interpolation instead of one Weight call per sample. Returns the table and the number of steps per world unit.
+function RoundProfile(radius)
+    if radius ~= profileRadius or Brush.falloff ~= profileFalloff or not profileTable then
+        profileRadius, profileFalloff = radius, Brush.falloff
+        local t = {}
+        local n = math.ceil(radius * PROFILE_STEPS) + 2
+        for k = 0, n do
+            t[k] = Weight(k / PROFILE_STEPS, radius, 1)
+        end
+        profileTable = t
+    end
+    return profileTable, PROFILE_STEPS
 end
 
 --- The weight a dab gives a height sample `distance` world units from the brush centre (what the preview draws).
@@ -92,13 +118,23 @@ function BrushWeight(distance, radius, dx, dz)
     return Weight(distance, radius, nil, dx, dz)
 end
 
--- tiny deterministic hash noise in -1..1 (the sim is not involved, but edits should be reproducible)
+-- Deterministic hash noise in -1..1 (the sim is not involved, but edits should be reproducible). Lua numbers are 32-bit floats: every intermediate here stays below 2^24, so the
+-- result is exact. (The first hash multiplied by 374761393 and took math.mod: the product lost its low bits in a float and the hash was -1 nearly everywhere.)
+-- ed_terrain_brush (moho/editor/EdBrush.h, Noise) computes the same numbers with integers: keep the two in step.
 local function Noise(x, z, seed)
-    local n = x * 374761393 + z * 668265263 + seed * 2147483
-    n = math.mod(n, 2147483647)
-    n = math.mod(n * 1103515245 + 12345, 2147483647)
-    return (math.mod(n, 20001) / 10000) - 1
+    local a = math.mod(math.mod(x, 4093) * 1103 + 17, 4093)
+    local b = math.mod(math.mod(z, 4091) * 1999 + 31, 4091)
+    local c = math.mod(math.mod(seed, 4079) * 997 + 5, 4079)
+    local n = math.mod(a * 4001 + b, 4093)
+    n = math.mod(n * n + c, 4093)
+    n = math.mod(n * n + a, 4093)
+    n = math.mod(n * n + b, 4093)
+    return n / 4093 * 2 - 1
 end
+
+--- Whether the height brushes use the native dab (ed_terrain_brush, moho/editor/EdBrush.cpp) when the exe has it. false forces the Lua loop below (tests compare the two).
+NativeBrush = true
+local NATIVE_MODES = { raise = true, lower = true, plateau = true, flatten = true, smooth = true, noise = true }
 
 local function IsPaint()
     return Brush.mode == 'paint' or Brush.mode == 'erase' or Brush.mode == 'stamp_paint'
@@ -109,6 +145,11 @@ local strokeType = false      -- the open stroke paints terrain types (their own
 local strokeProp = false      -- the open stroke places or erases props (props.lua)
 local strokeDecal = false     -- the open stroke places or erases decals (decals.lua)
 local strokeErode = false     -- the open stroke runs the erosion session (erosionbrush.lua)
+
+--- Test control only: the next BeginStroke gets this stroke id (the noise brush's seed), so two runs of a stroke can be compared.
+function SetNextStrokeId(id)
+    strokeId = id - 1
+end
 
 function BeginStroke()
     strokeId = strokeId + 1
@@ -158,6 +199,7 @@ function EndStroke()
         end
         ed_cmd_end()
     end
+    Sim.FlushResnap()       -- the units under the stroke follow the terrain now (the dabs only collected their rectangles, sim.lua ResnapLater)
 end
 
 --- Applies the current brush once at world position (cx, cz) and at its symmetry images (symmetry.lua). Returns the number of samples written.
@@ -205,8 +247,28 @@ function DabOne(cx, cz, slot, image)
             shaped = function(dx, dz) return Weight(math.sqrt(dx * dx + dz * dz), Brush.radius, nil, dx, dz) end
         end
         local changed, x0, z0, x1, z1 = EroBrush.Dab(cx, cz, Brush, Brush.mode, inverted, shaped)
-        if changed > 0 then Sim.Resnap(x0, z0, x1, z1) end
+        if changed > 0 then Sim.ResnapLater(x0, z0, x1, z1) end
         return changed
+    end
+    local nativeBrush = NativeBrush and NATIVE_MODES[Brush.mode] and Brushes.Active == 'round' and rawget(_G, 'ed_terrain_brush')
+    if nativeBrush then
+        -- One native call does the whole dab (read the window, the brush math, EditHeights on the document); the Lua loop below is the same maths for shaped brushes and an exe without it.
+        local inverted = (Brush.sign or 1) < 0
+        if IsKeyDown and IsKeyDown('Shift') then inverted = not inverted end
+        local level = strokeLevel
+        if level == nil and (Brush.mode == 'flatten' or Brush.mode == 'plateau') then
+            level = Brush.level
+        end
+        local changed, x0, z0, x1, z1, used = nativeBrush(cx, cz, Brush.radius, Brush.mode, Brush.strength, inverted and -1 or 1, Brush.falloff, level or -1, strokeId)
+        if changed ~= nil then
+            if used ~= nil and strokeLevel == nil then
+                strokeLevel = used          -- the flatten level of the stroke: the first dab's (Brush.level or the ground under it)
+            end
+            if changed > 0 then
+                Sim.ResnapLater(x0, z0, x1, z1)
+            end
+            return changed
+        end
     end
     local r = Brush.radius
     local words, x0, z0, x1, z1 = ed_terrain_read_rect(math.floor(cx - r) - 1, math.floor(cz - r) - 1,
@@ -330,7 +392,7 @@ function DabOne(cx, cz, slot, image)
     if ed_doc_height_write(x0, z0, x1, z1, after) == 0 then
         return 0
     end
-    Sim.Resnap(x0, z0, x1, z1)
+    Sim.ResnapLater(x0, z0, x1, z1)
     return changed
 end
 

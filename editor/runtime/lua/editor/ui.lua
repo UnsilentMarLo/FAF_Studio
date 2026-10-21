@@ -326,6 +326,8 @@ function BeginStroke()
     State.strokeDepth = Terrain.UndoDepth()
     Terrain.BeginStroke()
     State.lastDab = nil
+    State.strokeTarget = nil
+    State.dabTime = 0
 end
 
 --- Records an edit made outside the tools (the layers panel): { label, undo, redo }.
@@ -336,6 +338,8 @@ function PushEdit(entry)
 end
 
 function EndStroke()
+    PumpStroke(true)          -- the distance the frame budget left over: the stroke ends where the mouse was released
+    State.strokeTarget = nil
     Terrain.EndStroke()
     local notice = Strata.TakeNotice()
     if notice then
@@ -364,8 +368,26 @@ function EndStroke()
     State.lastDab = nil
 end
 
---- Continues a stroke with spacing: dab only when the cursor moved far enough from the last dab.
-function StrokeMove(x, z)
+local STROKE_BUDGET = 0.006       -- seconds of dabs per frame: a fast mouse never stalls a frame, the rest of the distance is dabbed in the next frames
+local STROKE_MAX_DABS = 60        -- and at most this many in one go (the clock of a long session has a coarse resolution)
+
+local function Clock()
+    local now = rawget(_G, 'GetSystemTimeSeconds')
+    return now and now() or 0
+end
+
+--- Lays the dabs between the last dab and the stroke's target (the latest mouse position) at an even spacing, for as long as this frame's time budget lasts.
+--- What is left over stays between `State.lastDab` and `State.strokeTarget`; the per-frame tick (FinishCreate) calls this again. `unlimited` (the end of a stroke)
+--- dabs everything that is left (up to 200 dabs). Returns the samples changed.
+function PumpStroke(unlimited)
+    local target, last = State.strokeTarget, State.lastDab
+    if not target or not last then
+        return 0
+    end
+    local used = State.dabTime or 0
+    if not unlimited and used >= STROKE_BUDGET then
+        return 0
+    end
     -- Dabs are laid along the path of the mouse at an even spacing, however fast it moved (one dab per mouse event left gaps and a staircase edge);
     -- the texture brush dabs closer (it is soft, and its mask has coarse cells).
     local r = Terrain.Brush.radius
@@ -374,27 +396,43 @@ function StrokeMove(x, z)
     local isStamp = (mode == 'stamp' or mode == 'stamp_paint')
     local spacing = math.max(1, ((mode == 'paint' or mode == 'erase') and r / 4) or r / 3)
     if isStamp then spacing = import('/lua/editor/stamp.lua').Spacing() end         -- the stamp's own spacing (percent of its width)
-    local last = State.lastDab
-    if not last then
-        State.lastDab = { x, z }
-        local first = Terrain.Dab(x, z)
-        if mode == 'paint' or mode == 'erase' or mode == 'stamp_paint' then Strata.Flush() end
-        return first
-    end
-    local dx = x - last[1]
-    local dz = z - last[2]
+    local dx = target[1] - last[1]
+    local dz = target[2] - last[2]
     local dist = math.sqrt(dx * dx + dz * dz)
     if dist < spacing then
         return 0
     end
     local count = math.min(200, math.floor(dist / spacing))
+    local ux, uz = dx / dist * spacing, dz / dist * spacing
+    local ax, az = last[1], last[2]
     local total = 0
-    for i = 1, count do
-        total = total + Terrain.Dab(last[1] + dx / dist * spacing * i, last[2] + dz / dist * spacing * i)
+    local done = 0
+    local t0 = Clock()
+    while done < count do
+        done = done + 1
+        total = total + Terrain.Dab(ax + ux * done, az + uz * done)
+        if not unlimited and done < count and (done >= STROKE_MAX_DABS or used + (Clock() - t0) >= STROKE_BUDGET) then
+            break
+        end
     end
-    State.lastDab = { last[1] + dx / dist * spacing * count, last[2] + dz / dist * spacing * count }
+    State.dabTime = used + (Clock() - t0)
+    State.lastDab = { ax + ux * done, az + uz * done }
     if mode == 'paint' or mode == 'erase' or mode == 'stamp_paint' then Strata.Flush() end
     return total
+end
+
+--- Continues a stroke: the first call dabs at once, later ones only note where the mouse is and dab along the way within the frame's time budget (PumpStroke).
+function StrokeMove(x, z)
+    local mode = Terrain.Brush.mode
+    if not State.lastDab then
+        State.lastDab = { x, z }
+        State.strokeTarget = { x, z }
+        local first = Terrain.Dab(x, z)
+        if mode == 'paint' or mode == 'erase' or mode == 'stamp_paint' then Strata.Flush() end
+        return first
+    end
+    State.strokeTarget = { x, z }
+    return PumpStroke(false)
 end
 
 function PlaceMarkerAt(x, z)
@@ -1103,6 +1141,11 @@ local function FinishCreate(frame)
     ui.tick:DisableHitTest()
     ui.tick:SetNeedsFrameUpdate(true)
     ui.tick.OnFrame = function(self, delta)
+        -- a brush stroke in progress: dab what the last frames' time budget left over between the last dab and the mouse (PumpStroke)
+        State.dabTime = 0
+        if State.strokeTarget then
+            PumpStroke(false)
+        end
         -- the game's own start-up (layout, expand animations) can re-show the HUD after Create(): keep it hidden
         if State.mode == 'edit' then
             GameUIHidden(true)

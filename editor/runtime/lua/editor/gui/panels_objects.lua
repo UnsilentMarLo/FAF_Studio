@@ -106,7 +106,8 @@ Panels.Register{
         })
         function P:Refresh()
             local i = IndexOf(Tools.MarkerType)
-            if i then P.list:SetSelected(i) end
+            -- (SetSelected binds every visible row again: only when the choice moved)
+            if i and P.list.selected ~= i then P.list:SetSelected(i) end
         end
         function P:OnResize(w, h)
             local pad = Skin.S(6)
@@ -192,8 +193,16 @@ Panels.Register{
             local sel = tostring(Tools.Selection.kind) .. tostring(Tools.Selection.name)
             local fkey = tostring(F.text) .. tostring(F.markers) .. tostring(F.areas) .. tostring(F.chains)
             if not force and Tools.Changed == P.seen and sel == P.sel and fkey == P.fkey and Chains.Revision == P.chainRev then return end
-            P.seen, P.sel, P.fkey, P.chainRev = Tools.Changed, sel, fkey, Chains.Revision
-            Build()
+            -- The list is built again (every marker, area and chain of the map: thousands of rows' worth of strings) when the filter or the chains changed, or when the objects
+            -- changed and the last build is older than 0.75 s: a marker dragged over the map moves Tools.Changed every frame. A changed selection alone only moves the highlight.
+            local now = GetSystemTimeSeconds()
+            local rebuild = force or fkey ~= P.fkey or Chains.Revision ~= P.chainRev or (Tools.Changed ~= P.seen and now - (P.builtAt or -10) > 0.75)
+            if not rebuild and sel == P.sel then return end
+            P.sel = sel
+            if rebuild then
+                P.seen, P.fkey, P.chainRev, P.builtAt = Tools.Changed, fkey, Chains.Revision, now
+                Build()
+            end
             local found = false
             for i, it in P.items do
                 if it.kind == Tools.Selection.kind and it.name == Tools.Selection.name then

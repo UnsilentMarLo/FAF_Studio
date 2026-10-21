@@ -181,16 +181,7 @@ end
 
 --- A stamp that changes whenever the cached list would be rebuilt for another reason than its age: for callers that want to skip their own work (the overlay's key).
 function Stamp()
-    return Rev * 4096 + History.Version
-end
-
-local function NewName()
-    local max = 0
-    for _, u in CachedAll() do
-        local n = tonumber(string.sub(u.name, 6))
-        if string.find(u.name, '^UNIT_%d+$') and n and n > max then max = n end
-    end
-    return 'UNIT_' .. (max + 1)
+    return Rev .. ':' .. History.Version
 end
 
 -- ---- the sim's entity ----------------------------------------------------------------------------------------------------------------------
@@ -255,8 +246,9 @@ function Place(x, z)
         return 0
     end
     local placed = {}
+    local names = NameCounter()
     for _, p in Symmetry.Points(x, z) do
-        local u = { army = ArmyName, group = Group, name = NewName(), bp = Active, x = p.x, z = p.z, y = Ground(p.x, p.z), heading = Symmetry.Heading(0, p) }
+        local u = { army = ArmyName, group = Group, name = names(), bp = Active, x = p.x, z = p.z, y = Ground(p.x, p.z), heading = Symmetry.Heading(0, p) }
         if Add(u) then table.insert(placed, u) end
     end
     if table.getn(placed) == 0 then return 0 end
@@ -342,8 +334,11 @@ end
 
 local function Transform(label, change)
     local pairsList = {}
-    for _, sel in Selection do
-        local old = Find(sel)
+    -- every selected unit is looked up before the first one changes (a change makes the cache rebuild: once per unit would be one All() each)
+    local olds = {}
+    for i, sel in Selection do olds[i] = Find(sel) end
+    for i, sel in Selection do
+        local old = olds[i]
         if old then
             local new = change(Copy(old))
             if new then
@@ -467,9 +462,22 @@ end
 --- At map load: the units of the groups the script does not spawn by itself (everything but INITIAL and WRECKAGE) get their editor entities, so they can be seen and edited.
 function SpawnGroupEntities()
     local n = 0
-    for _, u in All() do
-        if not GameSpawns(u.group) and u.group ~= 'WRECKAGE' and string.sub(u.group or '', 1, 9) ~= 'WRECKAGE/' then SpawnEntity(u) n = n + 1 end
+    -- a hundred units per callback (EdSpawnUnits in schook/lua/simcallbacks.lua): a mission map has ~2000 of them, and one callback each cost seconds at load
+    local batch = {}
+    local function Flush()
+        if table.getn(batch) > 0 then
+            SimCallback({ Func = 'EdSpawnUnits', Args = { list = batch } }, false)
+            batch = {}
+        end
     end
+    for _, u in All() do
+        if not GameSpawns(u.group) and u.group ~= 'WRECKAGE' and string.sub(u.group or '', 1, 9) ~= 'WRECKAGE/' then
+            table.insert(batch, { bp = u.bp, army = u.army, x = u.x, y = u.y, z = u.z, heading = u.heading, group = u.group or 'INITIAL' })
+            n = n + 1
+            if table.getn(batch) >= 100 then Flush() end
+        end
+    end
+    Flush()
     return n
 end
 
@@ -512,8 +520,12 @@ function SelectBox(box, additive)
     local minx, maxx = math.min(box[1], box[3]), math.max(box[1], box[3])
     local minz, maxz = math.min(box[2], box[4]), math.max(box[2], box[4])
     if not additive then Selection = {} end
-    for _, u in All() do
-        if u.x >= minx and u.x <= maxx and u.z >= minz and u.z <= maxz and not IsSelected(u) then
+    local have = {}          -- (the selection grows in the loop: IsSelected would rebuild its set for every unit)
+    for _, q in Selection do have[q.army .. '\1' .. q.name] = true end
+    for _, u in CachedAll() do
+        local key = u.army .. '\1' .. u.name
+        if u.x >= minx and u.x <= maxx and u.z >= minz and u.z <= maxz and not have[key] then
+            have[key] = true
             table.insert(Selection, { army = u.army, name = u.name })
         end
     end
@@ -565,11 +577,12 @@ end
 --- Adds copies of `list` moved by (dx, dz) (same army, new names) as one undo entry and selects them. Returns the number added.
 function Paste(list, dx, dz)
     local added = {}
+    local names = NameCounter()          -- (NewName per unit would look at every unit of the map again each time)
     for _, d in list do
         local u = Copy(d)
         u.x, u.z = d.x + dx, d.z + dz
         u.y = Ground(u.x, u.z)
-        u.name = NewName()
+        u.name = names()
         if Add(u) then table.insert(added, u) end
     end
     if table.getn(added) == 0 then return 0 end

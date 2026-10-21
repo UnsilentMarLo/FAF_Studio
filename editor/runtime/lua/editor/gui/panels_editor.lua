@@ -169,8 +169,17 @@ Panels.Register{
                 local w = Terrain.BrushWeight(d, B.radius, d, 0)
                 local h = math.max(1, math.floor(gh * w))
                 local g = math.floor(255 * math.min(1, w * scale + 0.15))
-                bar:SetSolidColor(string.format('ff%02x%02x%02x', g, g, g))
-                W.Place(bar, group, gx + (i - 1) * bw, gy + gh - h, bw - 1 > 0 and bw - 1 or bw, h)
+                -- (a bar that did not change is left alone: placing one rebuilds four layout closures, and this runs four times a second)
+                local col = string.format('ff%02x%02x%02x', g, g, g)
+                if bar.shownCol ~= col then
+                    bar.shownCol = col
+                    bar:SetSolidColor(col)
+                end
+                local bx, by, bwid = gx + (i - 1) * bw, gy + gh - h, (bw - 1 > 0 and bw - 1 or bw)
+                if bar.shownX ~= bx or bar.shownY ~= by or bar.shownW ~= bwid or bar.shownH ~= h then
+                    bar.shownX, bar.shownY, bar.shownW, bar.shownH = bx, by, bwid, h
+                    W.Place(bar, group, bx, by, bwid, h)
+                end
             end
         end
         function P:OnResize(w, h)

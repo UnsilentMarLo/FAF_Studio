@@ -91,6 +91,47 @@ function Run()
     T.Undo()
     check('corner undo', ed_terrain_get(0, 0) == 25)
 
+    -- the native dab (ed_terrain_brush) gives the Lua loop's heights: the same strokes with T.NativeBrush on and off, compared word for word (up to one word of float rounding)
+    if rawget(_G, 'ed_terrain_brush') then
+        local savedBrush = { mode = T.Brush.mode, radius = T.Brush.radius, strength = T.Brush.strength, falloff = T.Brush.falloff, level = T.Brush.level }
+        local function Run(mode, native)
+            ed_terrain_set_rect(0, 0, w - 1, h - 1, 25)
+            ed_terrain_raise(95, 95, 12, 6)
+            ed_terrain_raise(110, 102, 9, -4)
+            ed_terrain_raise(104, 118, 15, 5)
+            T.ClearHistory()
+            T.NativeBrush = native
+            T.Brush.mode = mode
+            T.Brush.radius = 13.5
+            T.Brush.strength = (mode == 'smooth') and 6 or 2.5
+            T.Brush.falloff = 0.7
+            T.Brush.level = nil
+            T.SetNextStrokeId(1000)
+            T.BeginStroke()
+            local total = T.Dab(100.3, 100.6) + T.Dab(108, 104.25) + T.Dab(106.5, 112)
+            T.EndStroke()
+            local words = ed_terrain_read_rect(70, 70, 140, 140)
+            T.NativeBrush = true
+            return words, total
+        end
+        for _, mode in { 'raise', 'lower', 'plateau', 'flatten', 'smooth', 'noise' } do
+            local lua, luaChanged = Run(mode, false)
+            local nat, natChanged = Run(mode, true)
+            local differ, worst = 0, 0
+            for i = 1, 71 * 71 do
+                local d = math.abs(lua[i] - nat[i])
+                if d > 0 then differ = differ + 1 end
+                if d > worst then worst = d end
+            end
+            check('native ' .. mode .. ' dab = the Lua loop', worst <= 1 and differ <= 20 and luaChanged > 0 and natChanged > 0,
+                  differ .. ' words differ, worst ' .. worst .. ', changed lua ' .. tostring(luaChanged) .. ' native ' .. tostring(natChanged))
+        end
+        T.NativeBrush = true
+        T.Brush.mode, T.Brush.radius, T.Brush.strength, T.Brush.falloff, T.Brush.level = savedBrush.mode, savedBrush.radius, savedBrush.strength, savedBrush.falloff, savedBrush.level
+        ed_terrain_set_rect(0, 0, w - 1, h - 1, 25)
+        T.ClearHistory()
+    end
+
     local head = 'PASS'
     if table.getn(failures) > 0 then
         head = 'FAIL (' .. table.getn(failures) .. ')'

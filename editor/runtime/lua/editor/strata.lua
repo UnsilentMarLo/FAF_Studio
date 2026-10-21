@@ -421,13 +421,27 @@ function Dab(cx, cz, brush, weight, slot)
     local useSlope = (b.minSlope > 0) or (b.maxSlope < 90)
     local useHeight = (b.minHeight > 0) or (b.maxHeight < 512)
     local changed = 0
+    -- The loop below runs once per mask cell of the dab (2500 for a radius of 50 on a 4096 map): the helpers are locals, Decode / Encode are inlined, and the cells outside the
+    -- circle skip the weight call (terrain.lua's round / shaped brush weight is 0 at and beyond the radius; the stamp brush's own weight is not assumed to be a circle).
+    local sqrt = math.sqrt
+    local baseT, covT, origT = stroke.base, stroke.cov, stroke.orig
+    local r2 = r * r * 1.001
+    local circle = (brush.mode == 'paint' or brush.mode == 'erase')
+    local softMin = cell * 1.5              -- the edge is at least one and a half mask cells wide
+    local scatter = b.scatter
     for z = z0, z1 do
+        local wz = (z + 0.5) * cell
+        local dz = wz - cz
+        local dz2 = dz * dz
         for x = x0, x1 do
-            local wx, wz = (x + 0.5) * cell, (z + 0.5) * cell
-            local dx, dz = wx - cx, wz - cz
-            local wt = weight(math.sqrt(dx * dx + dz * dz), r, cell * 1.5, dx, dz)       -- the edge is at least one and a half mask cells wide
-            if wt > 0 and b.scatter > 0 then
-                wt = wt * (1 - b.scatter / 100 * Hash01(x, z, strokeSeed))
+            local wx = (x + 0.5) * cell
+            local dx = wx - cx
+            local wt = 0
+            if not circle or dx * dx + dz2 < r2 then
+                wt = weight(sqrt(dx * dx + dz2), r, softMin, dx, dz)
+            end
+            if wt > 0 and scatter > 0 then
+                wt = wt * (1 - scatter / 100 * Hash01(x, z, strokeSeed))
             end
             if wt > 0 and (useSlope or useHeight) then
                 local slope, height = Terrain(wx, wz)
@@ -439,29 +453,39 @@ function Dab(cx, cz, brush, weight, slot)
                 local i = (z - z0) * rw + (x - x0) + 1
                 local old = values[i]
                 local key = z * w + x
-                local base = stroke.base[key]
+                local base = baseT[key]
                 if base == nil then
                     base = old
-                    stroke.base[key] = base
+                    baseT[key] = base
                 end
-                local cov = stroke.cov[key] or 0
+                local cov = covT[key] or 0
                 if add then
                     cov = 1 - (1 - cov) * (1 - math.min(0.999, wt * frac))
-                    stroke.cov[key] = cov
+                    covT[key] = cov
                 elseif wt * frac > cov then
                     cov = wt * frac
-                    stroke.cov[key] = cov
+                    covT[key] = cov
                 end
-                local e0 = Decode(base)
-                local e = Decode(old)
+                -- Decode: the shader reads a byte m as saturate(2 * m / 255 - 1)
+                local e0 = 2 * base / 255 - 1
+                if e0 < 0 then e0 = 0 end
+                local e = 2 * old / 255 - 1
+                if e < 0 then e = 0 end
                 if erase then
                     e = math.min(e, e0 * (1 - cov))
                 elseif e0 < target then
                     e = math.max(e, e0 + (target - e0) * cov)
                 end
-                local new = Encode(e)
+                -- Encode
+                local new
+                if e <= 0 then
+                    new = 0
+                else
+                    if e > 1 then e = 1 end
+                    new = math.floor((e + 1) / 2 * 255 + 0.5)
+                end
                 if new ~= old then
-                    if stroke.orig[key] == nil then stroke.orig[key] = old end
+                    if origT[key] == nil then origT[key] = old end
                     values[i] = new
                     changed = changed + 1
                     if not stroke.minX then

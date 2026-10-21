@@ -205,7 +205,7 @@ function Dab(cx, cz, brush, image)
     end
     if changed == 0 then return 0 end
     if ed_doc_height_write(x0, z0, x1, z1, after) == 0 then return 0 end
-    Sim.Resnap(x0, z0, x1, z1)
+    Sim.ResnapLater(x0, z0, x1, z1)       -- one callback per ~0.15 s of a stroke, sent at its end (sim.lua)
     return changed
 end
 

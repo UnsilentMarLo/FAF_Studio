@@ -30,13 +30,19 @@ function FootprintOf(unitId)
 end
 
 --- Footprint and skirt of the structure on a resource marker type, or nil for other marker types.
+local infoCache = {}      -- marker type -> { bp, info }: asked for every marker on every overlay rebuild and for every snap of the pointer
+
 function ResourceInfo(markerType)
     local s = Structure[markerType]
     if not s then return nil end
     local bp = Blueprint(s.unit)
+    local c = infoCache[markerType]
+    if c and c.bp == bp and c.s == s then return c.info end
     local fx, fz = FootprintOf(s.unit)
     local skirt = bp and bp.Physics and bp.Physics.SkirtSizeX
-    return { unit = s.unit, fx = (bp and fx) or s.footprint, fz = (bp and fz) or s.footprint, skirt = skirt or s.skirt }
+    local info = { unit = s.unit, fx = (bp and fx) or s.footprint, fz = (bp and fz) or s.footprint, skirt = skirt or s.skirt }
+    infoCache[markerType] = { bp = bp, s = s, info = info }
+    return info
 end
 
 --- Nearest centre for a footprint `cells` wide: n + 0.5 for odd, n for even.
