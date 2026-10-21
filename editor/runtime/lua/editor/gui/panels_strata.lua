@@ -2,8 +2,9 @@
 -- textures and tile size of each (a picker lists the layer textures of every environment found in the game data).
 --
 --   click a row         the layer to paint with (painted layers 1..8; selects the Paint tool when no layer brush is active)
---   Change albedo...    pick another albedo texture (the matching normal map follows when there is one next to it)
---   Change normal...    pick the normal map alone
+--   click the albedo    pick another albedo texture (the matching normal map follows when there is one next to it)
+--   click the normal    pick the normal map alone
+--   Shader              the terrain shader of the map (shaderbrowser.lua)
 --   Tile size           world units one texture tile covers; Enter applies
 --   right click a row   the same as menu entries ('context.list')
 
@@ -140,11 +141,30 @@ Panels.Register{
             bgColor = Skin.color.panel,
         })
 
-        P.preview = Bitmap(group)
-        P.preview:SetSolidColor(Skin.color.panelAlt)
+        -- the two textures of the layer as pictures; a click on one picks another texture for it
+        local function Picture(kind, tip)
+            local b = Bitmap(group)
+            b:SetSolidColor(Skin.color.panelAlt)
+            b.HandleEvent = function(self, event)
+                if event.Type == 'MouseEnter' then
+                    pcall(function() import('/lua/editor/gui/tooltip.lua').Hover(self, function() return tip end, event) end)
+                    return true
+                elseif event.Type == 'MouseExit' then
+                    pcall(function() import('/lua/editor/gui/tooltip.lua').Leave(self) end)
+                    return true
+                elseif event.Type == 'ButtonPress' then
+                    pcall(function() import('/lua/editor/gui/tooltip.lua').Hide() end)
+                    P:Change(kind)
+                    return true
+                end
+                return false
+            end
+            return b
+        end
+        P.preview = Picture('albedo', 'The albedo (colour) texture of the layer. Click to pick another one; the matching normal map follows.')
+        P.previewNormal = Picture('normal', 'The normal map of the layer. Click to pick another one.')
         P.previewName = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
-        P.change = W.Button(group, 'Albedo...', 0, 0, Skin.S(84), Skin.S(24), function() P:Change('albedo') end)
-        P.changeNormal = W.Button(group, 'Normal...', 0, 0, Skin.S(84), Skin.S(24), function() P:Change('normal') end)
+        P.previewNormalName = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
 
         -- tile sizes: field, bar and - / + like every other number setting
         local function SizeSlider(which, label)
@@ -191,10 +211,26 @@ Panels.Register{
             local l = Selected()
             if l then Entry(Strata.FillMask(l.index)) end
         end)
-        P.xp = W.Button(group, 'TerrainXP (layers 5-8)', 0, 0, Skin.S(160), Skin.S(24), function()
-            Strata.SetXP(not Strata.IsXP())
-            P:Refresh()
-        end, { toggle = true })
+        P.texset = W.Button(group, 'Texture set: ...', 0, 0, Skin.S(220), Skin.S(24), function()
+            local TS = import('/lua/editor/texsets.lua')
+            local items = {}
+            for _, id in TS.ThemeOrder do
+                local themeId = id
+                table.insert(items, { title = TS.Themes[themeId].label, run = function()
+                    local n = TS.Apply(themeId)
+                    Say('texture set ' .. TS.Themes[themeId].label .. ': ' .. n .. ' layers')
+                    P:Refresh()
+                end })
+            end
+            local x, y = P.texset.Left(), P.texset.Bottom()
+            Menu.Show(GetFrame(0), x, y, items)
+        end)
+        P.shader = W.Button(group, 'Shader: ...', 0, 0, Skin.S(220), Skin.S(24), function()
+            import('/lua/editor/gui/shaderbrowser.lua').Open(function(id)
+                Say('terrain shader: ' .. id)
+                P:Refresh()
+            end)
+        end)
 
         --- Picks a texture for the selected layer.
         function P:Change(kind)
@@ -223,23 +259,35 @@ Panels.Register{
             Reload()
             if not P.sel then P.sel = Strata.Active end
             P.list:Refresh()
-            P.xp:SetOn(Strata.IsXP())
+            local TS = import('/lua/editor/texsets.lua')
+            P.texset:SetText('Texture set: ' .. ((TS.Themes[TS.Theme] and TS.Themes[TS.Theme].label) or TS.Theme))
+            local shaderName = import('/lua/editor/shaders.lua').Current() or '?'
+            if P.shaderShown ~= shaderName then
+                P.shaderShown = shaderName
+                P.shader:SetText('Shader: ' .. shaderName)
+            end
             local l = Selected()
             -- the preview and the size fields only change when the selected layer or its texture does (a field may be mid-edit)
-            local key = l and (l.index .. '|' .. l.albedo .. '|' .. tostring(l.size) .. '|' .. tostring(l.nsize)) or ''
+            local key = l and (l.index .. '|' .. l.albedo .. '|' .. l.normal .. '|' .. tostring(l.size) .. '|' .. tostring(l.nsize)) or ''
             if key ~= P.shownKey then
                 P.shownKey = key
+                local pw = P.previewW or Skin.S(72)
                 if l and l.albedo ~= '' and l.albedo ~= Strata.CLEAR then
                     P.preview:SetTexture(l.albedo)
-                    P.previewName:SetText(l.file)
-                    P.size:Refresh()
-                    P.nsize:Refresh()
+                    W.Fit(P.previewName, 'Albedo: ' .. l.file, pw)
                 else
                     P.preview:SetSolidColor(Skin.color.panelAlt)
-                    P.previewName:SetText(l and 'no texture' or '')
-                    P.size:Refresh()
-                    P.nsize:Refresh()
+                    P.previewName:SetText(l and 'Albedo: none' or '')
                 end
+                if l and l.normal ~= '' and l.normal ~= Strata.NONE_NORMAL then
+                    P.previewNormal:SetTexture(l.normal)
+                    W.Fit(P.previewNormalName, 'Normal: ' .. (l.normalFile or ''), pw)
+                else
+                    P.previewNormal:SetSolidColor(Skin.color.panelAlt)
+                    P.previewNormalName:SetText(l and 'Normal: none' or '')
+                end
+                P.size:Refresh()
+                P.nsize:Refresh()
             end
         end
 
@@ -247,20 +295,18 @@ Panels.Register{
             P.w, P.h = w, h
             local pad = Skin.S(8)
             local rowH = Skin.S(26)
-            local detail = Skin.S(284)
+            local detail = Skin.S(366)
             local listH = math.max(rowH * 3, math.min(rowH * 10, h - 2 * pad - detail))
             P.list:SetRect(pad, pad, w - 2 * pad, listH)
             local y = pad + listH + Skin.S(8)
-            local ps = Skin.S(72)
+            local ps = math.max(Skin.S(56), math.min(Skin.S(120), math.floor((w - 3 * pad) / 2)))
+            P.previewW = ps
             W.Place(P.preview, group, pad, y, ps, ps)
+            W.Place(P.previewNormal, group, 2 * pad + ps, y, ps, ps)
             W.Place(P.previewName, group, pad, y + ps + Skin.S(2))
-            local x = pad + ps + Skin.S(10)
-            local cw = math.max(Skin.S(52), math.min(Skin.S(84), w - pad - x))      -- in a narrow panel the buttons shrink instead of running past its edge
-            W.Place(P.change, group, x, y, cw, Skin.S(24))
-            W.Place(P.changeNormal, group, x, y + Skin.S(28), cw, Skin.S(24))
-            W.Center(P.change.label, P.change, 0, 0, cw, Skin.S(24))
-            W.Center(P.changeNormal.label, P.changeNormal, 0, 0, cw, Skin.S(24))
-            y = y + ps + Skin.S(22)
+            W.Place(P.previewNormalName, group, 2 * pad + ps, y + ps + Skin.S(2))
+            P.shownKey = nil          -- the file names are fitted to the picture width
+            y = y + ps + Skin.S(24)
             P.size:Place(pad, y, w - 2 * pad)
             y = y + Skin.S(50)
             P.nsize:Place(pad, y, w - 2 * pad)
@@ -271,8 +317,12 @@ Panels.Register{
                 bx = bx + b.Width() + Skin.S(4)
             end
             y = y + Skin.S(30)
-            W.Place(P.xp, group, pad, y, math.min(Skin.S(160), w - 2 * pad), Skin.S(24))
-            W.Center(P.xp.label, P.xp, 0, 0, math.min(Skin.S(160), w - 2 * pad), Skin.S(24))
+            local sw = math.min(Skin.S(220), w - 2 * pad)
+            W.Place(P.texset, group, pad, y, sw, Skin.S(24))
+            W.Center(P.texset.label, P.texset, 0, 0, sw, Skin.S(24))
+            y = y + Skin.S(30)
+            W.Place(P.shader, group, pad, y, sw, Skin.S(24))
+            W.Center(P.shader.label, P.shader, 0, 0, sw, Skin.S(24))
             P:Refresh()
         end
 

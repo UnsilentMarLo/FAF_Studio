@@ -187,6 +187,15 @@ function New(sizeIndex, name)
     return true
 end
 
+freshMap = false
+
+--- True once after a session was started by File > New.
+function TakeFresh()
+    local f = freshMap
+    freshMap = false
+    return f
+end
+
 --- Called once the document exists after a (re)start of the session: takes over what New / Open left in the pending file.
 function ApplyPending(doc)
     local text = ed_read_file(PENDING)
@@ -194,6 +203,7 @@ function ApplyPending(doc)
     ed_write_file(PENDING, '')
     for key, value in string.gfind(text, '(%w+)=([^\n]*)') do
         if key == 'name' then
+            freshMap = true             -- File > New: Map.Load gives the blank map its texture set (texsets.lua)
             doc.info.name = value
             saveDir, saveStem = false, false
         elseif key == 'dir' then

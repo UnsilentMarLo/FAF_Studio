@@ -54,6 +54,7 @@ function Load()
     pcall(function() import('/lua/editor/graph.lua').LoadSidecar(session.file) end)             -- the terrain graph (nodes, wires, parameters)
     pcall(function() import('/lua/editor/paths.lua').LoadSidecar(session.file) end)             -- spline paths of the terrain tool
     pcall(function() import('/lua/editor/interop.lua').LoadSidecar(session.file) end)           -- import / export settings for external terrain tools
+    pcall(function() import('/lua/editor/texsets.lua').ApplyIfNew() end)       -- a new map's empty layers get the default texture set
     if Doc.resizePayload then pcall(function() import('/lua/editor/resize.lua').ApplyPending(Doc) end) end     -- a resized map: heights, masks, props, decals (Map > Resize)
     pcall(function() import('/lua/editor/meshview.lua').OnMapLoaded() end)                      -- mesh terrain of a TerrainSystem = 'mesh' map
     pcall(function() import('/lua/editor/units.lua').SpawnGroupEntities() end)                    -- units of the mission's own groups are shown while editing
