@@ -34,11 +34,11 @@ local COLOR_TEXT = 'ffe8f0f8'
 local COLOR_MARKER = 'ffffc830'
 local COLOR_AREA = 'ff30c8ff'
 
---- Tools. kind 'brush' = terrain brush mode of terrain.lua; 'marker' / 'area' / 'none' are document tools;
+--- Tools. kind 'brush' = terrain brush mode of terrain.lua; 'marker' / 'area' / 'none' are document tools; kind 'select' with `pick = 'marker' | 'area'` selects only that kind of object;
 --- 'custom' calls tool.OnPress(wx, wz, event) (return false to let the click through). Editor mods add tools by
 --- appending to this table from a hook on /lua/editor/ui.lua.
 Tools = {
-    { id = 'select',  label = 'Select marker / area',  kind = 'select' },
+    { id = 'select',  label = 'Select marker',  kind = 'select', pick = 'marker' },
     { id = 'raise',   label = 'Raise',   kind = 'brush' },
     { id = 'lower',   label = 'Lower',   kind = 'brush' },
     { id = 'flatten', label = 'Flatten', kind = 'brush' },
@@ -80,6 +80,10 @@ Tools = {
     { id = 'ruler',   label = 'Ruler',   kind = 'custom', workspaces = { Terrain = true, Objects = true, Environment = true, Mission = true, Review = true },
       OnPress = function(wx, wz, event) return import('/lua/editor/ruler.lua').Press(wx, wz, event) end },
     { id = 'camera',  label = 'Camera',  kind = 'none' },
+    -- (added after the older tools so the digit slots of the workspaces keep their tools)
+    { id = 'area_select', label = 'Select area', kind = 'select', pick = 'area' },
+    { id = 'chain',   label = 'Draw chain', kind = 'custom', workspaces = { Objects = true, Mission = true },
+      OnPress = function(wx, wz, event) return import('/lua/editor/chains.lua').DrawPress(wx, wz, event) end },
 }
 
 --- Workspaces own their tools (the shell tells ui.lua which workspace is showing, SetWorkspace): a tool belongs to a workspace by its kind
@@ -557,7 +561,7 @@ function OnWorldPress(event)
     end
 
     if tool.kind == 'select' then
-        return ObjectTools.OnSelectPress(wx, wz, event)
+        return ObjectTools.OnSelectPress(wx, wz, event, tool.pick)
     elseif tool.kind == 'brush' then
         BeginStroke()
         StrokeMove(wx, wz)

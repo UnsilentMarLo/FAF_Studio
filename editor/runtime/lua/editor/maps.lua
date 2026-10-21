@@ -16,11 +16,47 @@
 
 local Map = import('/lua/editor/map.lua')
 
+-- The blank templates (scripts/ed_make_blank_map.py): the map sizes the game's terrain supports are powers of two, 51.2 samples to the kilometre (2.5 km = 128 ... 80 km = 4096).
 Sizes = {
-    { label = '5 x 5 km  (256)',    template = '/maps/editor_blank/editor_blank_scenario.lua' },
-    { label = '10 x 10 km  (512)',  template = '/maps/editor_blank_512/editor_blank_512_scenario.lua' },
-    { label = '20 x 20 km  (1024)', template = '/maps/editor_blank_1024/editor_blank_1024_scenario.lua' },
+    { label = '5 x 5 km',   km = 5,  samples = 256,  template = '/maps/editor_blank/editor_blank_scenario.lua' },
+    { label = '10 x 10 km', km = 10, samples = 512,  template = '/maps/editor_blank_512/editor_blank_512_scenario.lua' },
+    { label = '20 x 20 km', km = 20, samples = 1024, template = '/maps/editor_blank_1024/editor_blank_1024_scenario.lua' },
+    { label = '40 x 40 km', km = 40, samples = 2048, template = '/maps/editor_blank_2048/editor_blank_2048_scenario.lua' },
+    { label = '80 x 80 km', km = 80, samples = 4096, template = '/maps/editor_blank_4096/editor_blank_4096_scenario.lua' },
 }
+
+--- The template for a map of `km` x `km` (a fraction is fine: 2.5): index into Sizes (or 0 for 2.5 km, which has a template of its own), and its edge in samples. nil and a message
+--- when the size is not one the terrain supports.
+function SizeForKm(km)
+    km = tonumber(km)
+    if not km or km <= 0 then return nil, 'type a size in kilometres, for example 2.5 or 10' end
+    local samples = math.floor(km * 51.2 + 0.5)
+    local n = 128
+    while n < samples do n = n * 2 end
+    if n ~= samples or samples > 4096 then
+        return nil, 'the terrain supports 2.5, 5, 10, 20, 40 and 80 km (128 to 4096 samples a side)'
+    end
+    if samples == 128 then return 0, 128 end
+    for i, s in Sizes do
+        if s.samples == samples then return i, samples end
+    end
+    return nil, 'no template for this size'
+end
+
+--- A new map of a size (km, fractions allowed) with the name.
+function NewKm(km, name)
+    local index, samples = SizeForKm(km)
+    if not index then return nil, samples end
+    if index == 0 then
+        if not TemplateReady('/maps/editor_blank_128/editor_blank_128_scenario.lua') then
+            return nil, 'the blank 2.5 km map is not installed: run  python scripts/studio.py generate'
+        end
+        ed_write_file(PENDING, 'name=' .. (name or 'My map') .. '\n')
+        import('/lua/editor/control.lua').LoadMap('/maps/editor_blank_128/editor_blank_128_scenario.lua')
+        return true
+    end
+    return New(index, name)
+end
 
 local PENDING = 'editor_pending_map.txt'
 local TEMPLATE_NAMES = { ['Editor blank world'] = true }
@@ -135,10 +171,29 @@ function Open(scenarioPath)
     import('/lua/editor/control.lua').LoadMap(scenarioPath)
 end
 
+--- Is the blank map file of a template scenario installed? (The 2.5 and 80 km ones only exist after `python scripts/studio.py generate`.)
+function TemplateReady(scenarioPath)
+    local ok, info = pcall(DiskGetFileInfo, (string.gsub(scenarioPath, '_scenario%.lua$', '.scmap')))
+    return ok and info ~= nil and info ~= false
+end
+
 function New(sizeIndex, name)
     local size = Sizes[sizeIndex] or Sizes[1]
+    if not TemplateReady(size.template) then
+        return nil, 'the blank map for ' .. size.label .. ' is not installed: run  python scripts/studio.py generate'
+    end
     ed_write_file(PENDING, 'name=' .. (name or 'My map') .. '\n')
     import('/lua/editor/control.lua').LoadMap(size.template)
+    return true
+end
+
+freshMap = false
+
+--- True once after a session was started by File > New.
+function TakeFresh()
+    local f = freshMap
+    freshMap = false
+    return f
 end
 
 --- Called once the document exists after a (re)start of the session: takes over what New / Open left in the pending file.
@@ -148,6 +203,7 @@ function ApplyPending(doc)
     ed_write_file(PENDING, '')
     for key, value in string.gfind(text, '(%w+)=([^\n]*)') do
         if key == 'name' then
+            freshMap = true             -- File > New: Map.Load gives the blank map its texture set (texsets.lua)
             doc.info.name = value
             saveDir, saveStem = false, false
         elseif key == 'dir' then
@@ -239,7 +295,8 @@ function SaveAs()
     if not Map.Doc then Say('no map to save') return nil end
     local suggestion = Sanitize(Map.Doc.info.name or 'my_map')
     local base = UserMapsDir()
-    local initial = base and (string.gsub(base, '/', '\\') .. suggestion) or suggestion
+    -- (UserMapsDir has no trailing slash: without one the dialog got '...\\mapsMy_map' and opened the folder above with a file name starting with 'maps')
+    local initial = base and ((string.gsub((string.gsub(base, '[/\\]+$', '')), '/', '\\')) .. '\\' .. suggestion) or suggestion
     local path = ed_file_dialog(true, 'Save map as', 'Supreme Commander map (*.scmap)|*.scmap|All files|*.*', initial)
     if not path then return nil end
     local stem = Sanitize(string.gsub(Basename(path), '%.[^%.]*$', ''))

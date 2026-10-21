@@ -12,7 +12,9 @@
 -- Lua 5.0 dialect.
 
 Tool = {
-    select = 'Click a marker or area to select it; drag on empty ground to draw a selection box; Shift adds. Drag a selection to move it.',
+    select = 'Click a marker to select it; drag on empty ground to draw a selection box; Shift adds. Drag a selection to move it. Areas are picked with the Select area tool.',
+    area_select = 'Click inside an area to select it; drag on empty ground to draw a selection box; Shift adds. Drag a selected area to move it, or its handles to resize. Markers are picked with the Select marker tool.',
+    chain = 'Draws a chain: every click places a marker at the end of the current chain (a new chain when none is chosen in the Chains panel). Ctrl+click starts a new chain.',
     raise = 'Raises the ground under the brush. Hold Shift to lower instead. Radius and strength are in the Brush panel.',
     lower = 'Lowers the ground under the brush.',
     flatten = 'Levels the ground to the height under the first click of the stroke.',
@@ -33,14 +35,14 @@ Tool = {
     prop_erase = 'Removes props under the brush.',
     decal = 'Brush that places decals (ground details). Pick the decal in the Decals panel.',
     decal_erase = 'Removes decals under the brush.',
-    unit = 'Places the unit chosen in the Units panel for the army shown there. A ghost shows where; drag for a line of units along the build grid, hold Shift and click for a line with corners.',
+    unit = 'Places the unit chosen in the Units panel for the army shown there. A ghost with its footprint shows where (red where the game would not allow it, but a click still places it); drag for a line of units a footprint apart along the build grid, hold Shift and click for a line with corners.',
     prop_place = 'Places the prop chosen in the Props panel, one at a time, with a ghost; drag for a line of props, Shift and click for corners.',
     decal_place = 'Places the decal chosen in the Decals panel, one at a time, with a preview; drag for a line of decals, Shift and click for corners.',
     unit_select = 'Click units to select them, Shift adds, drag on empty ground for a box. Drag a selection to move it.',
     decal_select = 'Click decals to select them, Shift adds, drag on empty ground for a box. Drag a selection to move it.',
     prop_select = 'Click props to select them, Shift adds, drag on empty ground for a box. Drag a selection to move it.',
     marker = 'Places the marker type chosen in the Markers panel (mass, hydrocarbon, expansion, rally points ...).',
-    army = 'Places the next start position (ARMY_1, ARMY_2 ...).',
+    army = 'Places the next start position (ARMY_1, ARMY_2 ...). A ghost of the marker with its name follows the pointer; with symmetry on the mirror images show too.',
     area = 'Drag a rectangle on the ground: areas are used by missions and scripts.',
     ruler = 'Drag to measure a distance over the terrain. Shift continues the line.',
     camera = 'No tool: the mouse only moves the camera.',

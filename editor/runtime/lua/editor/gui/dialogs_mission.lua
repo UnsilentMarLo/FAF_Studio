@@ -601,6 +601,12 @@ function DialogueLines(i, onClose)
         onSelect = function(index) state.sel = index list:Refresh() end,
     })
     list:SetRect(Skin.S(8), Skin.S(30), Skin.S(484), Skin.S(220))
+    if d0.imported then
+        -- a dialogue of the map's own strings file: shown, never edited
+        d:Label('Imported from the strings file of the map: read-only.', 14, 262, { color = c.textDim, size = 'small' })
+        d:Button('Done', 14, 302, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
+        return
+    end
     local function Reopen() DialogueLines(i, onClose) end
     d:Button('Add line', 14, 262, 84, 26, function()
         local ok, at = M.AddLine(i, 'Text')

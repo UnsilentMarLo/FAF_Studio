@@ -1,6 +1,7 @@
 -- The Chains panel: the save file's chains (ordered marker lists that patrol and move orders of a mission use). Top list: the chains; bottom list: the markers of the chosen chain
 -- in order. "From selection" makes a chain of the markers selected in the world (selection order), Add selected appends them, the buttons reorder / remove; Select puts the
--- chain's markers into the selection. The chain is drawn in the world (orange, the chosen one brighter). See chains.lua.
+-- chain's markers into the selection. The chain is drawn in the world (orange, the chosen one brighter). "Draw chain" picks the Draw chain tool: each click in the world places
+-- a marker at the end of the chosen chain (a new chain when none is chosen); "Finish chain" lets the next click start a new one. See chains.lua.
 --
 -- Lua 5.0 dialect.
 
@@ -123,11 +124,17 @@ Panels.Register{
         P.bUp = Btn('Up', 34, function() if Current() and Chains.MoveMarker(Current(), P.mi, -1) then P.mi = P.mi - 1 end P:Refresh(true) end)
         P.bDown = Btn('Down', 44, function() if Current() and Chains.MoveMarker(Current(), P.mi, 1) then P.mi = P.mi + 1 end P:Refresh(true) end)
         P.bSelect = Btn('Select markers', 100, function() if Current() then Chains.SelectMarkers(Current()) end end)
+        P.bDraw = Btn('Draw chain', 80, function() UI.SelectTool('chain') P:Refresh(true) end)
+        P.bFinish = Btn('Finish chain', 86, function() Chains.Finish() P:Refresh(true) end)
         P.status = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
 
+        local function SetStatus(text)
+            if P.w then W.Fit(P.status, text, math.max(Skin.S(40), P.w - Skin.S(16))) else P.status:SetText(text) end       -- (text does not clip)
+        end
+
         function P:Refresh(force)
-            if not force and P.rev == Chains.Revision and P.seenTools == Tools.Changed then return end
-            P.rev, P.seenTools = Chains.Revision, Tools.Changed
+            if not force and P.rev == Chains.Revision and P.seenTools == Tools.Changed and P.seenTool == UI.State.tool then return end
+            P.rev, P.seenTools, P.seenTool = Chains.Revision, Tools.Changed, UI.State.tool
             P.names = Chains.Names()
             if Current() and not Chains.Markers(Current()) then Chains.Current = false end
             local n = table.getn(CurrentMarkers())
@@ -136,20 +143,25 @@ Panels.Register{
             P.list:Refresh()
             P.markers:Refresh()
             local bad = table.getn(Chains.Problems())
-            if Current() then
-                P.status:SetText(string.format('%s: %d markers, %.0f long%s', Current(), n, Chains.Length(Current()), bad > 0 and ('   (' .. bad .. ' problems in all chains)') or ''))
+            if UI.State.tool == 'chain' then
+                -- the hint of the Draw chain tool
+                SetStatus(Current() and ('drawing ' .. Current() .. ': click adds, Ctrl+click = new chain') or 'Draw chain: click to place the first marker')
+            elseif Current() then
+                SetStatus(string.format('%s: %d markers, %.0f long%s', Current(), n, Chains.Length(Current()), bad > 0 and ('   (' .. bad .. ' problems in all chains)') or ''))
             else
-                P.status:SetText(table.getn(P.names) == 0 and 'select markers in the world, then From selection' or (table.getn(P.names) .. ' chains'))
+                SetStatus(table.getn(P.names) == 0 and 'select markers in the world, then From selection' or (table.getn(P.names) .. ' chains'))
             end
         end
 
         function P:OnResize(w, h)
+            P.w = w
             local pad = Skin.S(8)
             local top = W.Flow(group, { { P.bNew, Skin.S(112) }, { P.bEmpty, Skin.S(62) }, { P.bRename, Skin.S(70) }, { P.bDel, Skin.S(54) } }, pad, pad, w - 2 * pad, Skin.S(22), Skin.S(4)) + Skin.S(4)
             local listH = math.max(Skin.S(44), math.floor((h - Skin.S(110) - (top - pad - Skin.S(22))) * 0.4))
             P.list:SetRect(pad, top, w - 2 * pad, listH)
             local y = top + listH + Skin.S(6)
-            y = W.Flow(group, { { P.bAdd, Skin.S(90) }, { P.bRemove, Skin.S(60) }, { P.bUp, Skin.S(34) }, { P.bDown, Skin.S(44) }, { P.bSelect, Skin.S(100) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4))
+            y = W.Flow(group, { { P.bAdd, Skin.S(90) }, { P.bRemove, Skin.S(60) }, { P.bUp, Skin.S(34) }, { P.bDown, Skin.S(44) }, { P.bSelect, Skin.S(100) },
+                                { P.bDraw, Skin.S(80) }, { P.bFinish, Skin.S(86) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4))
             y = y + Skin.S(4)
             P.markers:SetRect(pad, y, w - 2 * pad, math.max(Skin.S(44), h - y - pad - Skin.S(20)))
             W.Place(P.status, group, pad, h - pad - Skin.S(14))

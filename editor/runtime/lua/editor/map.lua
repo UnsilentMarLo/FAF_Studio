@@ -51,9 +51,11 @@ function Load()
     pcall(function() import('/lua/editor/maps.lua').ApplyPending(Doc) end)
     pcall(function() import('/lua/editor/terraintype.lua').LoadSidecar(session.file) end)       -- terrain types assigned to texture layers
     pcall(function() import('/lua/editor/mission.lua').LoadSidecar(session.file) end)           -- stages, objectives and actions of a mission map
+    pcall(function() import('/lua/editor/mission.lua').ImportScript(Doc) end)                   -- a hand-written mission script (MissionNumber stages) is shown read-only, never rewritten
     pcall(function() import('/lua/editor/graph.lua').LoadSidecar(session.file) end)             -- the terrain graph (nodes, wires, parameters)
     pcall(function() import('/lua/editor/paths.lua').LoadSidecar(session.file) end)             -- spline paths of the terrain tool
     pcall(function() import('/lua/editor/interop.lua').LoadSidecar(session.file) end)           -- import / export settings for external terrain tools
+    pcall(function() import('/lua/editor/texsets.lua').ApplyIfNew() end)       -- a new map's empty layers get the default texture set
     if Doc.resizePayload then pcall(function() import('/lua/editor/resize.lua').ApplyPending(Doc) end) end     -- a resized map: heights, masks, props, decals (Map > Resize)
     pcall(function() import('/lua/editor/meshview.lua').OnMapLoaded() end)                      -- mesh terrain of a TerrainSystem = 'mesh' map
     pcall(function() import('/lua/editor/units.lua').SpawnGroupEntities() end)                    -- units of the mission's own groups are shown while editing
@@ -240,6 +242,20 @@ function SaveAs(diskDir, stem, opts)
     return scenario, why
 end
 
+--- The game looks the environment cube of every model up by name and falls back to the `<default>` entry; a map without that entry crashes the game at tick 0 (ACCESS_VIOLATION in
+--- CWldTerrainRes::GetEnvLookup, which copies the texture of the end of an empty lookup). The blank templates had no entry at all: every map is given one before it is written.
+function EnsureDefaultEnvCube()
+    if not (rawget(_G, 'ed_env_lookups') and rawget(_G, 'ed_env_set_lookups')) then return end
+    local ok, flat = pcall(ed_env_lookups)
+    if not ok or type(flat) ~= 'table' then return end
+    for i = 1, table.getn(flat), 2 do
+        if flat[i] == '<default>' then return end
+    end
+    table.insert(flat, '<default>')
+    table.insert(flat, '/textures/environment/defaultenvcube.dds')
+    pcall(ed_env_set_lookups, flat)
+end
+
 function SaveAsCore(diskDir, stem, opts)
     if not Doc then
         local d, why = Load()
@@ -280,8 +296,11 @@ function SaveAsCore(diskDir, stem, opts)
     end
     local patched = import('/lua/editor/mission.lua').PatchScript(script)       -- the generated mission region (when the map has stages)
     script = patched
-    script = import('/lua/editor/playable.lua').PatchScript(script)       -- AREA_1 is applied as the playable area
+    if not import('/lua/editor/mission.lua').IsImported() then       -- (the script of an imported hand-written mission is not edited behind the user's back)
+        script = import('/lua/editor/playable.lua').PatchScript(script)       -- AREA_1 is applied as the playable area
+    end
 
+    EnsureDefaultEnvCube()
     if not ed_map_save(diskDir .. '/' .. stem .. '.scmap') then
         return nil, 'ed_map_save failed'
     end

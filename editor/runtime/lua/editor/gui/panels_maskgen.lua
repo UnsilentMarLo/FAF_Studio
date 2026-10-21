@@ -255,6 +255,22 @@ Panels.Register{
             Pn:Refresh()
         end, { tip = 'How the mask is written into the layer: replace what is there, add to it, or take away. Click to step to the next way.' })
         Pn.bAway = Btn('Layers above take away', 150, function(self) T.takeAway = self.on end, { toggle = true })
+        -- the layer's texture by kind from the map's texture set (texsets.lua): so the mask shows as grass, rock, sand ... instead of an empty layer
+        local TS = import('/lua/editor/texsets.lua')
+        local roleIds, roleLabels = TS.RoleChoices()
+        local function RoleIndex()
+            for i, id in roleIds do
+                if id == (T.texture or 'keep') then return i end
+            end
+            return 1
+        end
+        Pn.bTexture = Btn('', 170, function()
+            local i = RoleIndex() + 1
+            if i > table.getn(roleIds) then i = 1 end
+            T.texture = roleIds[i]
+            Pn:Refresh()
+        end, { tip = 'Gives the layer a texture of this kind from the map\'s texture set when the mask is applied (Layers panel > Texture set). Keep leaves the texture the layer has. Click to step to the next kind.' })
+        Pn.TextureText = function() return 'Texture: ' .. ((T.texture or 'keep') == 'keep' and 'keep' or TS.RoleLabels[T.texture]) end
         Pn.bApplyLayer = Btn('Apply to layer', 100, function()
             local n, err = MaskGen.ApplyToLayer(Def(), T)
             state.text = n and (n .. ' mask cells changed (layer ' .. T.layer .. ')') or ('not applied: ' .. tostring(err))
@@ -329,6 +345,7 @@ Panels.Register{
             self.bInvert:SetOn(rule ~= nil and rule.invert == true)
             self.bOp:SetText(rule and ('Combine: ' .. OpLabel(rule)) or 'Combine')
             self.bMode:SetText('Mode: ' .. MaskGen.MODES[T.mode])
+            self.bTexture:SetText(self.TextureText())
             self.bAway:SetOn(T.takeAway)
             self.bWKind:SetText('Water mask: ' .. Fields.WATER_MASKS[T.wmask])
             for _, s in self.sliders do s:Refresh() end
@@ -407,7 +424,7 @@ Panels.Register{
             W.Place(self.outLabel, group, pad, y)
             y = y + Skin.S(22)
             Sliders({ self.out.layer, self.out.strength })
-            Flow({ self.bMode, self.bAway, self.bApplyLayer })
+            Flow({ self.bMode, self.bAway, self.bTexture, self.bApplyLayer })
             Sliders({ self.out.code, self.out.threshold })
             W.Place(self.typeLabel, group, pad, y)
             y = y + Skin.S(20)

@@ -58,14 +58,14 @@ local function Build(name, m)
     if meshName then
         local mesh = WorldMesh()
         mesh:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = MARKER_SCALE, LODCutoff = LOD_CUTOFF })
-        mesh:SetStance(pos, EulerToQuaternion(0, 0, yaw))
+        mesh:SetStance(pos, EulerToQuaternion(0, yaw, 0))
         mesh:SetHidden(false)
         e.prop = mesh
     end
     if dep then
         local mesh = WorldMesh()
         mesh:SetMesh({ MeshName = dep.mesh, TextureName = dep.albedo, ShaderName = 'NormalMappedAlpha', UniformScale = dep.scale, LODCutoff = LOD_CUTOFF })
-        mesh:SetStance(pos, EulerToQuaternion(0, 0, math.rad(math.mod(NameHash(name), 360))))
+        mesh:SetStance(pos, EulerToQuaternion(0, math.rad(math.mod(NameHash(name), 360)), 0))
         mesh:SetHidden(false)
         e.deposit = mesh
         ed_overlay_decal('sp:' .. name, x, y + 0.05, z, dep.splat, dep.splatSize, 'FFFFFFFF', 0)
@@ -79,12 +79,47 @@ local function Move(name, e, m)
     if x == e.x and y == e.y and z == e.z and yaw == e.yaw then return end
     e.x, e.y, e.z, e.yaw = x, y, z, yaw
     local pos = Vector(x, y, z)
-    if e.prop then e.prop:SetStance(pos, EulerToQuaternion(0, 0, yaw)) end
+    if e.prop then e.prop:SetStance(pos, EulerToQuaternion(0, yaw, 0)) end
     if e.deposit then
-        e.deposit:SetStance(pos, EulerToQuaternion(0, 0, math.rad(math.mod(NameHash(name), 360))))
+        e.deposit:SetStance(pos, EulerToQuaternion(0, math.rad(math.mod(NameHash(name), 360)), 0))
         local dep = DEPOSITS[m.type]
         if dep then ed_overlay_decal('sp:' .. name, x, y + 0.05, z, dep.splat, dep.splatSize, 'FFFFFFFF', 0) end
     end
+end
+
+local ghosts = {}          -- pool of WorldMesh: the previews of the Start position tool (see Ghost)
+local ghostMesh = false       -- the mesh the pool was made for
+local ghostShown = 0
+
+--- The prop of a marker about to be placed, at each { x, y, z } of `spots` (the Start position tool: pointer and symmetry images); nil or an empty list hides them.
+--- `propBp` is the template's prop blueprint path, as a placed marker's `prop` field.
+function Ghost(spots, propBp)
+    local n = spots and table.getn(spots) or 0
+    local meshName = n > 0 and MeshOf(propBp)
+    if n == 0 or not meshName then
+        if ghostShown > 0 then
+            for i = 1, table.getn(ghosts) do ghosts[i]:SetHidden(true) end
+            ghostShown = 0
+        end
+        return
+    end
+    if ghostMesh ~= meshName then
+        for i = 1, table.getn(ghosts) do ghosts[i]:Destroy() end
+        ghosts = {}
+        ghostMesh = meshName
+    end
+    for i = 1, n do
+        local g = ghosts[i]
+        if not g then
+            g = WorldMesh()
+            g:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = MARKER_SCALE, LODCutoff = LOD_CUTOFF })
+            ghosts[i] = g
+        end
+        g:SetStance(Vector(spots[i][1], spots[i][2], spots[i][3]), EulerToQuaternion(0, 0, 0))
+        g:SetHidden(false)
+    end
+    for i = n + 1, table.getn(ghosts) do ghosts[i]:SetHidden(true) end
+    ghostShown = n
 end
 
 --- Drops every marker object (play mode, shutdown).
@@ -95,6 +130,8 @@ function Clear()
     end
     entries = {}
     lastDoc = false
+    for i = 1, table.getn(ghosts) do ghosts[i]:Destroy() end
+    ghosts, ghostMesh, ghostShown = {}, false, 0
 end
 
 function Update()

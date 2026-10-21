@@ -758,11 +758,14 @@ Def('out_height', { label = 'Output: heights', cat = 'outputs', kw = 'output hei
                N('strength', 'Strength', 0, 1, 0.05, '%.2f', 1, { wire = true }), N('gain', 'Gain (add mode)', -4, 4, 0.05, '%.2f', 1) },
     eval = function(E, v, ins) return { view = ins.a } end })
 
+local TextureRoleIds, TextureRoleLabels = import('/lua/editor/texsets.lua').RoleChoices()
+
 Def('out_layer', { label = 'Output: texture layer', cat = 'outputs', kw = 'output layer stratum texture paint mask write',
-    desc = 'Writes a mask into the paint mask of a texture layer (1..8).',
+    desc = 'Writes a mask into the paint mask of a texture layer (1..8). The Layer texture setting also gives the layer a texture of a kind (grass, rock, sand ...) from the map\'s texture set; Keep leaves the layer\'s own texture.',
     inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'layer',
     params = { N('layer', 'Layer', 1, 8, 1, '%d', 2), C('mode', 'Mode', { 'replace', 'add', 'subtract' }, { 'Replace', 'Add to (the larger)', 'Subtract from' }, 'replace'),
-               N('strength', 'Strength', 0, 1, 0.05, '%.2f', 1, { wire = true }), B('takeAway', 'Layers above take away', false) },
+               N('strength', 'Strength', 0, 1, 0.05, '%.2f', 1, { wire = true }), B('takeAway', 'Layers above take away', false),
+               C('texture', 'Layer texture', TextureRoleIds, TextureRoleLabels, 'keep') },
     eval = function(E, v, ins) return { view = ins.a } end })
 
 Def('out_types', { label = 'Output: terrain type', cat = 'outputs', kw = 'output terrain type code surface write',

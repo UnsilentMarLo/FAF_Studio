@@ -463,6 +463,9 @@ function ApplyToLayer(def, target)
         if not m then return nil, err end
         local entry, n = WriteLayer(c, m, math.floor(target.layer + 0.5), target)
         if not entry then return nil, n == 0 and 'nothing changed' or tostring(n) end
+        if target.texture and target.texture ~= 'keep' then
+            pcall(function() import('/lua/editor/texsets.lua').ApplyRole(math.floor(target.layer + 0.5), target.texture) end)
+        end
         return n
     end)
 end

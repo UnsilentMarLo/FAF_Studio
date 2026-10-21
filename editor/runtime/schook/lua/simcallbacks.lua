@@ -178,7 +178,7 @@ do
         if ok and unit then FreezeUnit(unit) end
         if ok and unit and data.group == '_view' then unit.EdViewUnit = true end      -- the unit viewer's own units (EdClearLab takes them down)
         -- units of the mission's own groups are shown while editing only: the script spawns them when the mission plays
-        if ok and unit and data.group and data.group ~= 'INITIAL' then
+        if ok and unit and data.group and data.group ~= 'INITIAL' and string.sub(data.group, 1, 8) ~= 'INITIAL/' then
             ScenarioInfo.EditorGroupUnits = ScenarioInfo.EditorGroupUnits or {}
             table.insert(ScenarioInfo.EditorGroupUnits, unit)
         end

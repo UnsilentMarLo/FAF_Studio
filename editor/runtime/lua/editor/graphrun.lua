@@ -814,6 +814,9 @@ function Build()
                     local layer = math.floor(V(run, node, 'layer') + 0.5)
                     local entry, n = MaskGen.WriteLayer(c, m, layer, { mode = mode, strength = V(run, node, 'strength'), takeAway = V(run, node, 'takeAway') }, false)
                     if entry then result.layers = result.layers + 1 end
+                    -- the layer's texture by kind (grass, rock, sand ...) from the map's texture set, so the mask shows as something
+                    local role = V(run, node, 'texture')
+                    if role and role ~= 'keep' then pcall(function() import('/lua/editor/texsets.lua').ApplyRole(layer, role) end) end
                 end
             end
             -- terrain types

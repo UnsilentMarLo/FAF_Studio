@@ -1,5 +1,6 @@
 -- The Settings panel (File > Settings...): graphics quality (a preset and every setting behind it) and the size of the interface. The values live in graphics.lua / skin.lua; the panel keeps
--- nothing but its controls.
+-- nothing but its controls. It is only ever shown in a window of its own (windowOnly: closing the window does not dock it into the main window). Every control is made again for
+-- the width the panel has (Build), so the buttons stretch with the window.
 --
 -- Lua 5.0 dialect.
 
@@ -17,101 +18,95 @@ function Refresh()
 end
 
 Panels.Register{
-    id = 'settings', title = 'Settings', minW = 280, minH = 240, rebuildOnResize = true,
+    id = 'settings', title = 'Settings', minW = 280, minH = 240, windowOnly = true,
     create = function(group, host)
-        local P = { rows = {}, presetButtons = {}, w = 300 }
+        local P = { items = {}, rows = {}, presetButtons = {}, w = 0 }
         live.settings = P
         local c = Skin.color
 
-        local function Btn(text, w, fn, opts) return W.Button(group, text, 0, 0, Skin.S(w), Skin.S(22), fn, opts) end
+        local function Keep(ctl) table.insert(P.items, ctl) return ctl end
 
-        P.gfxTitle = W.Label(group, 'Graphics', 0, 0, { color = c.text })
-        P.presetLabel = W.Label(group, 'Quality preset', 0, 0, { color = c.textDim })
-        for _, name in Graphics.PresetOrder do
-            local preset = name
-            P.presetButtons[preset] = Btn(Graphics.PresetLabels[preset], 64, function()
-                Graphics.SetPreset(preset)
-                P:Refresh()
-            end, { toggle = true, tip = 'Sets every graphics setting below to the ' .. Graphics.PresetLabels[preset] .. ' preset.' })
+        function P:Clear()
+            for _, ctl in self.items do ctl:Destroy() end
+            self.items, self.rows, self.presetButtons = {}, {}, {}
         end
-        for _, d in Graphics.Defs do
-            local key = d.key
-            local row = { key = key }
-            row.full = d.label
-            row.label = W.Label(group, d.label, 0, 0, { color = c.text })
-            row.button = Btn(Graphics.StateText(key), 110, function()
-                Graphics.Cycle(key)
-                P:Refresh()
-            end, { tip = d.tip })
-            table.insert(P.rows, row)
-        end
-        P.reset = Btn('Restore defaults', 120, function()
-            Graphics.Reset()
-            P:Refresh()
-        end, { tip = 'Back to the highest quality (Ultra); anti-aliasing off and vertical sync on.' })
-        P.noteText = 'Anti-aliasing and vertical sync take effect at once; the window may flicker for a moment.'
-        P.noteLines = {}
-
-        P.uiTitle = W.Label(group, 'Interface', 0, 0, { color = c.text })
-        P.scaleLabel = W.Label(group, 'Size of the interface', 0, 0, { color = c.textDim })
-        P.scaleDown = Btn('-', 30, function() Commands.Run('ui.scale.down') end, { tip = 'Make the interface smaller.' })
-        P.scaleUp = Btn('+', 30, function() Commands.Run('ui.scale.up') end, { tip = 'Make the interface larger.' })
-        P.scaleValue = W.Label(group, '', 0, 0, { color = c.text })
 
         function P:Refresh()
+            if not self.built then return end
             local preset = Graphics.PresetName()
             for name, b in self.presetButtons do b:SetOn(name == preset) end
             for _, row in self.rows do row.button:SetText(Graphics.StateText(row.key)) end
             self.scaleValue:SetText(string.format('%d%%', math.floor(Skin.scale * 100 + 0.5)))
         end
 
+        --- Makes every control for a panel `w` pixels wide and puts it in place.
+        function P:Build(w)
+            self:Clear()
+            local pad = Skin.S(12)
+            local gap = Skin.S(6)
+            local rowH = Skin.S(24)
+            local y = pad
+            local function Btn(text, x, yy, bw, fn, opts)
+                return Keep(W.Button(group, text, x, yy, bw, rowH, fn, opts))
+            end
+            W.BeginLayout(group)
+
+            Keep(W.Label(group, 'Graphics', pad, y, { color = c.text }))
+            y = y + Skin.S(28)
+            Keep(W.Label(group, 'Quality preset', pad, y, { color = c.textDim }))
+            y = y + Skin.S(22)
+            local count = table.getn(Graphics.PresetOrder)
+            local bw = math.floor((w - 2 * pad - (count - 1) * gap) / count)
+            for i, name in Graphics.PresetOrder do
+                local preset = name
+                self.presetButtons[preset] = Btn(Graphics.PresetLabels[preset], pad + (i - 1) * (bw + gap), y, bw, function()
+                    Graphics.SetPreset(preset)
+                    P:Refresh()
+                end, { toggle = true, tip = 'Sets every graphics setting below to the ' .. Graphics.PresetLabels[preset] .. ' preset.' })
+            end
+            y = y + rowH + Skin.S(12)
+
+            local cw = math.max(Skin.S(110), math.floor((w - 2 * pad) * 0.4))
+            local labelW = math.max(Skin.S(60), w - 2 * pad - cw - gap)
+            for _, d in Graphics.Defs do
+                local key = d.key
+                local label = Keep(W.Label(group, d.label, pad, y + Skin.S(4), { color = c.text }))
+                W.Fit(label, d.label, labelW)
+                local button = Btn(Graphics.StateText(key), w - pad - cw, y, cw, function()
+                    Graphics.Cycle(key)
+                    P:Refresh()
+                end, { tip = d.tip })
+                table.insert(self.rows, { key = key, button = button })
+                y = y + rowH + Skin.S(6)
+            end
+            y = y + Skin.S(6)
+            Btn('Restore defaults', pad, y, math.min(w - 2 * pad, Skin.S(160)), function()
+                Graphics.Reset()
+                P:Refresh()
+            end, { tip = 'Back to the highest quality (Ultra); anti-aliasing off and vertical sync on.' })
+            y = y + rowH + Skin.S(10)
+            local lines, bottom = W.Paragraph(group, 'Anti-aliasing and vertical sync take effect at once; the window may flicker for a moment.', pad, y, w - 2 * pad,
+                                              { color = c.textDim, size = 'small' }, Skin.S(16))
+            for _, l in lines do Keep(l) end
+            y = (bottom or (y + Skin.S(16))) + Skin.S(18)
+
+            Keep(W.Label(group, 'Interface', pad, y, { color = c.text }))
+            y = y + Skin.S(28)
+            local scaleLabel = Keep(W.Label(group, 'Size of the interface', pad, y + Skin.S(4), { color = c.textDim }))
+            local sx = pad + scaleLabel.Width() + Skin.S(14)
+            Btn('-', sx, y, Skin.S(32), function() Commands.Run('ui.scale.down') end, { tip = 'Make the interface smaller.' })
+            self.scaleValue = Keep(W.Label(group, '100%', sx + Skin.S(40), y + Skin.S(4), { color = c.text }))
+            Btn('+', sx + Skin.S(40) + Skin.S(56), y, Skin.S(32), function() Commands.Run('ui.scale.up') end, { tip = 'Make the interface larger.' })
+            y = y + rowH + pad
+
+            W.EndLayout(group)
+            self.built, self.w = true, w
+            self:Refresh()
+        end
+
         function P:OnResize(w, h)
             if not w then return end
-            self.w = w
-            local pad = Skin.S(10)
-            local y = pad
-            W.BeginLayout(group)
-            W.Place(self.gfxTitle, group, pad, y)
-            y = y + Skin.S(26)
-            W.Place(self.presetLabel, group, pad, y)
-            y = y + Skin.S(20)
-            local x = pad
-            for _, name in Graphics.PresetOrder do
-                local b = self.presetButtons[name]
-                local bw = b.Width()
-                if x > pad and x + bw > w - pad then
-                    x = pad
-                    y = y + Skin.S(26)
-                end
-                W.Place(b, group, x, y, bw, Skin.S(22))
-                x = x + bw + Skin.S(4)
-            end
-            y = y + Skin.S(32)
-            local bw = Skin.S(110)
-            local labelW = math.max(Skin.S(60), w - 2 * pad - bw - Skin.S(8))
-            for _, row in self.rows do
-                W.Fit(row.label, row.full, labelW)
-                W.Place(row.label, group, pad, y + Skin.S(3))
-                W.Place(row.button, group, w - pad - bw, y, bw, Skin.S(22))
-                y = y + Skin.S(28)
-            end
-            y = y + Skin.S(4)
-            W.Place(self.reset, group, pad, y, self.reset.Width(), Skin.S(22))
-            y = y + Skin.S(30)
-            for _, l in self.noteLines do l:Destroy() end
-            local lines, bottom = W.Paragraph(group, self.noteText, pad, y, w - 2 * pad, { color = c.textDim, size = 'small' }, Skin.S(16))
-            self.noteLines = lines
-            y = (bottom or (y + Skin.S(16))) + Skin.S(14)
-            W.Place(self.uiTitle, group, pad, y)
-            y = y + Skin.S(26)
-            W.Place(self.scaleLabel, group, pad, y + Skin.S(3))
-            local sx = pad + self.scaleLabel.Width() + Skin.S(12)
-            W.Place(self.scaleDown, group, sx, y, Skin.S(30), Skin.S(22))
-            W.Place(self.scaleValue, group, sx + Skin.S(36), y + Skin.S(3))
-            W.Place(self.scaleUp, group, sx + Skin.S(36) + Skin.S(52), y, Skin.S(30), Skin.S(22))
-            y = y + Skin.S(30)
-            W.EndLayout(group)
-            self:Refresh()
+            self:Build(w)
         end
 
         function P:Destroy()

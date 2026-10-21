@@ -61,6 +61,7 @@ end
 local labelGroup = false
 local labels = {}
 local handleCount = 0
+local ghostLabels = {}     -- names beside the ghosts under the pointer (the Start position tool): { name, x, y, z }, set by Pointer, drawn by UpdateLabels
 
 local function Available()
     return rawget(_G, 'ed_overlay_set') ~= nil
@@ -310,6 +311,7 @@ local function UpdateLabels(view, px)
             Add(name, r[1], GroundHeight(r[1], r[2]), r[2], isSel)
         end
     end
+    for _, g in ghostLabels do Add(g.name, g.x, g.y, g.z, true) end
     -- the ruler's result at its end point
     local Ruler = import('/lua/editor/ruler.lua')
     local rp = Ruler.Points[table.getn(Ruler.Points)]
@@ -722,7 +724,15 @@ local function DrawGizmo()
     for _, s in shapes do
         local pts = {}
         for _, p in s.points do Push(pts, p[1], p[2]) end
-        ed_overlay_set(s.id, pts, s.color, 0.2, 2, 4, false, true)
+        if s.fill then
+            -- a filled square: one wide ribbon (world width), no halo, no vertex caps
+            ed_overlay_set(s.id, pts, s.color, s.width, 1, 800, false, false, false)
+        elseif s.px then
+            -- a line of constant width on screen (s.px pixels; the world width is far below that, so the pixel limits decide)
+            ed_overlay_set(s.id, pts, s.color, 0.02, s.px, s.px, s.closed and true or false, true)
+        else
+            ed_overlay_set(s.id, pts, s.color, 0.2, 2, 4, false, true)
+        end
         seen[s.id] = true
         gizmoIds[s.id] = true
     end
@@ -767,7 +777,66 @@ local function DrawRuler()
     end
 end
 
+local armyGhosts = 0      -- how many ghosts of the Start position tool are on the map
+
+local function ArmyGhostOff()
+    if armyGhosts > 0 then
+        for i = 1, armyGhosts do
+            Remove('cur:armyi' .. i)
+            Remove('cur:armyr' .. i)
+        end
+        armyGhosts = 0
+    end
+    MarkerVis.Ghost(nil)
+end
+
+--- The Start position tool's preview, like the marker tool's: at the pointer (and at every image of it under the symmetry) the icon a placed start position gets, its
+--- 3D marker prop, the ring in the template's colour and the name it would get (ARMY_<n>, the next free numbers in the order armies.lua Place uses).
+local function ArmyGhost(p)
+    local Armies = import('/lua/editor/armies.lua')
+    local tpl = Tools.Templates()['Blank Marker']
+    local color = Tools.ColorHex(tpl and tpl.color)
+    local used = {}
+    for _, nm in Armies.Names() do used[nm] = true end
+    local points = import('/lua/editor/symmetry.lua').Points(p[1], p[3])
+    local count = table.getn(points)
+    local spots = {}
+    local n = 0
+    for i, q in points do
+        repeat n = n + 1 until not used['ARMY_' .. n]
+        local gx, gz = Grid.SnapMarker('Blank Marker', q.x, q.z)
+        local gy = GroundHeight(gx, gz)
+        ed_overlay_icon('cur:armyi' .. i, gx, gy + LIFT, gz, '/textures/editor/markers/army.dds', ICON_PX, 'C0FFFFFF')
+        Line(nil, 'cur:armyr' .. i, Circle(gx, gz, 1.6, 24, gy, 3), color, 0.4, 2, 4, true)
+        table.insert(ghostLabels, { name = 'ARMY_' .. n, x = gx, y = gy, z = gz })
+        table.insert(spots, { gx, gy, gz })
+    end
+    for i = count + 1, armyGhosts do
+        Remove('cur:armyi' .. i)
+        Remove('cur:armyr' .. i)
+    end
+    armyGhosts = count
+    MarkerVis.Ghost(spots, tpl and tpl.prop)
+end
+
+--- The Draw chain tool's preview: the ring and cross of a marker at the pointer, and a line from the end of the chain being drawn (chains.lua DrawTail) to it.
+local function ChainGhost(p, px)
+    local color = 'FFA020'
+    Line(nil, 'cur:ring', Circle(p[1], p[3], 1.6, 24, p[2], 3), color, 0.4, 2, 4, true)
+    local s = 4 * px
+    local pts = {}
+    Push(pts, p[1] - s, p[3]) Push(pts, p[1] + s, p[3])
+    Line(nil, 'cur:cross', pts, color, 0.2, 2, 3, false)
+    local tx, tz = import('/lua/editor/chains.lua').DrawTail()
+    if tx then
+        Line(nil, 'cur:chain', { tx, GroundHeight(tx, tz) + LIFT + 0.45, tz, p[1], GroundHeight(p[1], p[3]) + LIFT + 0.45, p[3] }, color, 0.2, 2, 3, false)
+    else
+        Remove('cur:chain')
+    end
+end
+
 local function Pointer(view, ui, mouseX, mouseY)
+    ghostLabels = {}
     local tool = ui.ActiveTool()
     local over = view.CursorOverWorld
     local p = over and GetMouseWorldPos() or nil
@@ -840,9 +909,17 @@ local function Pointer(view, ui, mouseX, mouseY)
         Push(pts, p[1], p[3] - s) Push(pts, p[1], p[3] + s)
         Line(nil, 'cur:cross', pts, COLOR_AREA, 0.2, 2, 3, false)
         Remove('cur:inner')
+    elseif tool and tool.id == 'army' and p then
+        ArmyGhost(p)
+        Remove('cur:ring') Remove('cur:inner') Remove('cur:cross')
+    elseif tool and tool.id == 'chain' and p then
+        ChainGhost(p, px)
+        Remove('cur:inner')
     else
         Remove('cur:ring') Remove('cur:inner') Remove('cur:cross')
     end
+    if not (tool and tool.id == 'army' and p) then ArmyGhostOff() end
+    if not (tool and tool.id == 'chain' and p) then Remove('cur:chain') end
     if not (tool and tool.kind == 'brush' and p) then
         Remove('cur:brush')
         previewKey = ''
@@ -900,6 +977,8 @@ function Clear()
     pcall(function() import('/lua/editor/pathtool.lua').Forget() end)
     pcall(function() import('/lua/editor/chains.lua').Forget() end)
     pcall(function() import('/lua/editor/unitrings.lua').Forget() end)
+    pcall(function() import('/lua/editor/gizmo.lua').Forget() end)
+    pcall(function() import('/lua/editor/placer.lua').Clear() end)
     unitIds = {}
     unitKey = ''
     decalSelIds = {}
@@ -962,7 +1041,7 @@ function Update(ui)
     -- hover feedback for the select tool
     local tool = ui.ActiveTool()
     local p = view.CursorOverWorld and tool and tool.kind == 'select' and GetMouseWorldPos() or nil
-    local hit = Tools.UpdateHover(p and p[1], p and p[3], mx, my)
+    local hit = Tools.UpdateHover(p and p[1], p and p[3], mx, my, tool and tool.pick)       -- (Select marker only hovers markers, Select area only areas)
     Cursors.Update(view, tool, hit)
 
     -- everything above works without a map document (the build grid, the slope view, the pointer); the rest draws the document's objects

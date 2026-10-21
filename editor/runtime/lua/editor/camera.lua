@@ -17,6 +17,15 @@
 local Dragger = import('/lua/maui/dragger.lua').Dragger
 
 --- Default gestures. `title` is what the hotkey manager shows.
+--- A heading in (-pi, pi]: turning the view past a half turn kept adding to the heading (-3.14 ... -4.71 for east reached by turning left), and the engine's culling of props and
+--- mesh instances misbehaves for headings outside that range (parts of the scene did not draw when facing east after a left turn; east by a right turn, +1.57, was fine).
+local TWO_PI = 6.2831853
+function NormalizeHeading(h)
+    while h > 3.1415927 do h = h - TWO_PI end
+    while h <= -3.1415927 do h = h + TWO_PI end
+    return h
+end
+
 Gestures = {
     pan    = { title = 'Camera: pan (drag)',        button = 'Middle', ctrl = false, alt = false, shift = false },
     orbit  = { title = 'Camera: rotate (drag)',     button = 'Left',   ctrl = false, alt = true,  shift = false },
@@ -191,7 +200,7 @@ local function DragOrbit(view, event, clickable)
             return
         end
         moved = true
-        heading = heading - (x - lastX) * ROTATE_PER_PIXEL
+        heading = NormalizeHeading(heading - (x - lastX) * ROTATE_PER_PIXEL)
         pitch = Clamp(pitch + (y - lastY) * ROTATE_PER_PIXEL, MIN_PITCH, MAX_PITCH)
         lastX, lastY = x, y
         cam:SnapTo(focus, { heading, pitch, 0 }, zoom)
@@ -313,7 +322,7 @@ function Update(commands)
             focus = Vector(nx, focus[2], nz)
         end
     end
-    heading = heading + move.turn * 1.6 * dt * fast
+    heading = NormalizeHeading(heading + move.turn * 1.6 * dt * fast)
     pitch = Clamp(pitch + move.tilt * 1.2 * dt * fast, MIN_PITCH, MAX_PITCH)
     cam:SnapTo(focus, { heading, pitch, 0 }, zoom)
     if move.zoom ~= 0 then

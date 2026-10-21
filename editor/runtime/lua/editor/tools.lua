@@ -632,12 +632,15 @@ function HandleArea()
 end
 
 --- What is under a world position: { kind, name, handle } or nil. Window position for the pixel tolerance.
-function Pick(wx, wz, mx, my)
+--- `only` limits it to one kind of object ('marker' | 'area'; nil = both): the Select marker tool never picks an area (areas are big rectangles that
+--- covered the markers' neighbourhood), the Select area tool never picks a marker. A marker of a layer that is switched off in the View panel is not pickable
+--- either (it is not drawn), unless it is selected.
+function Pick(wx, wz, mx, my, only)
     if not Map.Doc then return nil end
     local px = PixelSize(mx, my)
 
     -- the handles of a lone selected area win over everything under them
-    local handleArea = HandleArea()
+    local handleArea = (only ~= 'marker') and HandleArea() or nil
     if handleArea then
         for _, h in Handles(Areas()[handleArea].rectangle) do
             if math.abs(h.x - wx) <= HANDLE_PX * px and math.abs(h.z - wz) <= HANDLE_PX * px then
@@ -647,11 +650,14 @@ function Pick(wx, wz, mx, my)
     end
 
     local best, bestD = nil, (MARKER_PX * px) * (MARKER_PX * px)
-    for name, m in Markers() do
-        local dx, dz = m.position[1] - wx, m.position[3] - wz
-        local d = dx * dx + dz * dz
-        if d <= bestD then
-            best, bestD = name, d
+    if only ~= 'area' then
+        local Filter = import('/lua/editor/markerfilter.lua')
+        for name, m in Markers() do
+            local dx, dz = m.position[1] - wx, m.position[3] - wz
+            local d = dx * dx + dz * dz
+            if d <= bestD and (not Filter.IsHidden(m.type) or IsSelected('marker', name)) then
+                best, bestD = name, d
+            end
         end
     end
     if best then
@@ -662,7 +668,7 @@ function Pick(wx, wz, mx, my)
     local areaName, areaSize = nil, nil
     for name, a in Areas() do
         local r = a.rectangle
-        if r and wx >= r[1] and wx <= r[3] and wz >= r[2] and wz <= r[4] then
+        if only ~= 'marker' and r and wx >= r[1] and wx <= r[3] and wz >= r[2] and wz <= r[4] then
             local size = (r[3] - r[1]) * (r[4] - r[2])
             if not areaSize or size < areaSize then
                 areaName, areaSize = name, size
@@ -676,8 +682,8 @@ function Pick(wx, wz, mx, my)
 end
 
 --- Updates the hover highlight (call each frame with the world position under the pointer, or nil).
-function UpdateHover(wx, wz, mx, my)
-    local hit = wx and Pick(wx, wz, mx, my) or nil
+function UpdateHover(wx, wz, mx, my, only)
+    local hit = wx and Pick(wx, wz, mx, my, only) or nil
     local kind, name = false, false
     if hit and not hit.handle then kind, name = hit.kind, hit.name end
     if Hover.kind ~= kind or Hover.name ~= name then
@@ -697,19 +703,21 @@ local function WorldAt(x, y)
     return nil
 end
 
---- Everything whose reference point lies inside the world rectangle: markers by position, areas by centre.
-local function InBox(x0, z0, x1, z1)
+--- Everything whose reference point lies inside the world rectangle: markers by position, areas by centre. `only` = 'marker' | 'area' limits it to one kind
+--- (see Pick); markers of a hidden View layer are left out.
+local function InBox(x0, z0, x1, z1, only)
     local minx, maxx, minz, maxz = math.min(x0, x1), math.max(x0, x1), math.min(z0, z1), math.max(z0, z1)
     local list = {}
+    local Filter = import('/lua/editor/markerfilter.lua')
     for name, m in Markers() do
         local p = m.position
-        if p[1] >= minx and p[1] <= maxx and p[3] >= minz and p[3] <= maxz then
+        if only ~= 'area' and p[1] >= minx and p[1] <= maxx and p[3] >= minz and p[3] <= maxz and (not Filter.IsHidden(m.type) or IsSelected('marker', name)) then
             table.insert(list, { kind = 'marker', name = name })
         end
     end
     for name, a in Areas() do
         local r = a.rectangle
-        if r then
+        if r and only ~= 'marker' then
             local cx, cz = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2
             if cx >= minx and cx <= maxx and cz >= minz and cz <= maxz then
                 table.insert(list, { kind = 'area', name = name })
@@ -913,10 +921,10 @@ function BeginBoxSelect(wx, wz, event, additive, onDone)
     PostDragger(GetFrame(0), event.KeyCode, dragger)
 end
 
-local function BeginMarquee(wx, wz, event, additive)
+local function BeginMarquee(wx, wz, event, additive, only)
     BeginBoxSelect(wx, wz, event, additive, function(box, add)
         if box then
-            SelectMany(InBox(box[1], box[2], box[3], box[4]), add)
+            SelectMany(InBox(box[1], box[2], box[3], box[4], only), add)
         elseif not add then
             Select(false)
         end
@@ -924,15 +932,16 @@ local function BeginMarquee(wx, wz, event, additive)
 end
 
 --- Left press with the select tool. Shift toggles an object in the selection; a press on a selected object drags the whole
---- selection; a press on empty ground drags a selection box. Returns true (the click is always taken).
-function OnSelectPress(wx, wz, event)
+--- selection; a press on empty ground drags a selection box. Returns true (the click is always taken). `only` = 'marker' (the Select marker tool) or 'area'
+--- (the Select area tool) limits what is picked, hovered and boxed to that kind of object; nil = both.
+function OnSelectPress(wx, wz, event, only)
     if not Map.Doc then Map.Load() end        -- the document loads on first use, like the other tools
     if not Map.Doc then return true end
     local shift = event.Modifiers and event.Modifiers.Shift
-    local hit = Pick(wx, wz, event.MouseX, event.MouseY)
+    local hit = Pick(wx, wz, event.MouseX, event.MouseY, only)
 
     if not hit then
-        BeginMarquee(wx, wz, event, shift and true or false)
+        BeginMarquee(wx, wz, event, shift and true or false, only)
         return true
     end
 

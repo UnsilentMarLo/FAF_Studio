@@ -22,3 +22,4 @@ selftest_resize
 selftest_platoons
 selftest_mirror
 selftest_browser
+selftest_mission_import

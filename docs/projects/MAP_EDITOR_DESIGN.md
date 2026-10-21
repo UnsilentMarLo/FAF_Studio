@@ -1064,6 +1064,21 @@ shows different poses. Not yet: bone overlay, LOD switch, team colour / lighting
   warnings count was 0 for the whole run.
 - **Not yet**: per-player commander coordinates / slot count simulation (1-4 human slots), Spawn-Player-Commanders per faction with enhancements, drop reinforcements per player, taunt tables, voice-over (bank / cue) per dialogue line.
 
+### 19.24b Mission import: a hand-written mission shows up read-only (2026-10-21)
+
+- A campaign map whose `_script.lua` was written by hand (Operation Citadel: `ScenarioInfo.MissionNumber` stages, `IntroMissionN` / `StartMissionN`, `Objectives.*`, timer triggers, AI base modules) used to open with an empty mission editor.
+  `missionimport.lua` reads the script and its `_strings.lua` as **text** (strings and comments blanked first; never executed) and builds an outline: stages (numbers set by `ScenarioInfo.MissionNumber = N`, or named
+  `IntroMissionN` / `StartMissionN`), named functions with line ranges (a function belongs to the stage that sets the number, whose name carries it, or that is its only caller), objectives with their literal type / title / description,
+  trigger callbacks (`Create...Trigger`, `:Add...Callback`, taunts), AI module / OpAI / platoon helpers by name, `ScenarioInfo.Options.*` and the difficulty uses, dialogue tables the script plays. `Map.Load` calls
+  `Mission.ImportScript(Doc)` after the sidecar loader: it imports when the sidecar holds no editor mission (or the sidecar says `keepImport`).
+- Imported stages (`imported = true`, `info` = the outline, no nodes) and dialogues (`imported = true`, from `BriefingData`, the line tables with `text / character / vid / bank / cue / faction` and the plain strings) are **read-only**: the
+  Stages panel shows the outline instead of nodes (and dims the buttons that cannot work, tooltip and click say why), the Strings panel lists the lines (read-only dialog), the Run panel refuses Jump / Skip / Timers on them.
+  `Compile` and `PatchScript` skip imported stages: a mission that is only imported writes **nothing** (`PatchScript` -> `'none'`, the script stays byte for byte as it is; `Map.SaveAsCore` also skips the playable-area patch for it,
+  `PrepareArmies` and `ScenarioType` leave armies and type alone). Imported entries are not in the sidecar (it keeps `keepImport = true` next to the editor stages, so the next load imports again from the script); editor stages added
+  behind them are numbered by their position in the list (`Stage[4]` after three imported entries) and Check warns when the script uses that number itself. The editor has no text viewer, so there is no "Open in editor" action; the
+  outline lists line numbers to look up in an external editor.
+- Test: `selftest_mission_import.lua` (inline scripts and strings, the model rules, and the Citadel script when its file is on disk).
+
 ### 19.25 Erosion suite and erosion brushes (2026-10-18, later; details in editor/TERRAIN_GEN_DESIGN.md section 12)
 
 - **Native erosion in the field engine**: `erode_hydraulic` (pipe model), `erode_droplet` (particles), `erode_stream` (stream power on a drainage network with pit breaching), `slope_area`, `basin_depth`; deterministic for any thread count, golden checksums, `ed_field_op_multi` returns height + wear + deposit + flow + accum masks from one run.

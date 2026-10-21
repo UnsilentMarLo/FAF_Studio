@@ -30,29 +30,68 @@ end
 -- ---- new map ------------------------------------------------------------------------------------------------------------------------
 
 function NewMap()
-    local d = Dialog.Open('New map', 420, 250)
+    local d = Dialog.Open('New map', 460, 250)
     local c = Skin.color
-    local size = 1
+    local state = { size = 1, custom = false }
     local buttons = {}
-    d:Label('Size', 14, 40, { color = c.textDim })
+    d:Label('Size', 14, 36, { color = c.textDim })
+    local count = table.getn(Maps.Sizes)
+    local bw = math.floor((460 - 28 - (count - 1) * 6) / count)
+    local say, widthField, heightField
+    local function Show()
+        for j, b in buttons do b:SetOn(not state.custom and j == state.size) end
+        if buttons.custom then buttons.custom:SetOn(state.custom) end
+    end
     for i, s in Maps.Sizes do
         local index = i
-        buttons[i] = d:Button(s.label, 14, 62 + (i - 1) * 30, 220, 24, function()
-            size = index
-            for j, b in buttons do b:SetOn(j == index) end
-        end, { toggle = true })
+        buttons[i] = d:Button(string.gsub(s.label, ' km$', ''), 14 + (i - 1) * (bw + 6), 58, bw, 28, function()
+            state.size, state.custom = index, false
+            Show()
+        end, { toggle = true, tip = s.label .. ' (' .. s.samples .. ' x ' .. s.samples .. ' samples).' })
     end
-    buttons[1]:SetOn(true)
-    d:Label('Name', 14, 62 + table.getn(Maps.Sizes) * 30 + 12, { color = c.textDim })
-    local name = d:Field(70, 62 + table.getn(Maps.Sizes) * 30 + 8, 330, 22, { text = 'My map' })
+    buttons.custom = d:Button('Custom', 14, 94, 90, 24, function()
+        state.custom = true
+        Show()
+        widthField:AcquireFocus()
+    end, { toggle = true, tip = 'Type the size in kilometres. Fractions are fine (2.5). The terrain supports 2.5, 5, 10, 20, 40 and 80 km.' })
+    d:Label('Width', 116, 98, { color = c.textDim })
+    widthField = d:Field(166, 94, 60, 22, { text = '10' })
+    d:Label('Height', 238, 98, { color = c.textDim })
+    heightField = d:Field(292, 94, 60, 22, { text = '10' })
+    d:Label('km', 360, 98, { color = c.textDim })
+    say = d:Label('', 14, 126, { color = c.error, size = 'small' })
+    d:Label('Name', 14, 156, { color = c.textDim })
+    local name = d:Field(70, 152, 376, 22, { text = 'My map' })
     local function Create()
         local text = name:GetText()
+        if text == '' then text = 'My map' end
+        if state.custom then
+            local w, h = tonumber(widthField:GetText()), tonumber(heightField:GetText())
+            if not w or not h then say:SetText('type the width and the height in kilometres, for example 2.5') return end
+            if math.abs(w - h) > 0.0001 then say:SetText('the blank maps are square: width and height must be equal') return end
+            local index, why = Maps.SizeForKm(w)
+            if not index then say:SetText(tostring(why)) return end
+            local ready = (index == 0) and '/maps/editor_blank_128/editor_blank_128_scenario.lua' or Maps.Sizes[index].template
+            if not Maps.TemplateReady(ready) then
+                say:SetText('the blank map for this size is not installed: run  python scripts/studio.py generate')
+                return
+            end
+            Dialog.Close()
+            Guard(function() Maps.NewKm(w, text) end)
+            return
+        end
+        if not Maps.TemplateReady(Maps.Sizes[state.size].template) then
+            say:SetText('the blank map for this size is not installed: run  python scripts/studio.py generate')
+            return
+        end
         Dialog.Close()
-        Guard(function() Maps.New(size, (text ~= '' and text) or 'My map') end)
+        Guard(function() Maps.New(state.size, text) end)
     end
-    d:Button('Create', 14, 210, 100, 26, Create)
-    d:Button('Cancel', 124, 210, 100, 26, function() Dialog.Close() end)
+    d:Button('Create', 14, 206, 100, 26, Create)
+    d:Button('Cancel', 124, 206, 100, 26, function() Dialog.Close() end)
     name.OnEnterPressed = function(self, text) Create() return true end
+    Show()
+    buttons[1]:SetOn(true)
     name:AcquireFocus()
 end
 

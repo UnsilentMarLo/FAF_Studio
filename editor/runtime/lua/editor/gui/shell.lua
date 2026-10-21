@@ -171,9 +171,16 @@ function CloseWindow(host)
             local ok, mode = pcall(function() return import('/lua/editor/ui.lua').State.mode end)
             if ok and mode == 'play' then
                 S.pendingDock = S.pendingDock or {}
-                for _, panelId in panels do table.insert(S.pendingDock, panelId) end
+                for _, panelId in panels do
+                    local def = Panels.Get(panelId)
+                    if not (def and def.windowOnly) then table.insert(S.pendingDock, panelId) end
+                end
             else
-                for _, panelId in panels do S.main:AddPanel(panelId) end
+                for _, panelId in panels do
+                    -- a panel that only lives in a window (Settings) is closed with it, not docked into the main window
+                    local def = Panels.Get(panelId)
+                    if not (def and def.windowOnly) then S.main:AddPanel(panelId) end
+                end
             end
             return
         end
@@ -333,6 +340,11 @@ function ShowWorkspace(name, layout)
     if S.editor then pcall(function() import('/lua/editor/ui.lua').SetWorkspace(name) end) end
     for id, _ in S.main.instances do S.main:DropInstance(id) end   -- fresh controls: a new scale or workspace must not reuse old ones
     S.main:SetTree(layout.tree)
+    -- panels that only live in a window (Settings) are not part of the docked layout, whatever an earlier version kept
+    for _, panelId in S.main:Panels() do
+        local def = Panels.Get(panelId)
+        if def and def.windowOnly then pcall(function() S.main:Remove(panelId) end) end
+    end
     for _, p in layout.popouts or {} do
         local panels = {}
         local function Collect(n)

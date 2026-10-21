@@ -57,8 +57,8 @@ def build(folder, stem="editor_blank", size=256):
     return proj
 
 
-# the templates of File > New map and of Map > Resize (editor/runtime/lua/editor/maps.lua Sizes, resize.lua Sizes): 2.5, 5, 10, 20 and 40 km
-TEMPLATES = ((128, "editor_blank_128"), (256, "editor_blank"), (512, "editor_blank_512"), (1024, "editor_blank_1024"), (2048, "editor_blank_2048"))
+# the templates of File > New map and of Map > Resize (editor/runtime/lua/editor/maps.lua Sizes, resize.lua Sizes): 2.5, 5, 10, 20, 40 and 80 km
+TEMPLATES = ((128, "editor_blank_128"), (256, "editor_blank"), (512, "editor_blank_512"), (1024, "editor_blank_1024"), (2048, "editor_blank_2048"), (4096, "editor_blank_4096"))
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ local Commands = import('/lua/editor/gui/commands.lua')
 local Menu = import('/lua/editor/gui/menu.lua')
 
 Commands.Register{ id = 'settings.open', title = 'File: settings...', run = function()
-    import('/lua/editor/gui/shell.lua').OpenPanelWindow('settings', 380, 470)
+    import('/lua/editor/gui/shell.lua').OpenPanelWindow('settings', 560, 700)
 end }
 
 Menu.Extend('menubar.File', function()

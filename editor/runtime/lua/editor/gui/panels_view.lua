@@ -76,6 +76,11 @@ Panels.Register{
             table.insert(P.layerRow, { b, Skin.S(96) })
         end
 
+        -- chains: a hidden layer also hides the chain lines of its markers (chains.lua Draw); this shows only the chain of the selected marker
+        P.chainsOnly = Btn('Only the selected chain', Skin.S(170), Skin.S(24), function(self)
+            import('/lua/editor/chains.lua').SetOnlySelected(self.on)
+        end, { toggle = true })
+
         P.slopeLabel = Lbl('Slope shows')
         P.path = Btn('Mobile units', Skin.S(92), Skin.S(24), function() Slope.SetKind('path') P:Refresh() end, { toggle = true })
         P.build = Btn('Structures', Skin.S(92), Skin.S(24), function() Slope.SetKind('build') P:Refresh() end, { toggle = true })
@@ -120,7 +125,8 @@ Panels.Register{
             end
             y = W.Flow(group, { { P.grid, Skin.S(92) }, { P.slope, Skin.S(92) } }, pad, y, iw, Skin.S(24), Skin.S(8)) + Skin.S(12)
             W.Place(P.markersLabel, group, pad, y + Skin.S(4))
-            y = W.Flow(group, P.layerRow, pad, y + Skin.S(24), iw, Skin.S(24), Skin.S(4)) + Skin.S(12)
+            y = W.Flow(group, P.layerRow, pad, y + Skin.S(24), iw, Skin.S(24), Skin.S(4)) + Skin.S(6)
+            y = W.Flow(group, { { P.chainsOnly, Skin.S(170) } }, pad, y, iw, Skin.S(24), Skin.S(4)) + Skin.S(12)
             W.Place(P.slopeLabel, group, pad, y + Skin.S(4))
             y = W.Flow(group, { { P.path, Skin.S(92) }, { P.build, Skin.S(92) } }, pad, y + Skin.S(24), iw, Skin.S(24), Skin.S(8)) + Skin.S(12)
             W.Place(P.footLabel, group, pad, y + Skin.S(4))
@@ -153,7 +159,9 @@ Panels.Register{
             end
             P.grid:SetOn(Grid.Visible)
             P.slope:SetOn(Slope.Visible)
-            for cat, b in P.layers or {} do b:SetOn(not Filter.Hidden[cat]) end            P.path:SetOn(Slope.Kind == 'path')
+            for cat, b in P.layers or {} do b:SetOn(not Filter.Hidden[cat]) end
+            P.chainsOnly:SetOn(import('/lua/editor/chains.lua').OnlySelected)
+            P.path:SetOn(Slope.Kind == 'path')
             P.build:SetOn(Slope.Kind == 'build')
             P.size:SetText(string.format('%d x %d cells', Slope.Window, Slope.Window))
             P.limit:SetText(string.format('%.2f', Slope.Limit))

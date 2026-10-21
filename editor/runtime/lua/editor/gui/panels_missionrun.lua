@@ -13,6 +13,33 @@ local R = import('/lua/editor/missionrun.lua')
 
 live = {}
 
+-- why Jump / Skip / Timers do nothing for a mission imported from a hand-written script (missionimport.lua)
+local JUMP_WHY = 'this stage is imported from the hand-written script: it has no editor nodes and the script starts its own stages. Select a stage made in the editor to jump to it.'
+local TIMER_WHY = 'the imported script runs its own waits and timers; only the waits of stages made in the editor can be skipped or sped up.'
+
+--- Is the stage selected in the Stages panel an imported one?
+local function SelectedImported()
+    local stages = live.stages
+    local s = M.Data.stages[stages and stages.stage or 1]
+    return s and s.imported or false
+end
+
+--- Does the mission consist only of imported stages (nothing the run panel can steer)?
+local function OnlyImported()
+    return M.IsImported() and M.EditorStageCount() == 0
+end
+
+--- Adds a 'why' to the tooltip of a button while `blocked()` is true.
+local function WhyTip(b, blocked, why)
+    local base = b.TipText
+    b.TipText = function(self)
+        local t = base(self)
+        if blocked() then t = (t and (t .. '  ') or '') .. 'Not available: ' .. why end
+        return t
+    end
+    return b
+end
+
 local function Say(text)
     pcall(function() UI.Say(text) end)
 end
@@ -63,8 +90,11 @@ Panels.Register{
                 return rows
             end
             local s = R.State
-            local stage = M.Data.stages[s.stage]
-            table.insert(rows, { text = 'Stage ' .. s.stage .. ' of ' .. table.getn(M.Data.stages) .. (stage and (': ' .. tostring(stage.name)) or ''), extra = 'tick ' .. s.tick, color = c.accent })
+            local stage = M.StageByNumber(s.stage)
+            table.insert(rows, { text = 'Stage ' .. s.stage .. (M.IsImported() and '' or (' of ' .. table.getn(M.Data.stages))) .. (stage and (': ' .. tostring(stage.name)) or ''), extra = 'tick ' .. s.tick, color = c.accent })
+            if M.IsImported() then
+                table.insert(rows, { text = 'imported script: its objectives and groups are not listed here', color = c.textDim })
+            end
             for _, o in s.objectives do
                 table.insert(rows, { text = (o.active and '[open]  ' or '[done]  ') .. o.title, color = o.active and c.text or c.ok })
             end
@@ -102,23 +132,26 @@ Panels.Register{
 
         P.bState = Btn('State', 54, function() P.view = 'state' P:Refresh() end)
         P.bWarn = Btn('Warnings', 74, function() P.view = 'warnings' P:Refresh() end)
-        P.bJump = Btn('Jump to stage', 96, function()
+        P.bJump = WhyTip(Btn('Jump to stage', 96, function()
             if UI.State.mode ~= 'play' then Say('run: press Play test first') return end
             local stages = live.stages
             local n = stages and stages.stage or 1
             if not M.Data.stages[n] then Say('run: select a stage in the Stages panel') return end
+            if M.Data.stages[n].imported then Say('run: ' .. JUMP_WHY) return end
             R.Jump(n)
             Say('run: jumped to stage ' .. n)
-        end)
-        P.bSkip = Btn('Skip waits', 76, function()
+        end), SelectedImported, JUMP_WHY)
+        P.bSkip = WhyTip(Btn('Skip waits', 76, function()
             if UI.State.mode ~= 'play' then Say('run: press Play test first') return end
+            if OnlyImported() then Say('run: ' .. TIMER_WHY) return end
             R.Skip()
-        end)
-        P.bScale = Btn('Timers x1', 78, function(self)
+        end), OnlyImported, TIMER_WHY)
+        P.bScale = WhyTip(Btn('Timers x1', 78, function(self)
+            if OnlyImported() then Say('run: ' .. TIMER_WHY) return end
             P.scaleIndex = math.mod(P.scaleIndex, table.getn(SCALES)) + 1
             R.SetScale(SCALES[P.scaleIndex])
             self:SetText('Timers x' .. SCALES[P.scaleIndex])
-        end)
+        end), OnlyImported, TIMER_WHY)
         P.bFlag = Btn('New flag...', 80, function()
             if UI.State.mode ~= 'play' then Say('run: press Play test first') return end
             Dialogs().NameDialog('Flag', 'Flag name (e.g. ATTACK_NOW): set on', function(name)
@@ -142,7 +175,13 @@ Panels.Register{
             if P.sel < 1 then P.sel = 1 end
             P.list:Refresh()
             local s = R.State
-            W.Fit(P.status, mode == 'play' and string.format('playing, stage %d, timers x%s', s.stage, tostring(s.scale)) or 'editing', (P.w or 300) - Skin.S(16))
+            local text = mode == 'play' and string.format('playing, stage %d, timers x%s', s.stage, tostring(s.scale)) or 'editing'
+            if OnlyImported() then text = text .. '  (imported script: jump, skip and timers are off)'
+            elseif SelectedImported() then text = text .. '  (selected stage is imported: no jump)' end
+            W.Fit(P.status, text, (P.w or 300) - Skin.S(16))
+            for _, b in { P.bJump, P.bSkip, P.bScale } do
+                b.label:SetColor(((b == P.bJump and SelectedImported()) or (b ~= P.bJump and OnlyImported())) and c.textDim or c.text)
+            end
         end
 
         function P:OnResize(w, h)
@@ -175,7 +214,7 @@ Panels.Register{
             bind = function(row, index)
                 local d = M.Data.dialogues[index]
                 if not d then return end
-                Row(row, tostring(d.name), table.getn(d.lines or {}) .. ' lines', index == P.sel and c.accent or nil)
+                Row(row, tostring(d.name), table.getn(d.lines or {}) .. (d.imported and ' lines (imported)' or ' lines'), index == P.sel and c.accent or (d.imported and c.textDim or nil))
             end,
             onSelect = function(index) P.sel = index P:Refresh() end,
             bgColor = c.panel,
@@ -192,7 +231,10 @@ Panels.Register{
             if M.Data.dialogues[P.sel] then Dialogs().DialogueLines(P.sel, function() P:Refresh() end) end
         end)
         P.del = Btn('Remove', 60, function()
-            if M.Data.dialogues[P.sel] and M.RemoveDialogue(P.sel) then P.sel = math.max(1, P.sel - 1) end
+            if M.Data.dialogues[P.sel] then
+                local ok, why = M.RemoveDialogue(P.sel)
+                if ok then P.sel = math.max(1, P.sel - 1) elseif why then Say('strings: ' .. why) end
+            end
             P:Refresh()
         end)
         P.status = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
