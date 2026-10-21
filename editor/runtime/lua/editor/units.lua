@@ -24,6 +24,9 @@ DragOffset = false
 
 local catalog = false
 
+--- Bumped by every store / unstore of a unit (Add, Remove and so every edit, paste, undo and redo): the cached list of All() and the overlay's rings compare it.
+Rev = 0
+
 local function Say(text)
     pcall(function() import('/lua/editor/ui.lua').Say(text) end)
 end
@@ -142,9 +145,48 @@ function All()
     return list
 end
 
+-- All() builds a table per unit (2100 on a mission map) and walks and sorts every group: per-frame callers (the overlay's rings, the gizmo, range rings, hover) and the
+-- loops that look up each selected unit use this cached copy instead. It is rebuilt when a unit was stored or removed here (Rev), when the history moved (an edit made
+-- elsewhere), when another document was opened, and at the latest after 1.5 s (a writer that bypasses all three). The entries are shared: read them, do not change them.
+local cache = { doc = false, rev = -1, hist = -1, at = -100, list = false, index = false }
+
+local function CacheFresh()
+    local now = GetSystemTimeSeconds()
+    local hist = History.Version
+    if cache.list and cache.doc == Map.Doc and cache.rev == Rev and cache.hist == hist and now - cache.at < 1.5 then return end
+    cache.list, cache.index = All(), false
+    cache.doc, cache.rev, cache.hist, cache.at = Map.Doc, Rev, hist, now
+end
+
+--- All() from the cache (see above).
+function CachedAll()
+    CacheFresh()
+    return cache.list
+end
+
+--- The unit { army, name } of a selection entry (the first in the order of All()), from the cache; nil when there is none.
+function Lookup(army, name)
+    CacheFresh()
+    local index = cache.index
+    if not index then
+        index = {}
+        for _, u in cache.list do
+            local key = u.army .. '\1' .. u.name
+            if index[key] == nil then index[key] = u end
+        end
+        cache.index = index
+    end
+    return index[army .. '\1' .. name]
+end
+
+--- A stamp that changes whenever the cached list would be rebuilt for another reason than its age: for callers that want to skip their own work (the overlay's key).
+function Stamp()
+    return Rev * 4096 + History.Version
+end
+
 local function NewName()
     local max = 0
-    for _, u in All() do
+    for _, u in CachedAll() do
         local n = tonumber(string.sub(u.name, 6))
         if string.find(u.name, '^UNIT_%d+$') and n and n > max then max = n end
     end
@@ -164,12 +206,14 @@ end
 local function Store(u)
     local tbl = UnitTable(u.army, true, u.group)
     if not tbl then return false end
+    Rev = Rev + 1
     tbl[u.name] = { type = u.bp, orders = '', platoon = '', Position = Vec3(u.x, u.y, u.z), Orientation = Vec3(0, u.heading, 0) }
     return true
 end
 
 local function Unstore(u)
     local tbl = UnitTable(u.army, false, u.group)
+    Rev = Rev + 1
     if tbl then tbl[u.name] = nil end
 end
 
@@ -230,11 +274,17 @@ local function Same(a, b)
     return a.army == b.army and a.name == b.name
 end
 
+-- the selection as a set (army, name), rebuilt when the list, its length or SelRevision changed: IsSelected is asked for many units in a row
+local selSet, selSetOf, selSetN, selSetRev = {}, false, -1, -1
+
 function IsSelected(u)
-    for _, q in Selection do
-        if Same(u, q) then return true end
+    local n = table.getn(Selection)
+    if selSetOf ~= Selection or selSetN ~= n or selSetRev ~= SelRevision then
+        selSet = {}
+        for _, q in Selection do selSet[q.army .. '\1' .. q.name] = true end
+        selSetOf, selSetN, selSetRev = Selection, n, SelRevision
     end
-    return false
+    return selSet[u.army .. '\1' .. u.name] == true
 end
 
 function ClearSelection()
@@ -248,7 +298,7 @@ end
 function Pick(wx, wz, radius)
     radius = radius or 3
     local best, bestD
-    for _, u in All() do
+    for _, u in CachedAll() do
         local dx, dz = u.x - wx, u.z - wz
         local d = dx * dx + dz * dz
         if d <= radius * radius and (not bestD or d < bestD) then best, bestD = u, d end
@@ -275,10 +325,7 @@ function Select(u, mode)
 end
 
 local function Find(sel)
-    for _, u in All() do
-        if Same(u, sel) then return u end
-    end
-    return nil
+    return Lookup(sel.army, sel.name)
 end
 
 --- Data of the single selected unit, or nil.
