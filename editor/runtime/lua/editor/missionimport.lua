@@ -559,7 +559,7 @@ function Rows(info)
     end
     for _, f in info.functions do
         local other = (f.stage and info.number ~= f.stage) and ('  [mission ' .. f.stage .. ']') or ''
-        Add('function ' .. f.name, 'line ' .. f.line .. '-' .. f.endLine .. '  ' .. tostring(f.role or '') .. other, 'function')
+        Add('function ' .. f.name .. '  - ' .. tostring(f.role or '') .. other, 'line ' .. f.line .. '-' .. f.endLine, 'function')
     end
     for _, ob in info.objectives do
         local label = ob.group and 'objective group' or ('objective' .. (ob.otype and (' (' .. ob.otype .. ')') or ''))
@@ -568,7 +568,7 @@ function Rows(info)
         local detail = (ob.var and (ob.var .. ' = ') or '') .. ob.call
         local d = ob.description or ob.descriptionExpr
         if d and d ~= '' then detail = detail .. '  ' .. d end
-        Add('    ' .. detail, ob.fn and ('in ' .. ob.fn) or '', 'detail')
+        Add('    ' .. detail .. (ob.fn and ('  (in ' .. ob.fn .. ')') or ''), '', 'detail')
     end
     for _, t in info.triggers do
         Add('trigger ' .. t.kind .. (t.callback and (': ' .. t.callback) or '') .. (t.target and ('  on ' .. t.target) or ''), 'line ' .. t.line, 'trigger')

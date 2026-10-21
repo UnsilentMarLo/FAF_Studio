@@ -1,13 +1,22 @@
--- The transform gizmo of the select tools: at the middle of the selection, a red arrow along x, a blue arrow along z and a yellow ring. Dragging an arrow moves the selection
--- along that axis only, dragging the ring turns every selected object about its own centre by the angle the pointer travelled around the gizmo. Works for the selections of the Select
--- (markers, areas), Select props, Select decals and Select units tools; the press is taken before the tool sees it, so a drag on the arrows never starts a box select or a free move.
+-- The transform gizmo of the select tools, at the middle of the selection. It is drawn flat on the ground at a constant size on screen (viewscale.PixelSize) and has four handles:
 --
--- A small square at the centre moves the selection freely on the ground (x and z at once); the arrows stay on their axis, the ring turns. Markers and areas follow
--- the pointer live (tools.NewLiveMove: one undo entry when the drag ends); props, decals and units show their preview through `offset`.
+--   red arrow along +x     drag: move the selection along x only                ("Move X")
+--   blue arrow along +z    drag: move the selection along z only                ("Move Z")
+--   green square           drag: move the selection on the ground, x and z      ("Move on ground"); it sits between the two arrows, away from the selected object
+--   one thin yellow ring   drag: turn the selection about the vertical axis,    ("Rotate"); every object turns about its own centre by the angle the pointer
+--                          travelled around the gizmo (two small chevrons on the ring show the direction)
+--
+-- The handle under the pointer lights up and a small label beside the pointer names what dragging it will do; while dragging the label shows the amount. The gizmo has no height
+-- handle: objects stand on the terrain (markers, areas, props, decals and units are all placed by x and z). Works for the selections of the Select (markers, areas), Select props,
+-- Select decals and Select units tools; the press is taken before the tool sees it, so a drag on a handle never starts a box select. The centre is left free: dragging the
+-- selected object itself still moves it. Markers and areas follow the pointer live (tools.NewLiveMove: one undo entry when the drag ends); props, decals and units show their
+-- preview through `offset` (placer.lua draws the ghosts).
 --
 --   Active()              -> provider or nil: what the gizmo would act on right now
 --   Press(wx, wz, event)  the world click hook calls it first; true when a handle was hit (a drag is started)
---   Shapes()              the lines for the overlay (overlay.lua draws them)
+--   HandleAt(wx, wz)      -> 'x' | 'z' | 'free' | 'ring' | nil   the handle at a world point
+--   Shapes()              the lines for the overlay (overlay.lua draws them; each shape may carry px, closed, fill and width, see DrawGizmo); also moves the label
+--   Hover / Dragging      the handle under the pointer / being dragged;   Forget()  hides the label
 --
 -- Lua 5.0 dialect.
 
@@ -15,11 +24,23 @@ local Dragger = import('/lua/maui/dragger.lua').Dragger
 
 Dragging = false      -- 'x' | 'z' | 'free' | 'ring' while a handle is dragged
 Preview = false       -- { dx, dz } or { turn = degrees } while dragging
+Hover = false         -- the handle under the pointer (not while dragging)
+StartAngle = false    -- the angle (degrees, x towards z) the pointer had around the centre when a ring drag began
 
-local ARROW_PX = 56
-local RING_PX = 30
-local HIT_PX = 9
-local CENTER_PX = 13    -- half side of the centre square (outside a marker icon, which is 22 px)
+-- sizes in screen pixels, measured from the middle of the selection
+local ARROW_FROM = 10       -- the arrows start a little outside the selected object
+local ARROW_PX = 62         -- length of the arrows
+local HEAD_PX = 12          -- length of the arrowheads
+local PLANE_LO, PLANE_HI = 18, 38     -- the square between the arrows
+local RING_PX = 86          -- radius of the ring (outside the arrows, so the two never cross)
+local ARROW_HIT = 10        -- how far from an arrow the pointer may be to grab it
+local ARROW_HIT_FROM = 18   -- the grab zone of an arrow starts here, so the object at the centre is still grabbed by the tool itself
+local PLANE_HIT = 4         -- margin around the square
+local RING_HIT = 10         -- margin around the ring
+
+local COLOR = { x = 'FFFF4040', z = 'FF4080FF', free = 'FF50E070', ring = 'FFFFE040' }
+local LIT = { x = 'FFFFA0A0', z = 'FFA0C4FF', free = 'FFB8FFC4', ring = 'FFFFFFA0' }
+local NAME = { x = 'Move X', z = 'Move Z', free = 'Move on ground', ring = 'Rotate' }
 
 local function Providers()
     local Tools = import('/lua/editor/tools.lua')
@@ -118,35 +139,6 @@ local function PixelSize()
     return import('/lua/editor/viewscale.lua').PixelSize()
 end
 
---- Lines of the gizmo for the overlay: list of { id, points = { {x, z}, ... }, color }, or an empty list.
-function Shapes()
-    local p, cx, cz = Active()
-    if not p then return {} end
-    local px = PixelSize()
-    local L, R = ARROW_PX * px, RING_PX * px
-    local ox, oz = 0, 0
-    if Preview and Preview.dx and not Preview.live and not p.live then ox, oz = Preview.dx, Preview.dz end
-    cx, cz = cx + ox, cz + oz
-    local head = 9 * px
-    local shapes = {
-        { id = 'gz:x', color = 'FFFF4040', points = { { cx, cz }, { cx + L, cz }, { cx + L - head, cz + head * 0.5 }, { cx + L, cz }, { cx + L - head, cz - head * 0.5 } } },
-        { id = 'gz:z', color = 'FF4080FF', points = { { cx, cz }, { cx, cz + L }, { cx + head * 0.5, cz + L - head }, { cx, cz + L }, { cx - head * 0.5, cz + L - head } } },
-    }
-    local ring = {}
-    for i = 0, 40 do
-        local a = (i / 40) * 6.2831853
-        table.insert(ring, { cx + math.cos(a) * R, cz + math.sin(a) * R })
-    end
-    table.insert(shapes, { id = 'gz:ring', color = 'FFFFE040', points = ring })
-    local c = CENTER_PX * px
-    table.insert(shapes, { id = 'gz:free', color = 'FFFFFFFF', points = { { cx - c, cz - c }, { cx + c, cz - c }, { cx + c, cz + c }, { cx - c, cz + c }, { cx - c, cz - c } } })
-    if Preview and Preview.turn then
-        local a = math.rad(Preview.turn)
-        table.insert(shapes, { id = 'gz:turn', color = 'FFFFFFFF', points = { { cx, cz }, { cx + math.cos(a) * R, cz + math.sin(a) * R } } })
-    end
-    return shapes
-end
-
 local function ScreenToWorld(x, y)
     local view = import('/lua/ui/game/worldview.lua').viewLeft
     if not view then return nil end
@@ -164,30 +156,208 @@ local function DistToSegment(px, pz, ax, az, bx, bz)
     return math.sqrt((px - qx) * (px - qx) + (pz - qz) * (pz - qz))
 end
 
---- Which handle is at the world point: 'x', 'z', 'ring' or nil.
+--- Which handle is at the world point, for the provider `p` whose gizmo is centred on (cx, cz): 'free', 'x', 'z', 'ring' or nil. The square is tried first, then the arrows, then the ring.
+local function Hit(p, cx, cz, wx, wz)
+    if p.yield and p.yield(wx, wz) then return nil end      -- a handle of the tool itself lies under the pointer: the tool takes the click
+    local px = PixelSize()
+    local dx, dz = (wx - cx) / px, (wz - cz) / px            -- in screen pixels from the centre
+    if dx >= PLANE_LO - PLANE_HIT and dx <= PLANE_HI + PLANE_HIT and dz >= PLANE_LO - PLANE_HIT and dz <= PLANE_HI + PLANE_HIT then return 'free' end
+    if DistToSegment(dx, dz, ARROW_HIT_FROM, 0, ARROW_PX, 0) <= ARROW_HIT then return 'x' end
+    if DistToSegment(dx, dz, 0, ARROW_HIT_FROM, 0, ARROW_PX) <= ARROW_HIT then return 'z' end
+    local d = math.sqrt(dx * dx + dz * dz)
+    if math.abs(d - RING_PX) <= RING_HIT then return 'ring' end
+    return nil
+end
+
+--- Which handle is at the world point: 'x', 'z', 'free' (the ground square), 'ring' or nil.
 function HandleAt(wx, wz)
     local p, cx, cz = Active()
     if not p then return nil end
-    if p.yield and p.yield(wx, wz) then return nil end      -- a handle of the tool itself lies under the pointer: the tool takes the click
-    local px = PixelSize()
-    local L, R, hit = ARROW_PX * px, RING_PX * px, HIT_PX * px
-    if math.abs(wx - cx) <= CENTER_PX * px + px and math.abs(wz - cz) <= CENTER_PX * px + px then return 'free' end
-    if DistToSegment(wx, wz, cx, cz, cx + L, cz) <= hit then return 'x' end
-    if DistToSegment(wx, wz, cx, cz, cx, cz + L) <= hit then return 'z' end
-    local d = math.sqrt((wx - cx) * (wx - cx) + (wz - cz) * (wz - cz))
-    if math.abs(d - R) <= hit then return 'ring' end
-    return nil
+    return Hit(p, cx, cz, wx, wz)
 end
+
+-- ---- the label beside the pointer -----------------------------------------------------------------------------------------------------------
+
+local label = false
+local labelText = false
+local Mouse = false         -- window position of the pointer while a handle is dragged (the engine's own position is not tracked then)
+
+local function Label()
+    if label then return label end
+    pcall(function()
+        local UIUtil = import('/lua/ui/uiutil.lua')
+        local Group = import('/lua/maui/group.lua').Group
+        local g = Group(GetFrame(0))
+        g.Depth:Set(GetFrame(0).Depth() + 3995)
+        g.Left:Set(0) g.Top:Set(0) g.Width:Set(1) g.Height:Set(1)
+        g:DisableHitTest()
+        local t = UIUtil.CreateText(g, '', 12, UIUtil.bodyFont)
+        t:SetDropShadow(true)
+        t:SetColor('FFFFFFFF')
+        t:DisableHitTest()
+        label = t
+    end)
+    return label
+end
+
+--- Shows `text` beside the pointer, or hides the label when text is nil.
+local function SetLabel(text)
+    if not text then
+        if label and labelText then label:Hide() labelText = false end
+        return
+    end
+    local t = Label()
+    if not t then return end
+    local mx, my
+    if Mouse then
+        mx, my = Mouse[1], Mouse[2]
+    else
+        local pos = GetMouseScreenPos()
+        mx, my = pos and (pos[1] or pos.x), pos and (pos[2] or pos.y)
+    end
+    if not mx then return end
+    if labelText ~= text then t:SetText(text) labelText = text end
+    t.Left:Set(mx + 18)
+    t.Top:Set(my + 16)
+    t:Show()
+end
+
+--- Hides the label and forgets the hover (play mode, shutdown: overlay.Clear).
+function Forget()
+    Hover = false
+    pcall(SetLabel, nil)
+end
+
+--- What dragging the handle does, with the amount while it is dragged.
+local function LabelFor(handle)
+    if not handle then return nil end
+    local pv = Preview
+    if Dragging and pv then
+        if pv.turn then
+            local t = math.mod(pv.turn + 180, 360)
+            if t < 0 then t = t + 360 end
+            return string.format('Rotate  %+.0f deg', t - 180)
+        elseif handle == 'x' then
+            return string.format('Move X  %+.1f', pv.dx or 0)
+        elseif handle == 'z' then
+            return string.format('Move Z  %+.1f', pv.dz or 0)
+        else
+            return string.format('Move  %+.1f, %+.1f', pv.dx or 0, pv.dz or 0)
+        end
+    end
+    return NAME[handle]
+end
+
+-- ---- drawing --------------------------------------------------------------------------------------------------------------------------------
+
+--- Lines of the gizmo for the overlay: list of { id, points = { {x, z}, ... }, color, px (line width on screen), closed, fill, width (fill: width of the ribbon in world units) },
+--- or an empty list. Also shows the label and works out which handle is hovered (this runs every frame while the gizmo is on screen).
+function Shapes()
+    local p, cx, cz = Active()
+    if not p then
+        Hover = false
+        SetLabel(nil)
+        return {}
+    end
+    local px = PixelSize()
+
+    -- the handle under the pointer
+    local lit = Dragging
+    if not Dragging then
+        Hover = false
+        local view = import('/lua/ui/game/worldview.lua').viewLeft
+        if view and view.CursorOverWorld then
+            local mp = GetMouseWorldPos()
+            if mp then Hover = Hit(p, cx, cz, mp[1], mp[3]) or false end
+        end
+        lit = Hover
+    end
+    pcall(function() SetLabel(LabelFor(lit)) end)
+
+    local ox, oz = 0, 0
+    if Preview and Preview.dx and not Preview.live and not p.live then ox, oz = Preview.dx, Preview.dz end
+    cx, cz = cx + ox, cz + oz
+
+    local function Col(handle)
+        local c = (lit == handle) and LIT[handle] or COLOR[handle]
+        if Dragging and Dragging ~= handle then c = '60' .. string.sub(COLOR[handle], 3) end          -- the handles not in use fade
+        return c
+    end
+    local function Width(handle, thin, thick)
+        return (lit == handle) and thick or thin
+    end
+
+    local shapes = {}
+    local head = HEAD_PX * px
+    local from, to = ARROW_FROM * px, ARROW_PX * px
+
+    -- the arrows: shaft and a V-shaped head
+    local tipx = cx + to
+    table.insert(shapes, { id = 'gz:x', color = Col('x'), px = Width('x', 3, 5),
+        points = { { cx + from, cz }, { tipx, cz }, { tipx - head, cz + head * 0.5 }, { tipx, cz }, { tipx - head, cz - head * 0.5 } } })
+    local tipz = cz + to
+    table.insert(shapes, { id = 'gz:z', color = Col('z'), px = Width('z', 3, 5),
+        points = { { cx, cz + from }, { cx, tipz }, { cx + head * 0.5, tipz - head }, { cx, tipz }, { cx - head * 0.5, tipz - head } } })
+
+    -- the letters beyond the tips
+    local a, gap = 4.5 * px, 11 * px
+    local lx, lz = tipx + gap, cz
+    table.insert(shapes, { id = 'gz:lx', color = Col('x'), px = 2,
+        points = { { lx - a, lz - a }, { lx + a, lz + a }, { lx, lz }, { lx - a, lz + a }, { lx + a, lz - a } } })
+    lx, lz = cx, tipz + gap
+    table.insert(shapes, { id = 'gz:lz', color = Col('z'), px = 2,
+        points = { { lx - a, lz + a }, { lx + a, lz + a }, { lx - a, lz - a }, { lx + a, lz - a } } })
+
+    -- the square for free movement on the ground, between the arrows
+    local x0, z0, x1, z1 = cx + PLANE_LO * px, cz + PLANE_LO * px, cx + PLANE_HI * px, cz + PLANE_HI * px
+    table.insert(shapes, { id = 'gz:free', color = Col('free'), px = Width('free', 2, 4), closed = true,
+        points = { { x0, z0 }, { x1, z0 }, { x1, z1 }, { x0, z1 } } })
+    table.insert(shapes, { id = 'gz:freef', color = (lit == 'free') and '70B8FFC4' or '3850E070', fill = true, width = (PLANE_HI - PLANE_LO) * px,
+        points = { { x0, (z0 + z1) / 2 }, { x1, (z0 + z1) / 2 } } })
+
+    -- the one ring, thin, with two chevrons that show which way it turns
+    local R = RING_PX * px
+    local ring = {}
+    for i = 0, 47 do
+        local ang = (i / 48) * 6.2831853
+        table.insert(ring, { cx + math.cos(ang) * R, cz + math.sin(ang) * R })
+    end
+    table.insert(shapes, { id = 'gz:ring', color = Col('ring'), px = Width('ring', 2, 4), closed = true, points = ring })
+    local h = 8 * px
+    for k = 0, 1 do
+        local ang = 0.6 + k * 3.1415927
+        local rx, rz = math.cos(ang), math.sin(ang)          -- radial
+        local tx, tz = -rz, rx                                -- tangent, the way the ring turns for a positive angle
+        local bx, bz = cx + rx * R, cz + rz * R
+        table.insert(shapes, { id = 'gz:rd' .. k, color = Col('ring'), px = Width('ring', 2, 4),
+            points = { { bx - tx * h + rx * h * 0.6, bz - tz * h + rz * h * 0.6 }, { bx + tx * h * 0.3, bz + tz * h * 0.3 }, { bx - tx * h - rx * h * 0.6, bz - tz * h - rz * h * 0.6 } } })
+    end
+
+    -- while the ring is dragged: where the pointer started and where it is now
+    if Preview and Preview.turn and StartAngle then
+        local a0 = math.rad(StartAngle)
+        local a1 = math.rad(StartAngle + Preview.turn)
+        table.insert(shapes, { id = 'gz:turn0', color = '80FFFFFF', px = 2, points = { { cx, cz }, { cx + math.cos(a0) * R, cz + math.sin(a0) * R } } })
+        table.insert(shapes, { id = 'gz:turn', color = 'FFFFFFFF', px = 3, points = { { cx, cz }, { cx + math.cos(a1) * R, cz + math.sin(a1) * R } } })
+    end
+    return shapes
+end
+
+-- ---- dragging -------------------------------------------------------------------------------------------------------------------------------
 
 function Press(wx, wz, event)
     local handle = HandleAt(wx, wz)
     if not handle then return false end
     local p, cx, cz = Active()
     Dragging = handle
+    Hover = false
+    Mouse = { event.MouseX, event.MouseY }
     local startAngle = math.deg(math.atan2(wz - cz, wx - cx))
+    StartAngle = startAngle
     local live = p.liveMove and p.liveMove() or nil
     local dragger = Dragger()
     dragger.OnMove = function(self, x, y)
+        Mouse = { x, y }
         local mx, mz = ScreenToWorld(x, y)
         if not mx then return end
         if handle == 'x' then
@@ -214,6 +384,9 @@ function Press(wx, wz, event)
         local pv = Preview
         Preview = false
         Dragging = false
+        StartAngle = false
+        Mouse = false
+        pcall(SetLabel, nil)
         if p.offset then p.offset(false) end
         if p.turnLive then p.turnLive(false) end
         self:Destroy()

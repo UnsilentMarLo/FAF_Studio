@@ -3,6 +3,8 @@
 -- objective decided) and the difficulty / cutscene nodes hold child nodes, shown indented below them: select a container and use "Add inside". Click a node to select it,
 -- Edit... changes its parameters.
 -- The mission is compiled into the map script when the map is saved (the region between the `EDITOR MISSION` marker lines).
+-- A hand-written mission script is shown as imported stages (missionimport.lua): the rows of such a stage are an outline of the script (functions, objectives, triggers, AI helpers with line numbers),
+-- the node buttons are dimmed and say why, and nothing of it is compiled or rewritten.
 --
 -- The Bases panel lists the BaseManager tables of the mission (mbase.lua): define a base from an area, edit its groups, engineers and attacks.
 --
@@ -14,8 +16,15 @@ local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local M = import('/lua/editor/mission.lua')
 local B = import('/lua/editor/mbase.lua')
+local I = import('/lua/editor/missionimport.lua')
 
 live = {}
+
+-- a stage imported from the map's hand-written script: shown as an outline, never edited or compiled (missionimport.lua)
+local function ImportedStage(index)
+    local s = M.Data.stages[index]
+    return s and s.imported and s or nil
+end
 
 local function Say(text)
     pcall(function() UI.Say(text) end)
@@ -59,15 +68,27 @@ Panels.Register{
             bind = function(row, index)
                 local s = M.Data.stages[index]
                 local n = table.getn(s.enter or {}) + table.getn(s.ready or {})
-                Row(row, index .. '  ' .. tostring(s.name), n .. ' nodes', index == P.stage)
+                Row(row, index .. '  ' .. tostring(s.name), s.imported and 'imported' or (n .. ' nodes'), index == P.stage, s.imported and Skin.color.textDim or nil)
             end,
             onSelect = function(index) P.stage = index P.node = 1 P:Refresh() end,
             bgColor = Skin.color.panel,
         })
         P.nodeList = W.VirtualList(group, {
             extra = true, rowH = 22,
-            getCount = function() return table.getn(Nodes()) end,
+            getCount = function()
+                if ImportedStage(P.stage) then return table.getn(P.impRows or {}) end
+                return table.getn(Nodes())
+            end,
             bind = function(row, index)
+                if ImportedStage(P.stage) then
+                    -- the outline of the script: functions, objectives, triggers, AI helpers (read-only rows)
+                    local ir = (P.impRows or {})[index]
+                    if not ir then return end
+                    local c = Skin.color
+                    local color = (ir.kind == 'objective' and c.ok) or (ir.kind == 'trigger' and (c.warn or c.accent)) or ((ir.kind == 'note' or ir.kind == 'detail') and c.textDim) or nil
+                    Row(row, ir.text, ir.extra, index == P.node, color)
+                    return
+                end
                 local r = Nodes()[index]
                 if not r then return end
                 local t = M.NodeType(r.node.type)
@@ -81,15 +102,51 @@ Panels.Register{
         })
 
         local function Btn(text, w, fn) return W.Button(group, text, 0, 0, Skin.S(w), Skin.S(22), fn) end
+
+        -- buttons that cannot work on a stage imported from the script: dimmed, the tooltip and the click say why
+        P.lockable = {}
+        local function Lockable(b)
+            local base = b.TipText
+            b.TipText = function(self)
+                local t = base(self)
+                if ImportedStage(P.stage) then t = (t and (t .. '  ') or '') .. 'Not available here: ' .. I.WHY end
+                return t
+            end
+            table.insert(P.lockable, b)
+            return b
+        end
+        --- True (and says why) when the selected stage is imported.
+        local function Locked()
+            if ImportedStage(P.stage) then Say('mission: ' .. I.WHY) return true end
+            return false
+        end
+
         P.sAdd = Btn('Add stage', 70, function() M.AddStage() P.stage = table.getn(M.Data.stages) P.node = 1 P:Refresh() end)
-        P.sDel = Btn('Remove', 60, function() if M.RemoveStage(P.stage) then P.stage = math.max(1, P.stage - 1) end P.node = 1 P:Refresh() end)
-        P.sUp = Btn('Up', 34, function() if M.MoveStage(P.stage, -1) then P.stage = P.stage - 1 end P:Refresh() end)
-        P.sDown = Btn('Down', 44, function() if M.MoveStage(P.stage, 1) then P.stage = P.stage + 1 end P:Refresh() end)
-        P.sPlay = Btn('Play here', 70, function()
+        P.sDel = Lockable(Btn('Remove', 60, function()
+            if Locked() then return end
+            if M.RemoveStage(P.stage) then P.stage = math.max(1, P.stage - 1) end
+            P.node = 1
+            P:Refresh()
+        end))
+        P.sUp = Lockable(Btn('Up', 34, function()
+            if Locked() then return end
+            local ok, why = M.MoveStage(P.stage, -1)
+            if ok then P.stage = P.stage - 1 elseif why and why ~= 'out of range' then Say('mission: ' .. why) end
+            P:Refresh()
+        end))
+        P.sDown = Lockable(Btn('Down', 44, function()
+            if Locked() then return end
+            local ok, why = M.MoveStage(P.stage, 1)
+            if ok then P.stage = P.stage + 1 elseif why and why ~= 'out of range' then Say('mission: ' .. why) end
+            P:Refresh()
+        end))
+        P.sPlay = Lockable(Btn('Play here', 70, function()
+            if Locked() then return end
             if M.Data.stages[P.stage] then UI.PlayFromStage(P.stage) end
-        end)
+        end))
         P.name = W.TextField(group, 0, 0, Skin.S(200), Skin.S(22), { onChange = function(text)
             if P.settingName then return end
+            if Locked() then return end
             if M.Data.stages[P.stage] then M.SetStage(P.stage, 'name', text, true) P.stageList:Refresh() end
         end })
         P.mode = Btn('Mode: campaign', 120, function(self)
@@ -100,31 +157,38 @@ Panels.Register{
         end)
         P.failsafe = W.Slider(group, { label = 'Failsafe: start the next stage after this many seconds (0 = off)', min = 0, max = 1800, step = 10, fmt = '%d', compact = true,
             get = function() local s = M.Data.stages[P.stage] return s and tonumber(s.failsafe) or 0 end,
-            set = function(v) if M.Data.stages[P.stage] then M.SetStage(P.stage, 'failsafe', v, true) end end })
+            set = function(v)
+                if Locked() then return end
+                if M.Data.stages[P.stage] then M.SetStage(P.stage, 'failsafe', v, true) end
+            end })
 
-        P.nAdd = Btn('Add node', 64, function()
+        P.nAdd = Lockable(Btn('Add node', 64, function()
             if not M.Data.stages[P.stage] then Say('mission: add a stage first') return end
+            if Locked() then return end
             Dialogs().AddNode(P.stage, P.addTo, function(path) Select(P.addTo, path) P:Refresh() end)
-        end)
+        end))
         P.nWhere = Btn('to: ready', 70, function(self)
             P.addTo = (P.addTo == 'ready') and 'enter' or 'ready'
             self:SetText('to: ' .. P.addTo)
         end)
-        P.nInside = Btn('Add inside', 74, function()
+        P.nInside = Lockable(Btn('Add inside', 74, function()
+            if Locked() then return end
             local r = Nodes()[P.node]
             local t = r and M.NodeType(r.node.type)
             if not t or not t.container then Say('mission: select a trigger (or an if / cutscene node) first') return end
             Dialogs().AddNode(P.stage, r.section, function(path) Select(r.section, path) P:Refresh() end, r.path)
-        end)
-        P.nEdit = Btn('Edit...', 52, function()
+        end))
+        P.nEdit = Lockable(Btn('Edit...', 52, function()
+            if Locked() then return end
             local r = Nodes()[P.node]
             if r then Dialogs().EditNode(P.stage, r.section, r.path, function() P:Refresh() end) end
-        end)
-        P.nDel = Btn('Remove', 60, function()
+        end))
+        P.nDel = Lockable(Btn('Remove', 60, function()
+            if Locked() then return end
             local r = Nodes()[P.node]
             if r then M.RemoveNode(P.stage, r.section, r.path) P.node = math.max(1, P.node - 1) P:Refresh() end
-        end)
-        P.nUp = Btn('Up', 34, function()
+        end))
+        P.nUp = Lockable(Btn('Up', 34, function()
             local r = Nodes()[P.node]
             if r and M.MoveNode(P.stage, r.section, r.path, -1) then
                 local p = {}
@@ -133,8 +197,8 @@ Panels.Register{
                 Select(r.section, p)
             end
             P:Refresh()
-        end)
-        P.nDown = Btn('Down', 44, function()
+        end))
+        P.nDown = Lockable(Btn('Down', 44, function()
             local r = Nodes()[P.node]
             if r and M.MoveNode(P.stage, r.section, r.path, 1) then
                 local p = {}
@@ -143,21 +207,21 @@ Panels.Register{
                 Select(r.section, p)
             end
             P:Refresh()
-        end)
-        P.nIn = Btn('In', 30, function()
+        end))
+        P.nIn = Lockable(Btn('In', 30, function()
             local r = Nodes()[P.node]
             if not r then return end
             local ok, path = M.IndentNode(P.stage, r.section, r.path)
             if ok then Select(r.section, path) else Say('mission: ' .. tostring(path or 'the node above holds no children')) end
             P:Refresh()
-        end)
-        P.nOut = Btn('Out', 34, function()
+        end))
+        P.nOut = Lockable(Btn('Out', 34, function()
             local r = Nodes()[P.node]
             if not r then return end
             local ok, path = M.OutdentNode(P.stage, r.section, r.path)
             if ok then Select(r.section, path) else Say('mission: ' .. tostring(path or 'not inside a container')) end
             P:Refresh()
-        end)
+        end))
         P.status = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
 
         function P:Refresh()
@@ -165,12 +229,16 @@ Panels.Register{
             local n = table.getn(M.Data.stages)
             if P.stage > n then P.stage = n end
             if P.stage < 1 then P.stage = 1 end
-            local count = table.getn(Nodes())
+            local s = M.Data.stages[P.stage]
+            P.impRows = (s and s.imported) and I.Rows(s.info) or {}
+            local count = (s and s.imported) and table.getn(P.impRows) or table.getn(Nodes())
             if P.node > count then P.node = count end
             if P.node < 1 then P.node = 1 end
             P.stageList:Refresh()
             P.nodeList:Refresh()
-            local s = M.Data.stages[P.stage]
+            for _, b in P.lockable do
+                b.label:SetColor((s and s.imported) and Skin.color.textDim or Skin.color.text)
+            end
             P.settingName = true
             P.name:SetText(s and tostring(s.name) or '')
             P.settingName = false
@@ -180,7 +248,12 @@ Panels.Register{
             local e, w = 0, 0
             for _, p in problems do if p.sev == 'E' then e = e + 1 elseif p.sev == 'W' then w = w + 1 end end
             local first = problems[1]
-            W.Fit(P.status, string.format('%d stages, %d errors, %d warnings%s', n, e, w, first and (': ' .. first.text) or ''), (P.w or 300) - Skin.S(16))
+            local text = string.format('%d stages, %d errors, %d warnings%s', n, e, w, first and (': ' .. first.text) or '')
+            if s and s.imported and s.info then
+                text = string.format('imported, read-only: %d functions, %d objectives, %d triggers  -  %s', table.getn(s.info.functions or {}), table.getn(s.info.objectives or {}),
+                    table.getn(s.info.triggers or {}), I.WHY)
+            end
+            W.Fit(P.status, text, (P.w or 300) - Skin.S(16))
         end
 
         function P:OnResize(w, h)

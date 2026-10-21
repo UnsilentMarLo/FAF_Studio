@@ -14,6 +14,11 @@
 --   PatchScript(text)         -> text with the region written (or replaced); the second result says what happened: 'none' (no mission), 'written', 'detached' (the region was edited by hand: left alone)
 --   Check()                   -> list of { sev = 'E' | 'W' | 'I', text, stage, section, index }
 --   SidecarText() / LoadSidecar(scenarioFile)    the model travels with the map in the `_editor.lua` file
+--   ImportScript(doc)         a hand-written mission (`_script.lua` with ScenarioInfo.MissionNumber stages, `_strings.lua` dialogues) is shown as IMPORTED stages / dialogues (missionimport.lua):
+--                             `imported = true`, read-only, an outline with line numbers in `stage.info`. They are never compiled (Compile / PatchScript skip them, a mission that is only imported
+--                             writes nothing into the script), never saved to the sidecar (the sidecar only keeps `keepImport = true`: the next load imports again from the script), and editor
+--                             stages can be added behind them (their numbers are their positions in the list, so keep the script's own numbers below them).
+--   EditorStageCount() / ImportedStageCount() / IsImported()      how many stages the editor made / were imported
 --
 -- A stage is one forked function: it enters (MissionNumber guard against a second entry), runs its *enter* nodes, then its *ready* nodes. The objective nodes of a stage go into one
 -- objective group; when the group is complete the next stage starts (the last stage ends the operation with a win unless it has an End node). A stage without objectives
@@ -34,6 +39,55 @@ local BEGIN = '-- >>> EDITOR MISSION v1'
 local FINISH = '-- <<< EDITOR MISSION'
 
 local MAX_DEPTH = 6
+
+-- ---- imported stages (a hand-written script): read-only, never compiled ---------------------------------------------------------------------------
+
+--- Stages the editor made (compiled into the script).
+function EditorStageCount()
+    local n = 0
+    for _, s in Data.stages do
+        if not s.imported then n = n + 1 end
+    end
+    return n
+end
+
+--- Stages imported from the map's own script (never compiled).
+function ImportedStageCount()
+    return table.getn(Data.stages) - EditorStageCount()
+end
+
+function IsImported()
+    return ImportedStageCount() > 0
+end
+
+--- The stage that the running script reports as ScenarioInfo.MissionNumber = n: an imported stage with that script number, else the editor stage at position n (or nil).
+function StageByNumber(n)
+    for _, s in Data.stages do
+        if s.imported and s.info and n and n > 0 and s.info.number == n then return s end
+    end
+    local s = Data.stages[n or 0]
+    if s and not s.imported then return s end
+    return nil
+end
+
+--- Index of the next stage the editor made after stage `i`, or nil.
+local function NextActive(i)
+    for j = i + 1, table.getn(Data.stages) do
+        if not Data.stages[j].imported then return j end
+    end
+    return nil
+end
+
+--- The stages Compile writes: { { i = index, stage = stage } } in order.
+local function ActiveStages()
+    local list = {}
+    for i, s in Data.stages do
+        if not s.imported then table.insert(list, { i = i, stage = s }) end
+    end
+    return list
+end
+
+local IMPORTED = 'imported from the script: read-only'
 
 -- ---- helpers for the emitters ---------------------------------------------------------------------------------------------------------------------
 
@@ -519,12 +573,14 @@ end
 
 function RemoveStage(i)
     if not Data.stages[i] then return nil, 'no such stage' end
+    if Data.stages[i].imported then return nil, IMPORTED end
     return Do('remove stage', function() table.remove(Data.stages, i) end)
 end
 
 function MoveStage(i, delta)
     local to = i + delta
     if not Data.stages[i] or to < 1 or to > table.getn(Data.stages) then return nil, 'out of range' end
+    if Data.stages[i].imported or Data.stages[to].imported then return nil, IMPORTED end
     return Do('move stage', function()
         local s = table.remove(Data.stages, i)
         table.insert(Data.stages, to, s)
@@ -533,6 +589,7 @@ end
 
 function SetStage(i, field, value, merge)
     if not Data.stages[i] then return nil, 'no such stage' end
+    if Data.stages[i].imported then return nil, IMPORTED end
     return Do('stage ' .. field, function() Data.stages[i][field] = value end, merge and ('stage' .. i .. field) or nil)
 end
 
@@ -543,7 +600,7 @@ local BLANK_PLANS = '/lua/ai/OpAI/DefaultBlankPlanlist.lua'
 --- Campaign maps give their armies the blank plan list (every non-human army of a campaign session gets the campaign brain, civilians included, and a campaign brain without plans
 --- runs the skirmish plan loader and raises errors): every army of the save except the first (the human). Called when the map is saved.
 function PrepareArmies()
-    if table.getn(Data.stages) == 0 and table.getn(Data.bases or {}) == 0 then return end
+    if EditorStageCount() == 0 and table.getn(Data.bases or {}) == 0 then return end       -- (an imported mission keeps the armies of its script as they are)
     local info = Map.Doc and Map.Doc.info
     local t = info and ScenarioType(info.type)
     if t ~= 'campaign' and t ~= 'campaign_coop' then return end
@@ -560,7 +617,7 @@ end
 
 --- The scenario `type` the mission needs: coop and both-mode missions are `campaign_coop` (the coop support mod is loaded for them), others keep the map's type.
 function ScenarioType(current)
-    if table.getn(Data.stages) > 0 or table.getn(Data.bases or {}) > 0 then
+    if EditorStageCount() > 0 or table.getn(Data.bases or {}) > 0 then
         if Data.mode == 'coop' or Data.mode == 'both' then return 'campaign_coop' end
         if current == 'campaign_coop' then return 'campaign' end
     end
@@ -571,14 +628,16 @@ end
 
 function DialogueNames()
     local list = {}
-    for _, d in Data.dialogues or {} do table.insert(list, d.name) end
+    for _, d in Data.dialogues or {} do
+        if not d.imported then table.insert(list, d.name) end       -- (imported ones are not compiled: a node cannot play them)
+    end
     table.sort(list)
     return list
 end
 
 function FindDialogue(name)
     for i, d in Data.dialogues or {} do
-        if d.name == name then return d, i end
+        if d.name == name and not d.imported then return d, i end
     end
     return nil
 end
@@ -594,11 +653,13 @@ end
 
 function RemoveDialogue(i)
     if not (Data.dialogues and Data.dialogues[i]) then return nil, 'no such dialogue' end
+    if Data.dialogues[i].imported then return nil, IMPORTED end
     return Do('remove dialogue', function() table.remove(Data.dialogues, i) end)
 end
 
 function AddLine(i, text)
     if not (Data.dialogues and Data.dialogues[i]) then return nil, 'no such dialogue' end
+    if Data.dialogues[i].imported then return nil, IMPORTED end
     local at
     local ok = Do('add dialogue line', function()
         table.insert(Data.dialogues[i].lines, { text = text or 'Text', speaker = '', seconds = 5 })
@@ -611,6 +672,7 @@ end
 function RemoveLine(i, li)
     local d = Data.dialogues and Data.dialogues[i]
     if not d or not d.lines[li] then return nil, 'no such line' end
+    if d.imported then return nil, IMPORTED end
     return Do('remove dialogue line', function() table.remove(Data.dialogues[i].lines, li) end)
 end
 
@@ -618,6 +680,7 @@ function MoveLine(i, li, delta)
     local d = Data.dialogues and Data.dialogues[i]
     local to = li + delta
     if not d or not d.lines[li] or to < 1 or to > table.getn(d.lines) then return nil, 'out of range' end
+    if d.imported then return nil, IMPORTED end
     return Do('move dialogue line', function()
         local l = table.remove(Data.dialogues[i].lines, li)
         table.insert(Data.dialogues[i].lines, to, l)
@@ -627,6 +690,7 @@ end
 function SetLine(i, li, key, value, merge)
     local d = Data.dialogues and Data.dialogues[i]
     if not d or not d.lines[li] then return nil, 'no such line' end
+    if d.imported then return nil, IMPORTED end
     return Do('edit dialogue line', function() Data.dialogues[i].lines[li][key] = value end, merge and ('dline' .. i .. '.' .. li .. key) or nil)
 end
 
@@ -634,6 +698,7 @@ end
 local function StringsLines()
     local out = { 'local Strings = {' }
     for _, d in Data.dialogues or {} do
+      if not d.imported then       -- (imported dialogues belong to the script's own strings file: never written)
         table.insert(out, '    [' .. Q(d.name) .. '] = {')
         for _, l in d.lines or {} do
             local text = tostring(l.text or '')
@@ -646,6 +711,7 @@ local function StringsLines()
             table.insert(out, '        { text = ' .. Q(text) .. ', delay = ' .. N(l.seconds, 5) .. extra .. ' },')
         end
         table.insert(out, '    },')
+      end
     end
     table.insert(out, '}')
     return out
@@ -750,6 +816,7 @@ function AddNode(stage, section, id, at, parent)
     local s = Data.stages[stage]
     local t = byId[id]
     if not s or not t or (section ~= 'enter' and section ~= 'ready') then return nil, 'no such stage or node type' end
+    if s.imported then return nil, IMPORTED end
     if t.family == 'objective' and section ~= 'ready' then return nil, 'objectives belong to the ready part of a stage' end
     local newPath
     local ok, why = Do('add node', function()
@@ -1034,7 +1101,7 @@ end
 function Compile(withEntry)
     local out = {}
     local function Add(line) table.insert(out, line) end
-    local stages = Data.stages
+    local active = ActiveStages()       -- (stages imported from a hand-written script are never compiled; a stage keeps its position in the list as its number)
     local MB = import('/lua/editor/mbase.lua')
     Add("local ScenarioUtils = import('/lua/sim/ScenarioUtilities.lua')")
     Add("local ScenarioFramework = import('/lua/ScenarioFramework.lua')")
@@ -1088,7 +1155,7 @@ function Compile(withEntry)
     for _, line in MB.Compile() do Add(line) end
     Add('ScenarioInfo.MissionNumber = 0')
     Add('')
-    if table.getn(stages) > 0 then
+    if active[1] then
         Add('-- the first stage; in the editor (edit mode) it waits for the Play button')
         Add('function EditorMissionStart()')
         Add('    if ScenarioInfo.Options.EditorMode then')
@@ -1098,18 +1165,20 @@ function Compile(withEntry)
             Add('    -- coop: a play test in the editor installs the coop support functions (lua/editor/coopshim.lua); in a real game the lobby loads the coop mod')
             Add("    if ScenarioInfo.Options.EditorMode then import('/lua/editor/coopshim.lua').Install() end")
         end
-        Add('    Stage[ScenarioInfo.EditorStartStage or 1]()           -- a play test can start at any stage (Stages panel: Play from here)')
+        Add('    Stage[ScenarioInfo.EditorStartStage or ' .. active[1].i .. ']()           -- a play test can start at any stage (Stages panel: Play from here)')
         Add('end')
         Add('')
     end
-    for i, stage in stages do
+    for _, item in active do
+        local i, stage = item.i, item.stage
         Add('-- stage ' .. i .. ': ' .. string.gsub(tostring(stage.name or ''), '[\r\n]', ' '))
         Add('Stage[' .. i .. '] = function()')
         Add('    if ScenarioInfo.MissionNumber >= ' .. i .. ' then return end')
         Add('    ScenarioInfo.MissionNumber = ' .. i)
         local objectives = HasObjectives(stage)
         local nextCall
-        if stages[i + 1] then nextCall = 'ForkThread(Stage[' .. (i + 1) .. '])' end
+        local following = NextActive(i)
+        if following then nextCall = 'ForkThread(Stage[' .. following .. '])' end
         if objectives then
             local callback
             if nextCall then
@@ -1144,7 +1213,7 @@ function Compile(withEntry)
         Add('end')
         Add('')
         Add('function OnStart(self)')
-        if table.getn(stages) > 0 then Add('    ForkThread(EditorMissionStart)') end
+        if active[1] then Add('    ForkThread(EditorMissionStart)') end
         Add('end')
     end
     return table.concat(out, '\n') .. '\n'
@@ -1185,7 +1254,7 @@ local function SafeCompile(withEntry)
 end
 
 function PatchScript(text)
-    if table.getn(Data.stages) == 0 then return text, 'none' end
+    if EditorStageCount() == 0 then return text, 'none' end       -- (nothing imported is ever written: the script of an imported mission stays byte for byte as it is)
     local s, e = RegionBounds(text)
     if s then
         local region = string.sub(text, s, e)
@@ -1233,18 +1302,26 @@ function Check()
     for _, a in import('/lua/editor/armysetup.lua').Names() do armies[a] = true end
     local bases = {}
     for _, b in Data.bases or {} do bases[b.name] = true end
-    if table.getn(Data.stages) == 0 and table.getn(Data.bases or {}) == 0 then return list end
+    if EditorStageCount() == 0 and table.getn(Data.bases or {}) == 0 then return list end       -- (an imported mission is the script's business: nothing to check)
     for _, d in Data.dialogues or {} do
-        if table.getn(d.lines or {}) == 0 then Add('W', 'dialogue ' .. tostring(d.name) .. ' has no lines') end
+        if not d.imported and table.getn(d.lines or {}) == 0 then Add('W', 'dialogue ' .. tostring(d.name) .. ' has no lines') end
     end
-    for si, stage in Data.stages do
+    -- editor stages behind imported ones are numbered by their position: the script must not use that number for one of its own stages
+    local scriptNumbers = {}
+    for _, s in Data.stages do
+        if s.imported and s.info and s.info.number and s.info.number > 0 then scriptNumbers[s.info.number] = true end
+    end
+    for _, item in ActiveStages() do
+        local si, stage = item.i, item.stage
+        local following = NextActive(si)
+        if scriptNumbers[si] then Add('W', 'stage ' .. si .. ' (' .. tostring(stage.name) .. ') gets MissionNumber ' .. si .. ', which the imported script also sets', si) end
         local nodes = table.getn(stage.enter or {}) + table.getn(stage.ready or {})
         if nodes == 0 then Add('W', 'stage ' .. si .. ' (' .. tostring(stage.name) .. ') has no nodes', si) end
-        if (tonumber(stage.failsafe) or 0) > 0 and not Data.stages[si + 1] then Add('W', 'stage ' .. si .. ' has a failsafe timer but no next stage', si) end
-        if HasObjectives(stage) == false and not Data.stages[si + 1] and not HasEnd(stage) then
+        if (tonumber(stage.failsafe) or 0) > 0 and not following then Add('W', 'stage ' .. si .. ' has a failsafe timer but no next stage', si) end
+        if HasObjectives(stage) == false and not following and not HasEnd(stage) then
             Add('W', 'the last stage has no objective and no End node: the mission never ends', si)
         end
-        if not Data.stages[si + 1] then
+        if not following then
             local sec = Any(stage.enter, function(n) return n.type == 'next_stage' end, AllContainers) and 'enter' or (Any(stage.ready, function(n) return n.type == 'next_stage' end, AllContainers) and 'ready')
             if sec then Add('E', 'stage ' .. si .. ' has a Next stage node but there is no next stage', si, sec) end
         end
@@ -1346,8 +1423,23 @@ end
 -- ---- the model travels with the map -----------------------------------------------------------------------------------------------------------------
 
 function SidecarText()
-    if table.getn(Data.stages) == 0 and table.getn(Data.bases or {}) == 0 then return '' end
-    return Ser.Chunk({ { 'Mission', Data } })
+    -- imported stages and dialogues are not written: the next load imports them again from the script (the sidecar keeps only `keepImport`, so that editor stages
+    -- added behind them find their place again)
+    local saved = {}
+    for k, v in Data do
+        if k ~= 'stages' and k ~= 'dialogues' and k ~= 'imported' and k ~= 'keepImport' then saved[k] = v end
+    end
+    saved.stages, saved.dialogues = {}, {}
+    local hadImport = false
+    for _, s in Data.stages do
+        if s.imported then hadImport = true else table.insert(saved.stages, s) end
+    end
+    for _, d in Data.dialogues or {} do
+        if d.imported then hadImport = true else table.insert(saved.dialogues, d) end
+    end
+    if table.getn(saved.stages) == 0 and table.getn(saved.bases or {}) == 0 and not (hadImport and table.getn(saved.dialogues) > 0) then return '' end
+    if hadImport then saved.keepImport = true end
+    return Ser.Chunk({ { 'Mission', saved } })
 end
 
 function LoadSidecar(scenarioFile)
@@ -1368,6 +1460,76 @@ function LoadSidecar(scenarioFile)
     end
     Revision = Revision + 1
     LoadedRevision = Revision
+end
+
+-- ---- import of a hand-written mission (missionimport.lua) ---------------------------------------------------------------------------------------------
+
+--- The script text without the generated region (blanked, so line numbers stay): the region is the editor's own, never part of what is imported.
+local function WithoutRegion(text)
+    local s, e = RegionBounds(text)
+    if not s then return text end
+    local blank = string.gsub(string.sub(text, s, e), '[^\n]', ' ')
+    return string.sub(text, 1, s - 1) .. blank .. string.sub(text, e + 1)
+end
+
+--- `<stem>_strings.lua` next to the script (or the scenario file), or nil.
+local function StringsPath(doc)
+    for _, p in { doc.scriptPath, doc.scenarioPath } do
+        if type(p) == 'string' then
+            local q, n = string.gsub(p, '_%a+%.lua$', '_strings.lua')
+            if n > 0 then return q end
+        end
+    end
+    return nil
+end
+
+local function ReadVfs(vfs)
+    if not vfs or not rawget(_G, 'ed_vfs_to_disk') or not rawget(_G, 'ed_read_file') then return nil end
+    local disk = ed_vfs_to_disk(vfs)
+    return disk and ed_read_file(disk) or nil
+end
+
+--- Puts the stages and dialogues of a hand-written mission into the model as IMPORTED entries (read-only, never compiled or saved): `scriptText` is the map script, `stringsText` its
+--- strings file or nil, `info` = { type = scenario type, script = path, strings = path }. Editor stages already in the model stay behind the imported ones. Returns true when
+--- the script has mission stages (ScenarioInfo.MissionNumber = N), else false and nothing changes.
+function ImportText(scriptText, stringsText, info)
+    info = info or {}
+    local I = import('/lua/editor/missionimport.lua')
+    local outline = I.Parse(WithoutRegion(scriptText or ''))
+    if table.getn(outline.stages) == 0 then return false end
+    local stages = I.Stages(outline)
+    local dialogues = {}
+    if stringsText and stringsText ~= '' then
+        local ok, list = pcall(I.ParseStrings, stringsText)
+        if ok and list then dialogues = list else LOG('EDITOR mission import: the strings file could not be read: ' .. tostring(list)) end
+    end
+    local editorMade = EditorStageCount() > 0 or table.getn(Data.bases or {}) > 0
+    for _, s in Data.stages do
+        if not s.imported then table.insert(stages, s) end
+    end
+    for _, d in Data.dialogues or {} do
+        if not d.imported then table.insert(dialogues, d) end
+    end
+    Data.stages = stages
+    Data.dialogues = dialogues
+    Data.bases = Data.bases or {}
+    if not editorMade then Data.mode = (info.type == 'campaign_coop') and 'both' or 'campaign' end
+    Data.imported = { script = info.script, strings = stringsText and info.strings or nil, lineCount = outline.lineCount, stages = table.getn(outline.stages) }
+    Revision = Revision + 1
+    LoadedRevision = Revision
+    return true
+end
+
+--- Map.Load: a map whose script has mission stages and whose sidecar holds no editor mission (or only stages made behind imported ones: `keepImport`) is imported.
+--- The script file is only read. Returns true when something was imported.
+function ImportScript(doc)
+    doc = doc or Map.Doc
+    if not doc or not doc.scriptPath then return false end
+    if (EditorStageCount() > 0 or table.getn(Data.bases or {}) > 0) and not Data.keepImport then return false end
+    local text = ReadVfs(doc.scriptPath)
+    if not text or text == '' then return false end
+    local strings = StringsPath(doc)
+    return ImportText(text, ReadVfs(strings), { type = doc.info and doc.info.type, script = doc.scriptPath, strings = strings })
 end
 
 -- the platoon and order nodes live in their own file and register themselves here

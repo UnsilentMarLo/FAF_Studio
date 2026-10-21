@@ -58,14 +58,14 @@ local function Build(name, m)
     if meshName then
         local mesh = WorldMesh()
         mesh:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = MARKER_SCALE, LODCutoff = LOD_CUTOFF })
-        mesh:SetStance(pos, EulerToQuaternion(0, 0, yaw))
+        mesh:SetStance(pos, EulerToQuaternion(0, yaw, 0))
         mesh:SetHidden(false)
         e.prop = mesh
     end
     if dep then
         local mesh = WorldMesh()
         mesh:SetMesh({ MeshName = dep.mesh, TextureName = dep.albedo, ShaderName = 'NormalMappedAlpha', UniformScale = dep.scale, LODCutoff = LOD_CUTOFF })
-        mesh:SetStance(pos, EulerToQuaternion(0, 0, math.rad(math.mod(NameHash(name), 360))))
+        mesh:SetStance(pos, EulerToQuaternion(0, math.rad(math.mod(NameHash(name), 360)), 0))
         mesh:SetHidden(false)
         e.deposit = mesh
         ed_overlay_decal('sp:' .. name, x, y + 0.05, z, dep.splat, dep.splatSize, 'FFFFFFFF', 0)
@@ -79,9 +79,9 @@ local function Move(name, e, m)
     if x == e.x and y == e.y and z == e.z and yaw == e.yaw then return end
     e.x, e.y, e.z, e.yaw = x, y, z, yaw
     local pos = Vector(x, y, z)
-    if e.prop then e.prop:SetStance(pos, EulerToQuaternion(0, 0, yaw)) end
+    if e.prop then e.prop:SetStance(pos, EulerToQuaternion(0, yaw, 0)) end
     if e.deposit then
-        e.deposit:SetStance(pos, EulerToQuaternion(0, 0, math.rad(math.mod(NameHash(name), 360))))
+        e.deposit:SetStance(pos, EulerToQuaternion(0, math.rad(math.mod(NameHash(name), 360)), 0))
         local dep = DEPOSITS[m.type]
         if dep then ed_overlay_decal('sp:' .. name, x, y + 0.05, z, dep.splat, dep.splatSize, 'FFFFFFFF', 0) end
     end

@@ -724,7 +724,15 @@ local function DrawGizmo()
     for _, s in shapes do
         local pts = {}
         for _, p in s.points do Push(pts, p[1], p[2]) end
-        ed_overlay_set(s.id, pts, s.color, 0.2, 2, 4, false, true)
+        if s.fill then
+            -- a filled square: one wide ribbon (world width), no halo, no vertex caps
+            ed_overlay_set(s.id, pts, s.color, s.width, 1, 800, false, false, false)
+        elseif s.px then
+            -- a line of constant width on screen (s.px pixels; the world width is far below that, so the pixel limits decide)
+            ed_overlay_set(s.id, pts, s.color, 0.02, s.px, s.px, s.closed and true or false, true)
+        else
+            ed_overlay_set(s.id, pts, s.color, 0.2, 2, 4, false, true)
+        end
         seen[s.id] = true
         gizmoIds[s.id] = true
     end
@@ -969,6 +977,8 @@ function Clear()
     pcall(function() import('/lua/editor/pathtool.lua').Forget() end)
     pcall(function() import('/lua/editor/chains.lua').Forget() end)
     pcall(function() import('/lua/editor/unitrings.lua').Forget() end)
+    pcall(function() import('/lua/editor/gizmo.lua').Forget() end)
+    pcall(function() import('/lua/editor/placer.lua').Clear() end)
     unitIds = {}
     unitKey = ''
     decalSelIds = {}

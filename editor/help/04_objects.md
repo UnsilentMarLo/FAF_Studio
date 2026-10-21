@@ -12,7 +12,7 @@ The Objects workspace has the tools for everything that stands on the map.
 - Start position: places the next army (ARMY_1, ARMY_2, ...). A ghost of the marker with its name follows the pointer; with symmetry on the mirror images show too.
 - Area: drag a rectangle; areas are used by missions and scripts.
 - Draw chain (Alt+C): every click places a marker at the end of the current chain. With no chain chosen in the Chains panel the first click starts a new one (Chain_1, ...); Ctrl+click starts another; a chain chosen in the panel is extended. The markers are Blank Markers named after the chain. With symmetry on the mirror images get markers and chains of their own (Chain_1_mx ...). One click is one undo step.
-- Unit tool and Select units: pick a unit in the Units panel; the army button chooses which army owns it. Select units works like Select: click, Shift, drag a box.
+- Unit tool and Select units: pick a unit in the Units panel; the army button chooses which army owns it. A ghost with the unit's footprint (solid) and skirt (faint) follows the pointer, green where the unit fits and red where the game would not allow it (water, steep ground, outside the playable area, on another structure); a red spot can still be clicked. Dragging lays a line of units a footprint apart. Select units works like Select: click, Shift, drag a box; moving shows the same footprints at the target.
 - Prop brush, Erase props, Select props: the Props panel lists the prop blueprints; the Properties panel has radius, density, spacing and scale range of the brush. Select props picks single props or a box of them.
 - Decal brush, Erase decals, Select decals: the same for decals.
 - Ruler: measures distances.

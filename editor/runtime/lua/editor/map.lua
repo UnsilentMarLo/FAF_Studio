@@ -51,6 +51,7 @@ function Load()
     pcall(function() import('/lua/editor/maps.lua').ApplyPending(Doc) end)
     pcall(function() import('/lua/editor/terraintype.lua').LoadSidecar(session.file) end)       -- terrain types assigned to texture layers
     pcall(function() import('/lua/editor/mission.lua').LoadSidecar(session.file) end)           -- stages, objectives and actions of a mission map
+    pcall(function() import('/lua/editor/mission.lua').ImportScript(Doc) end)                   -- a hand-written mission script (MissionNumber stages) is shown read-only, never rewritten
     pcall(function() import('/lua/editor/graph.lua').LoadSidecar(session.file) end)             -- the terrain graph (nodes, wires, parameters)
     pcall(function() import('/lua/editor/paths.lua').LoadSidecar(session.file) end)             -- spline paths of the terrain tool
     pcall(function() import('/lua/editor/interop.lua').LoadSidecar(session.file) end)           -- import / export settings for external terrain tools
@@ -295,7 +296,9 @@ function SaveAsCore(diskDir, stem, opts)
     end
     local patched = import('/lua/editor/mission.lua').PatchScript(script)       -- the generated mission region (when the map has stages)
     script = patched
-    script = import('/lua/editor/playable.lua').PatchScript(script)       -- AREA_1 is applied as the playable area
+    if not import('/lua/editor/mission.lua').IsImported() then       -- (the script of an imported hand-written mission is not edited behind the user's back)
+        script = import('/lua/editor/playable.lua').PatchScript(script)       -- AREA_1 is applied as the playable area
+    end
 
     EnsureDefaultEnvCube()
     if not ed_map_save(diskDir .. '/' .. stem .. '.scmap') then
