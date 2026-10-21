@@ -240,6 +240,20 @@ function SaveAs(diskDir, stem, opts)
     return scenario, why
 end
 
+--- The game looks the environment cube of every model up by name and falls back to the `<default>` entry; a map without that entry crashes the game at tick 0 (ACCESS_VIOLATION in
+--- CWldTerrainRes::GetEnvLookup, which copies the texture of the end of an empty lookup). The blank templates had no entry at all: every map is given one before it is written.
+function EnsureDefaultEnvCube()
+    if not (rawget(_G, 'ed_env_lookups') and rawget(_G, 'ed_env_set_lookups')) then return end
+    local ok, flat = pcall(ed_env_lookups)
+    if not ok or type(flat) ~= 'table' then return end
+    for i = 1, table.getn(flat), 2 do
+        if flat[i] == '<default>' then return end
+    end
+    table.insert(flat, '<default>')
+    table.insert(flat, '/textures/environment/defaultenvcube.dds')
+    pcall(ed_env_set_lookups, flat)
+end
+
 function SaveAsCore(diskDir, stem, opts)
     if not Doc then
         local d, why = Load()
@@ -282,6 +296,7 @@ function SaveAsCore(diskDir, stem, opts)
     script = patched
     script = import('/lua/editor/playable.lua').PatchScript(script)       -- AREA_1 is applied as the playable area
 
+    EnsureDefaultEnvCube()
     if not ed_map_save(diskDir .. '/' .. stem .. '.scmap') then
         return nil, 'ed_map_save failed'
     end

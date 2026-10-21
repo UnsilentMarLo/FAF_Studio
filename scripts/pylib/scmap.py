@@ -149,7 +149,7 @@ class ScMap:
         self.shader = "TTerrain"
         self.background = "/textures/environment/defaultbackground.dds"
         self.skycube = "/textures/environment/defaultskycube.dds"
-        self.cubemaps = []                         # [(name, path)]
+        self.cubemaps = [("<default>", "/textures/environment/defaultenvcube.dds")]   # [(name, path)]: the game needs the <default> entry (without it the game crashes at tick 0)
         self.lighting = {"multiplier": 1.5, "sun_direction": [0.4, 0.8, -0.4], "ambience": [0.3, 0.3, 0.3],
                          "sun_color": [1.0, 1.0, 1.0], "shadow_fill": [0.7, 0.7, 0.7], "specular": [0, 0, 0, 0],
                          "bloom": 0.1, "fog_color": [0.8, 0.8, 0.8], "fog_start": 1000.0, "fog_end": 2000.0}
