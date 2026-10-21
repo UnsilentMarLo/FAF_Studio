@@ -46,6 +46,7 @@ function IdFor(tool, hit, dragging)
         return 'brush_' .. tool.id
     end
     if tool.kind == 'marker' then return 'marker' end
+    if tool.id == 'army' or tool.id == 'chain' then return 'marker' end          -- the start position and chain tools place markers: the same pin
     if tool.kind == 'area' then return 'area' end
     if tool.kind == 'select' then
         if hit and hit.handle then return HANDLE_CURSOR[hit.handle] end

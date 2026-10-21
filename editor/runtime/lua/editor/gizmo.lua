@@ -103,6 +103,7 @@ function Active()
         return ui.ActiveTool() and ui.State.tool
     end)
     if not ok or not id then return nil end
+    if id == 'area_select' then id = 'select' end          -- the Select area tool moves the same objects as Select marker: the document's selection
     local p = Providers()[id]
     if not p or p.count() == 0 then return nil end
     local ro = import('/lua/editor/tools.lua').ReadOnly

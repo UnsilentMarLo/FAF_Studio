@@ -8,7 +8,11 @@
 --   SelectMarkers(name)                              selects the chain's markers in the world
 --   Problems()                                       list of { names, x, z, text }: a chain with fewer than two markers, markers that no longer exist, a marker twice in a row
 --   Length(name)                                     world length of the chain's line
---   Draw(ui) / Forget()                              the lines in the world (overlay.lua calls Draw every frame)
+--   Draw(ui) / Forget()                              the lines in the world (overlay.lua calls Draw every frame); a marker of a layer that is switched off in the View panel
+--                                                    (markerfilter.lua) breaks the line; with OnlySelected only the chain of the selected marker (else the chain chosen in the panel) is drawn
+--   SetOnlySelected(on)                              the View panel's "Only the selected chain"
+--   DrawPress(wx, wz, event) / DrawTail() / Finish() the Draw chain tool: every click places a Blank Marker and appends it to the current chain (a new chain when there is none,
+--                                                    Ctrl+click starts a new one); with symmetry on the images get chains of their own (<chain>_mx ...). One undo step per click.
 --
 -- Lua 5.0 dialect.
 
@@ -18,6 +22,7 @@ local Tools = import('/lua/editor/tools.lua')
 
 Current = false        -- the chain the panel shows (highlighted in the world)
 Show = true            -- draw the chains
+OnlySelected = false   -- draw only the chain of the selected marker (else the current chain): the View panel's "Only the selected chain"
 Revision = 0           -- bumped by every change (the panel and the overlay follow it)
 
 local function ChainTable()
@@ -236,6 +241,115 @@ function Problems()
     return out
 end
 
+-- ---- drawing a chain with the Draw chain tool ---------------------------------------------------------------------------------------------------------
+
+--- Sets the marker list of a chain by name (nil deletes it). An existing chain keeps its table (and a chain this tool made is put back as the same table `tbl`), so the entries
+--- of the panel's own edits that captured the table stay valid through undo and redo.
+local function SetChain(name, list, tbl)
+    local chains = ChainTable()
+    if not chains then return end
+    if list then
+        if chains[name] then
+            chains[name].Markers = CopyList(list)
+        else
+            chains[name] = tbl or {}
+            chains[name].Markers = CopyList(list)
+        end
+    else
+        chains[name] = nil
+        if Current == name then Current = false end
+    end
+end
+
+--- The suffix of a symmetry image's chain: mx, mz, dg, da, rot90 ...
+local function ImageSuffix(p)
+    if p.kind == 'rot' then return 'rot' .. math.floor(math.abs(p.angle) * 57.29578 + 0.5) .. (p.angle < 0 and 'n' or '') end
+    return p.kind
+end
+
+--- The end of the chain being drawn (x, z), for the rubber line of the tool's preview; nil when there is no current chain.
+function DrawTail()
+    if not Map.Doc or not Current then return nil end
+    local chains = ChainTable()
+    local c = chains and chains[Current]
+    local last = c and c.Markers and c.Markers[table.getn(c.Markers)]
+    local mk = last and MarkerTable()[last]
+    if not mk then return nil end
+    return mk.position[1], mk.position[3]
+end
+
+--- The next click of the Draw chain tool starts a new chain.
+function Finish()
+    if Current then
+        Current = false
+        Bump()
+    end
+end
+
+--- The Draw chain tool's click: a Blank Marker at (wx, wz) joins the end of the current chain (a new chain "Chain_<n>" when none is chosen in the Chains panel; Ctrl+click
+--- starts a new one). With symmetry on, the images get markers too and, in a chain of their own (<chain>_mx, <chain>_rot90 ...), their markers in the same order. The markers
+--- are named <chain>_<n>. Everything of one click is one undo step. Always returns true (the click is taken).
+function DrawPress(wx, wz, event)
+    if not Map.Doc then Map.Load() end
+    if not Map.Doc or Tools.ReadOnly then return true end
+    local chains = ChainTable()
+    local markers = MarkerTable()
+    if not chains then return true end
+    if event and event.Modifiers and event.Modifiers.Ctrl then Current = false end
+    if Current and not chains[Current] then Current = false end
+    local main = Current
+    if not main then
+        local n = 1
+        repeat main = 'Chain_' .. n n = n + 1 until not chains[main]
+    end
+
+    local points = import('/lua/editor/symmetry.lua').Points(wx, wz)
+    local changes, placed, first = {}, 0, nil
+    for i, p in points do
+        local cname = (i == 1) and main or (main .. '_' .. ImageSuffix(p))
+        local existing = chains[cname]
+        local list = existing and CopyList(existing.Markers) or {}
+        local before = existing and CopyList(existing.Markers) or nil
+        local tbl = existing or {}
+        local base = string.gsub(cname, ' ', '_')
+        local n = table.getn(list) + 1
+        local name
+        repeat name = base .. '_' .. n n = n + 1 until not markers[name]
+        local made = Tools.PlaceMarker(p.x, p.z, 'Blank Marker', name)
+        if made then
+            placed = placed + 1
+            first = first or made
+            table.insert(list, made)
+            table.insert(changes, { name = cname, before = before, after = list, tbl = tbl })
+        end
+    end
+    if placed == 0 then return true end
+
+    for _, ch in changes do SetChain(ch.name, ch.after, ch.tbl) end
+    Current = main
+    Tools.Select('marker', first)
+    local label = 'draw ' .. main
+    History.Push({
+        label = label,
+        undo = function()
+            for i = table.getn(changes), 1, -1 do SetChain(changes[i].name, changes[i].before) end
+            Bump()
+        end,
+        redo = function()
+            for _, ch in changes do SetChain(ch.name, ch.after, ch.tbl) end
+            Current = main
+            Bump()
+        end,
+    })
+    History.Merge(placed + 1, label)          -- the markers and their chains: one undo step per click
+    Bump()
+    local text = 'chain ' .. main .. ': ' .. table.getn(chains[main].Markers) .. ' markers (click for the next, Ctrl+click starts a new chain)'
+    local ok, Filter = pcall(import, '/lua/editor/markerfilter.lua')
+    if ok and Filter.IsHidden('Blank Marker') then text = text .. '. The Other markers layer is hidden in the View panel: its markers and chains are not drawn' end
+    pcall(function() import('/lua/editor/ui.lua').Say(text) end)
+    return true
+end
+
 -- ---- the lines in the world ---------------------------------------------------------------------------------------------------------------------------
 
 local drawn = {}
@@ -252,6 +366,42 @@ local function Remove(keep)
     end
 end
 
+--- Switches the View panel's "Only the selected chain" (the overlay redraws at once).
+function SetOnlySelected(on)
+    OnlySelected = on and true or false
+    Bump()
+end
+
+--- Hidden View layers as a string, part of the key the drawn lines are valid for.
+local function HiddenKey(Filter)
+    local key = ''
+    for _, cat in Filter.CATEGORIES do
+        if Filter.Hidden[cat] then key = key .. cat .. ',' end
+    end
+    return key
+end
+
+--- The names of the chains to draw when OnlySelected is on: the chains that contain a selected marker, else the chain chosen in the panel (nil = every chain).
+local function FocusChains(chains)
+    if not OnlySelected then return nil end
+    local selected = {}
+    for _, it in Tools.Items do
+        if it.kind == 'marker' then selected[it.name] = true end
+    end
+    local focus, any = {}, false
+    for cname, c in chains do
+        for _, m in c.Markers or {} do
+            if selected[m] then
+                focus[cname] = true
+                any = true
+                break
+            end
+        end
+    end
+    if not any and Current and chains[Current] then focus[Current] = true end
+    return focus
+end
+
 function Draw(ui)
     if rawget(_G, 'ed_overlay_set') == nil or not Map.Doc then return end
     local chains = ChainTable() or {}
@@ -264,28 +414,58 @@ function Draw(ui)
         if next(drawn) ~= nil then Remove({}) drawKey = '' end
         return
     end
-    local key = tostring(Revision) .. '|' .. tostring(Current) .. '|' .. tostring(Tools.Changed)
+    local Filter = import('/lua/editor/markerfilter.lua')
+    local key = tostring(Revision) .. '|' .. tostring(Current) .. '|' .. tostring(Tools.Changed) .. '|' .. tostring(OnlySelected) .. '|' .. HiddenKey(Filter)
     if key == drawKey then return end
     drawKey = key
     local keep = {}
     local markers = MarkerTable()
+    local focus = FocusChains(chains)
     for name, c in chains do
-        local pts = {}
-        for _, m in c.Markers or {} do
-            local mk = markers[m]
-            if mk then
-                local x, z = mk.position[1], mk.position[3]
-                table.insert(pts, x)
-                table.insert(pts, (ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or mk.position[2]) + 0.6)
-                table.insert(pts, z)
+        if focus == nil or focus[name] then
+            -- the line runs through the chain's markers in order; a marker of a hidden View layer breaks it (its segments are not drawn), so a hidden layer shows no chain of its markers
+            local runs, pts = {}, {}
+            local members = {}
+            for _, m in c.Markers or {} do
+                local mk = markers[m]
+                if mk then
+                    if Filter.IsHidden(mk.type) then
+                        if table.getn(pts) >= 6 then table.insert(runs, pts) end
+                        pts = {}
+                    else
+                        local x, z = mk.position[1], mk.position[3]
+                        local y = (ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or mk.position[2]) + 0.6
+                        table.insert(pts, x)
+                        table.insert(pts, y)
+                        table.insert(pts, z)
+                        table.insert(members, { x, y, z })
+                    end
+                end
             end
-        end
-        if table.getn(pts) >= 6 then
-            local id = 'chain:' .. name
+            if table.getn(pts) >= 6 then table.insert(runs, pts) end
             local isCur = (name == Current)
-            ed_overlay_set(id, pts, isCur and 'FFFFA020' or '90E08030', isCur and 0.3 or 0.18, 2, 4, false, true)
-            keep[id] = true
-            drawn[id] = true
+            for r, run in runs do
+                local id = (r == 1) and ('chain:' .. name) or ('chain:' .. name .. ':' .. r)
+                ed_overlay_set(id, run, isCur and 'FFFFA020' or '90E08030', isCur and 0.3 or 0.18, 2, 4, false, true)
+                keep[id] = true
+                drawn[id] = true
+            end
+            -- only the selected chain: its members get a ring, so they can be told from the other markers
+            if focus ~= nil and table.getn(runs) > 0 then
+                for i, mm in members do
+                    local ring = {}
+                    for k = 0, 11 do
+                        local a = k / 12 * 6.2831853
+                        table.insert(ring, mm[1] + math.cos(a) * 1.8)
+                        table.insert(ring, mm[2])
+                        table.insert(ring, mm[3] + math.sin(a) * 1.8)
+                    end
+                    local id = 'chainm:' .. name .. ':' .. i
+                    ed_overlay_set(id, ring, 'FFFFA020', 0.12, 2, 3, true, true)
+                    keep[id] = true
+                    drawn[id] = true
+                end
+            end
         end
     end
     Remove(keep)

@@ -112,7 +112,7 @@ Menu.Extend('menubar.Edit', function()
 end, 20)
 Menu.Extend('menubar.Edit', function()
     return {
-        { command = 'edit.selectall', enabled = function() return UI.State.tool == 'select' or UI.State.tool == 'unit_select' end, why = 'use a select tool' },
+        { command = 'edit.selectall', enabled = function() return UI.State.tool == 'select' or UI.State.tool == 'area_select' or UI.State.tool == 'unit_select' end, why = 'use a select tool' },
         { command = 'edit.deselect', enabled = Selected, why = 'nothing selected' },
     }
 end, 30)

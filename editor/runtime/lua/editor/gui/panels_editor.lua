@@ -28,11 +28,11 @@ end
 
 -- the tool buttons by what they do, in this order; a tool of no group (added by a mod) goes to "Other"
 local TOOL_GROUPS = {
-    { 'Select', { 'select', 'unit_select', 'prop_select', 'decal_select' } },
+    { 'Select', { 'select', 'area_select', 'unit_select', 'prop_select', 'decal_select' } },
     { 'Terrain shape', { 'raise', 'lower', 'flatten', 'smooth', 'plateau', 'noise', 'ramp', 'stamp' } },
     { 'Erosion', { 'erode', 'rain', 'deposit' } },
     { 'Texture', { 'paint', 'erase', 'stamp_paint', 'ttype' } },
-    { 'Place objects', { 'unit', 'prop_place', 'decal_place', 'prop', 'prop_erase', 'decal', 'decal_erase', 'marker', 'area', 'army', 'paths' } },
+    { 'Place objects', { 'unit', 'prop_place', 'decal_place', 'prop', 'prop_erase', 'decal', 'decal_erase', 'marker', 'area', 'army', 'chain', 'paths' } },
     { 'Measure and view', { 'ruler', 'camera' } },
 }
 

@@ -87,6 +87,41 @@ local function Move(name, e, m)
     end
 end
 
+local ghosts = {}          -- pool of WorldMesh: the previews of the Start position tool (see Ghost)
+local ghostMesh = false       -- the mesh the pool was made for
+local ghostShown = 0
+
+--- The prop of a marker about to be placed, at each { x, y, z } of `spots` (the Start position tool: pointer and symmetry images); nil or an empty list hides them.
+--- `propBp` is the template's prop blueprint path, as a placed marker's `prop` field.
+function Ghost(spots, propBp)
+    local n = spots and table.getn(spots) or 0
+    local meshName = n > 0 and MeshOf(propBp)
+    if n == 0 or not meshName then
+        if ghostShown > 0 then
+            for i = 1, table.getn(ghosts) do ghosts[i]:SetHidden(true) end
+            ghostShown = 0
+        end
+        return
+    end
+    if ghostMesh ~= meshName then
+        for i = 1, table.getn(ghosts) do ghosts[i]:Destroy() end
+        ghosts = {}
+        ghostMesh = meshName
+    end
+    for i = 1, n do
+        local g = ghosts[i]
+        if not g then
+            g = WorldMesh()
+            g:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = MARKER_SCALE, LODCutoff = LOD_CUTOFF })
+            ghosts[i] = g
+        end
+        g:SetStance(Vector(spots[i][1], spots[i][2], spots[i][3]), EulerToQuaternion(0, 0, 0))
+        g:SetHidden(false)
+    end
+    for i = n + 1, table.getn(ghosts) do ghosts[i]:SetHidden(true) end
+    ghostShown = n
+end
+
 --- Drops every marker object (play mode, shutdown).
 function Clear()
     for name, e in entries do
@@ -95,6 +130,8 @@ function Clear()
     end
     entries = {}
     lastDoc = false
+    for i = 1, table.getn(ghosts) do ghosts[i]:Destroy() end
+    ghosts, ghostMesh, ghostShown = {}, false, 0
 end
 
 function Update()

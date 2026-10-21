@@ -589,7 +589,19 @@ Panels.Register{
                 Help('Click in the world to place one. Pick another type in the Markers panel. Mass and hydrocarbon markers snap to the build grid.')
             elseif kind == 'area' then
                 Title('Area tool')
-                Help('Drag in the world to draw a rectangle. With the Select tool you can move it, or drag its handles to resize.')
+                Help('Drag in the world to draw a rectangle. With the Select area tool you can move it, or drag its handles to resize.')
+            elseif tool and tool.id == 'army' then
+                Title('Start position tool')
+                ReadOnly('Next', function() return import('/lua/editor/armies.lua').NextName() end)
+                Gap(6)
+                Help('Click to place the next start position (ARMY_n). A ghost with its name follows the pointer; with symmetry on the mirror images show too and are placed together.')
+            elseif tool and tool.id == 'chain' then
+                local Chains = import('/lua/editor/chains.lua')
+                Title('Draw chain')
+                P.live = true      -- the chain changes outside of Tools.Changed
+                ReadOnly('Chain', function() return Chains.Current or '(a new chain)' end)
+                Gap(6)
+                Help('Click to place a marker at the end of the chain. Ctrl+click starts a new chain; pick a chain in the Chains panel to extend it. With symmetry on the mirror images get chains of their own.')
             elseif tool and (tool.id == 'prop' or tool.id == 'prop_erase') then
                 PropBrushPanel(tool)
             elseif tool and (tool.id == 'decal' or tool.id == 'decal_erase') then
@@ -623,7 +635,13 @@ Panels.Register{
                 ReadOnly('Markers', function() return tostring(mk) end)
                 ReadOnly('Areas', function() return tostring(ar) end)
                 Gap(6)
-                Help('Click a marker or area to select it. Drag on empty ground to box select; Shift adds or removes.')
+                if tool and tool.id == 'select' then
+                    Help('Select marker: click a marker to select it, drag on empty ground for a box, Shift adds or removes. Drag a selected marker to move it. Areas are not picked here: use the Select area tool.')
+                elseif tool and tool.id == 'area_select' then
+                    Help('Select area: click inside an area to select it (the smallest one under the pointer), drag on empty ground for a box, Shift adds or removes. Drag a selected area to move it, or its handles to resize. Markers are not picked here: use the Select marker tool.')
+                else
+                    Help('Click a marker or area to select it. Drag on empty ground to box select; Shift adds or removes.')
+                end
             end
         end
 
@@ -947,12 +965,23 @@ Commands.Register{ id = 'edit.selectall', title = 'Select all', keys = 'Ctrl+A',
         local Units = import('/lua/editor/units.lua')
         Units.ClearSelection()
         for _, u in Units.All() do Units.Select(u, 'add') end
-    elseif UI.State.tool == 'select' and Map.Doc then
+    elseif (UI.State.tool == 'select' or UI.State.tool == 'area_select') and Map.Doc then
+        -- every object the tool can pick: the Select marker tool the markers, the Select area tool the areas
         local list = {}
-        for _, name in Map.MarkerNames() do table.insert(list, { kind = 'marker', name = name }) end
-        for _, name in Map.AreaNames() do table.insert(list, { kind = 'area', name = name }) end
+        if UI.State.tool == 'select' then
+            for _, name in Map.MarkerNames() do table.insert(list, { kind = 'marker', name = name }) end
+        else
+            for _, name in Map.AreaNames() do table.insert(list, { kind = 'area', name = name }) end
+        end
         Tools.SelectMany(list, false)
     end
+end }
+-- the tools without a digit slot (the table order of ui.lua keeps the digits of the older tools)
+Commands.Register{ id = 'tool.area_select', title = 'Tool: Select area', keys = 'Alt+A', run = function()
+    UI.SelectTool('area_select')
+end }
+Commands.Register{ id = 'tool.chain', title = 'Tool: Draw chain', keys = 'Alt+C', run = function()
+    UI.SelectTool('chain')
 end }
 -- digits pick the Nth tool of the showing workspace (Terrain: raise, lower, ...; Objects: select, marker, area, ...)
 for n = 1, 8 do
