@@ -142,10 +142,9 @@ end
 
 -- ---- the wrappers of the global print functions ----------------------------------------------------------------------------------------------------------------
 
-local function Wrap(name, level, old)
+local function Wrap(name, level, old, st)
     return function(...)
-        local st = rawget(_G, 'EdConsoleState')
-        if st and st.capture then st.capture(level, name, arg) end
+        if st.capture then st.capture(level, name, arg) end
         return old(unpack(arg))
     end
 end
@@ -161,7 +160,7 @@ function Install(env)
         local name = t[1]
         local cur = rawget(env, name)
         if type(cur) == 'function' and S.wrapped[name] ~= cur then
-            local wrapper = Wrap(name, t[2], cur)
+            local wrapper = Wrap(name, t[2], cur, S)
             S.wrapped[name] = wrapper
             rawset(env, name, wrapper)
         end
@@ -326,11 +325,11 @@ function Execute(text, hooks)
         Add('status', 'sent to the sim; what it prints is in the game log', 'command')
         return true
     end
-    local load = hooks.loadstring or loadstring
+    local compile = hooks.loadstring or loadstring
     -- a bare expression ("1 + 2", "table.getn(x)") prints its value: try it as `return <code>` first, a statement ("x = 5") falls back to the plain chunk
     local fn, err = nil, nil
-    if string.sub(code, 1, 7) ~= 'return ' then fn = load('return ' .. code, '=console') end
-    if not fn then fn, err = load(code, '=console') end
+    if string.sub(code, 1, 7) ~= 'return ' then fn = compile('return ' .. code, '=console') end
+    if not fn then fn, err = compile(code, '=console') end
     if not fn then
         Add('error', tostring(err), 'command')
         return false

@@ -4,7 +4,6 @@
 items = {}
 selection = false   -- module variables set to nil do not exist (strict globals): use false for 'none'
 listeners = {}
-console = {}
 
 function Init()
     if table.getn(items) > 0 then return end
@@ -29,13 +28,11 @@ function Select(i)
     Notify('selection')
 end
 
+--- A line for the Console panel. The messages live in consolelog.lua (a ring of 2000 entries, also fed by LOG, WARN and the status line); this stays for the callers that log through the model.
 function Log(text)
-    console[table.getn(console) + 1] = text
-    if table.getn(console) > 500 then table.remove(console, 1) end
-    Notify('console')
+    import('/lua/editor/consolelog.lua').Add('info', text, 'editor')
 end
 
 function Clear()
-    console = {}
-    Notify('console')
+    import('/lua/editor/consolelog.lua').Clear()
 end

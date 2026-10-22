@@ -1,4 +1,4 @@
--- Built-in sample panels (outliner, properties, console, brushes, viewport). They exist to exercise the framework; real editor panels
+-- Built-in sample panels (outliner, properties, brushes, viewport; the console is gui/panels_console.lua). They exist to exercise the framework; real editor panels
 -- register the same way (see panels.lua).
 
 local W = import('/lua/editor/gui/widgets.lua')
@@ -146,25 +146,6 @@ Panels.Register{
         W.Label(group, 'Select an item in the outliner.', Skin.S(10), y + Skin.S(8), { color = Skin.color.textDim, size = 'small' })
         Model.OnChange(function(what) if what == 'selection' then pcall(Refresh) end end)
         Refresh()
-        return P
-    end,
-}
-
-Panels.Register{
-    id = 'console', title = 'Console',
-    create = function(group, host)
-        local P = {}
-        P.list = W.VirtualList(group, {
-            getCount = function() return table.getn(Model.console) end,
-            bind = function(row, index) Rows(row, Model.console[index], Skin.color.textDim) end,
-        })
-        P.clear = W.Button(group, 'Clear', 0, 0, Skin.S(56), Skin.S(22), function() Model.Clear() end)
-        Model.OnChange(function(what) if what == 'console' and P.list then pcall(function() P.list:Refresh() P.list:ScrollTo(table.getn(Model.console)) end) end end)
-        function P:OnResize(w, h)
-            local pad = Skin.S(6)
-            W.Place(P.clear, group, w - pad - Skin.S(56), pad, Skin.S(56), Skin.S(22))
-            P.list:SetRect(pad, pad * 2 + Skin.S(22), w - 2 * pad, h - pad * 3 - Skin.S(22))
-        end
         return P
     end,
 }
