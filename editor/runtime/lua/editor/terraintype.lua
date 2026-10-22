@@ -65,54 +65,134 @@ function Available()
     return ed_tt_info ~= nil and ed_tt_info() ~= nil
 end
 
+-- ---- what changed: the overlay (ttoverlay.lua) redraws only the cells that did -------------------------------------------------------------------
+-- Revision counts the changes. A change that knows its cell rectangle reports it with Mark; the overlay asks TakeDirty for the rectangle accumulated since its last look. Code that bumps
+-- Revision by itself (a panel switch, Generate, the field engine) does not know a rectangle: TakeDirty then answers 'all' and the overlay rebuilds everything.
+
+local dirty = false          -- false | { x0, z0, x1, z1 } (cells) | 'all': the changes not yet taken
+local knownRev = 0           -- the Revision `dirty` accounts for
+
+--- Reports a change of the cells x0..x1, z0..z1 (inclusive, grid cells): bumps Revision.
+function Mark(x0, z0, x1, z1)
+    local unknown = (Revision ~= knownRev)           -- somebody bumped Revision without a rectangle since the last look
+    Revision = Revision + 1
+    knownRev = Revision
+    if unknown or dirty == 'all' then
+        dirty = 'all'
+    elseif dirty then
+        if x0 < dirty[1] then dirty[1] = x0 end
+        if z0 < dirty[2] then dirty[2] = z0 end
+        if x1 > dirty[3] then dirty[3] = x1 end
+        if z1 > dirty[4] then dirty[4] = z1 end
+    else
+        dirty = { x0, z0, x1, z1 }
+    end
+end
+
+--- The changes since the last call: 'all', a rectangle { x0, z0, x1, z1 } of grid cells, or nil when nothing is known to have changed.
+function TakeDirty()
+    local d = dirty
+    if Revision ~= knownRev then d = 'all' end
+    dirty = false
+    knownRev = Revision
+    return d
+end
+
+--- World units per grid cell (the grid spans the whole map, whatever its resolution): csx, csz.
+function Cell()
+    local gw, gh = ed_tt_info()
+    local size = ed_terrain_info and ed_terrain_info()
+    if not gw or not size then return 1, 1 end
+    return (size - 1) / gw, (size - 1) / gh
+end
+
+-- ---- painting ---------------------------------------------------------------------------------------------------------------------------------------
+-- A dab is one native call (ed_tt_disc: the disc, in the session's grid and the sim's copy, with the rectangle that changed). The undo data is kept in 32 x 32 cell tiles: the first time a
+-- dab reaches a tile its content is read (one call per tile, once per stroke); at the end of the stroke the tiles that changed give the undo entry (before / after of those tiles only).
+
+NativeDisc = true        -- false forces the Lua loop (tests compare the two)
+local TILE = 32
+
 function BeginStroke()
     local w, h = ed_tt_info()
     if not w then
         stroke = { refused = true }
         return
     end
-    stroke = { w = w, h = h, orig = {}, minX = nil }
+    local csx = Cell()
+    stroke = { w = w, h = h, cs = csx, tiles = {}, tilesW = math.ceil(w / TILE) }
 end
 
---- A hard disc of terrain type at (cx, cz). Returns the number of cells changed.
+--- Remembers the content of the tiles under the cell rectangle before the first change of the stroke reaches them.
+local function Snapshot(s, x0, z0, x1, z1)
+    local tiles = s.tiles
+    for tz = math.floor(z0 / TILE), math.floor(z1 / TILE) do
+        for tx = math.floor(x0 / TILE), math.floor(x1 / TILE) do
+            local key = tz * s.tilesW + tx
+            if not tiles[key] then
+                local values, ax0, az0, ax1, az1 = ed_tt_read(tx * TILE, tz * TILE, tx * TILE + TILE - 1, tz * TILE + TILE - 1)
+                if values then
+                    tiles[key] = { x0 = ax0, z0 = az0, x1 = ax1, z1 = az1, before = values, changed = false }
+                end
+            end
+        end
+    end
+end
+
+--- A hard disc of terrain type at world position (cx, cz) with the brush radius. Returns the number of cells changed.
 function Dab(cx, cz, brush)
     if not stroke then BeginStroke() end
     if stroke.refused then return 0 end
-    local r = brush.radius
+    local cs = stroke.cs
+    local r = brush.radius / cs                     -- the grid in cells
+    cx, cz = cx / cs, cz / cs
     local code = Active
     if IsKeyDown and IsKeyDown('Shift') then code = DEFAULT end
     local x0, z0 = math.max(0, math.floor(cx - r)), math.max(0, math.floor(cz - r))
     local x1, z1 = math.min(stroke.w - 1, math.ceil(cx + r)), math.min(stroke.h - 1, math.ceil(cz + r))
     if x1 < x0 or z1 < z0 then return 0 end
-    local values, ax0, az0, ax1, az1 = ed_tt_read(x0, z0, x1, z1)
-    if not values then return 0 end
-    local rw = ax1 - ax0 + 1
-    local changed = 0
-    for z = az0, az1 do
-        for x = ax0, ax1 do
-            local dx, dz = (x + 0.5) - cx, (z + 0.5) - cz
-            if dx * dx + dz * dz <= r * r then
-                local i = (z - az0) * rw + (x - ax0) + 1
-                if values[i] ~= code then
-                    local key = z * stroke.w + x
-                    if stroke.orig[key] == nil then stroke.orig[key] = values[i] end
-                    values[i] = code
+    Snapshot(stroke, x0, z0, x1, z1)
+    local changed, bx0, bz0, bx1, bz1
+    if NativeDisc and rawget(_G, 'ed_tt_disc') then
+        changed, bx0, bz0, bx1, bz1 = ed_tt_disc(cx, cz, r, code)
+    end
+    if changed == nil then
+        -- the same disc in Lua (an exe without ed_tt_disc): one read of the window, one write
+        local values, ax0, az0, ax1, az1 = ed_tt_read(x0, z0, x1, z1)
+        if not values then return 0 end
+        local rw = ax1 - ax0 + 1
+        local r2 = r * r
+        changed = 0
+        for z = az0, az1 do
+            local dz = (z + 0.5) - cz
+            local dz2 = dz * dz
+            local row = (z - az0) * rw - ax0 + 1
+            for x = ax0, ax1 do
+                local dx = (x + 0.5) - cx
+                if dx * dx + dz2 <= r2 and values[row + x] ~= code then
+                    values[row + x] = code
                     changed = changed + 1
-                    if not stroke.minX then
-                        stroke.minX, stroke.minZ, stroke.maxX, stroke.maxZ = x, z, x, z
+                    if changed == 1 then
+                        bx0, bz0, bx1, bz1 = x, z, x, z
                     else
-                        if x < stroke.minX then stroke.minX = x end
-                        if x > stroke.maxX then stroke.maxX = x end
-                        if z < stroke.minZ then stroke.minZ = z end
-                        if z > stroke.maxZ then stroke.maxZ = z end
+                        if x < bx0 then bx0 = x end
+                        if x > bx1 then bx1 = x end
+                        if z < bz0 then bz0 = z end
+                        if z > bz1 then bz1 = z end
                     end
                 end
             end
         end
+        if changed > 0 then ed_tt_write(ax0, az0, ax1, az1, values) end
     end
     if changed > 0 then
-        ed_tt_write(ax0, az0, ax1, az1, values)
-        Revision = Revision + 1
+        for tz = math.floor(bz0 / TILE), math.floor(bz1 / TILE) do
+            for tx = math.floor(bx0 / TILE), math.floor(bx1 / TILE) do
+                local t = stroke.tiles[tz * stroke.tilesW + tx]
+                if t then t.changed = true end
+            end
+        end
+        Mark(bx0, bz0, bx1, bz1)
     end
     return changed
 end
@@ -121,22 +201,32 @@ function EndStroke()
     local s = stroke
     stroke = false
     pending = false
-    if not s or not s.minX then return end
-    local after, x0, z0, x1, z1 = ed_tt_read(s.minX, s.minZ, s.maxX, s.maxZ)
-    if not after then return end
-    local rw = x1 - x0 + 1
-    local before = {}
-    for z = z0, z1 do
-        for x = x0, x1 do
-            local i = (z - z0) * rw + (x - x0) + 1
-            local o = s.orig[z * s.w + x]
-            before[i] = (o == nil) and after[i] or o
+    if not s or s.refused then return end
+    local parts = {}
+    for _, t in s.tiles do
+        if t.changed then
+            local after = ed_tt_read(t.x0, t.z0, t.x1, t.z1)
+            if after then
+                local before = t.before
+                local same = true
+                for i = 1, table.getn(before) do
+                    if before[i] ~= after[i] then same = false break end
+                end
+                if not same then table.insert(parts, { x0 = t.x0, z0 = t.z0, x1 = t.x1, z1 = t.z1, before = before, after = after }) end
+            end
+        end
+    end
+    if table.getn(parts) == 0 then return end
+    local function Apply(field)
+        for _, p in parts do
+            ed_tt_write(p.x0, p.z0, p.x1, p.z1, p[field])
+            Mark(p.x0, p.z0, p.x1, p.z1)
         end
     end
     pending = {
         label = 'paint terrain type',
-        undo = function() ed_tt_write(x0, z0, x1, z1, before) Revision = Revision + 1 end,
-        redo = function() ed_tt_write(x0, z0, x1, z1, after) Revision = Revision + 1 end,
+        undo = function() Apply('before') end,
+        redo = function() Apply('after') end,
     }
 end
 
@@ -162,11 +252,17 @@ end
 
 --- The type codes under a grid of nodes (the overlay's): node (i, j) lies at world (x0 + i * step, z0 + j * step) and takes the code of the grid cell that position is in (the grid spans the whole
 --- map, whatever its resolution). Returns a row major list of nw * nh codes; nil without a grid.
+NativeNodes = true       -- false forces the Lua loop below (tests compare the two)
+
 function NodeCodes(x0, z0, nw, nh, step)
     local gw, gh = ed_tt_info()
     local size = ed_terrain_info()
     if not gw or not size then return nil end
     local csx, csz = (size - 1) / gw, (size - 1) / gh
+    if NativeNodes and rawget(_G, 'ed_tt_nodes') then
+        local native = ed_tt_nodes(x0, z0, nw, nh, step, csx, csz)           -- all nodes in one call
+        if native then return native end
+    end
     local out = {}
     local n = 0
     local c0 = math.max(0, math.min(gw - 1, math.floor(x0 / csx)))

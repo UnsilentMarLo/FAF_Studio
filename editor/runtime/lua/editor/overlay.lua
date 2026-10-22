@@ -720,57 +720,9 @@ end
 
 -- ---- terrain type grid -------------------------------------------------------------------------------------------------------------
 
-local typeKey = ''
-local typeIds = {}
-
---- One coloured cell layer per terrain type present in the part of the grid the camera sees (the cells draw as small squares: ed_overlay_nodes). The window covers the whole visible map and
---- coarsens (overlaywin.lua: 2, 4, 8 ... units per node) when the view is zoomed out, so the layer stays glued to the terrain at every zoom.
+--- The terrain type cells (ttoverlay.lua keeps the layers and redraws only the cells a dab changed).
 local function DrawTypes(view)
-    local TT = import('/lua/editor/terraintype.lua')
-    if not TT.Visible then
-        if typeKey ~= '' then
-            for id, _ in typeIds do ed_overlay_remove(id) end
-            typeIds = {}
-            typeKey = ''
-        end
-        return
-    end
-    if not ed_tt_info() then return end
-    local x0, z0, nw, nh, step = import('/lua/editor/overlaywin.lua').Window(view, 290)
-    if not x0 then return end
-    local key = string.format('%d|%d|%d|%d|%d|%d', x0, z0, nw, nh, step, TT.Revision)
-    if key == typeKey then return end
-    typeKey = key
-    local codes = TT.NodeCodes(x0, z0, nw, nh, step)
-    if not codes then return end
-    local n = nw * nh
-    local byType = {}
-    for i = 1, n do
-        local v = codes[i]
-        local t = byType[v]
-        if not t then
-            t = {}
-            byType[v] = t
-        end
-        t[i] = 255
-    end
-    local seen = {}
-    for code, cells in byType do
-      if code > TT.DEFAULT then        -- cells without a type (0) and the default type stay clear
-        local id = 'tt:' .. code
-        local grid = {}
-        for i = 1, n do grid[i] = cells[i] or 0 end
-        ed_overlay_nodes(id, x0, z0, nw, nh, grid, TT.ColorOf(code), 120, step)
-        typeIds[id] = true
-        seen[id] = true
-      end
-    end
-    for id, _ in typeIds do
-        if not seen[id] then
-            ed_overlay_remove(id)
-            typeIds[id] = nil
-        end
-    end
+    import('/lua/editor/ttoverlay.lua').Draw(view)
 end
 
 -- ---- selected props ----------------------------------------------------------------------------------------------------------------
@@ -1196,8 +1148,7 @@ local function ForgetObjects()
     rampKey = ''
     propSelIds = {}
     propSelKey = ''
-    typeIds = {}
-    typeKey = ''
+    import('/lua/editor/ttoverlay.lua').Forget()
     lastRevision = -1
     lastChanged = -1
     handleCount = 0
