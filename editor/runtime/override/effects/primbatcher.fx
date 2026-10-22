@@ -532,3 +532,25 @@ technique TTextLcd
         PixelShader = compile ps_2_0 EdTextAddPS();
     }
 }
+
+// ---- Editor ground overlay (slope view, build grid, value grids; moho/editor/EdOverlay.cpp) ---------------------------------------------------------------------
+// The same as TAlphaBlendLinearSampleNoDepth but depth TESTED (less or equal) against the terrain and the units, with depth writes off: the overlay is hidden by hills in front of it.
+// The vertices carry the depth of their ground point (moho/editor/EdOverlayLod.h VertexZ), moved towards the camera by a distance dependent bias.
+technique TEdGroundOverlay
+{
+    pass P0
+    {
+        AlphaState( AlphaBlend_SrcAlpha_InvSrcAlpha_Write_RGB )
+        DepthState( Depth_Enable_LessEqual_Write_None )
+        RasterizerState( Rasterizer_Cull_None )
+
+#ifndef DIRECT3D10
+        AlphaTestEnable = true;
+        AlphaRef = 0;
+        AlphaFunc = Greater;
+#endif
+
+        VertexShader = compile vs_1_1 PrimBatcherVS();
+        PixelShader = compile ps_2_0 PrimBatcherPS(LinearSampler);
+    }
+}

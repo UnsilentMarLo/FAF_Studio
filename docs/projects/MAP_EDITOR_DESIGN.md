@@ -713,9 +713,19 @@ The engine rates slope in two ways, both read from its own code and computed nat
 - **Performance (2026-10-22):** the ratings are cached in 64 x 64 cell tiles (`EdOverlaySlope.h`) until the heights under a tile change (`edoverlay::NotifyHeights`, called by the
   document's height sink in `EditorDocument.cpp`; a map or kind / window change drops them), rated with separable sliding window maxima (O(cells), not O(cells x window^2); the
   whole 4096 x 4096 map takes ~0.9 s in total, 0.2 ms per tile) and only for the tiles the view shows, at most 5 ms per frame (the rest fills in over the next frames, the
-  nearest to the middle first). Each tile keeps max-reduced blocks of 2 ... 64 cells, so a wide view draws at most 160 x 160 blocks (blocks aligned to multiples of their size,
-  the steepest cell of a block wins) and merges runs of equal colour (24 colour steps) into one quad; unchanged cameras project nothing (`ProjGrid`). `ed_overlay_perf()` and the
-  perf.lua report show the numbers. Node grids (`ed_overlay_nodes`, terrain type layers) share one projection per window, project only the nodes a drawn cell needs, draw
+  nearest the camera first). Each tile keeps max-reduced blocks of 2 ... 64 cells (the steepest cell of a block wins). **Distance adaptive detail (2026-10-22):** the drawn blocks
+  are a quadtree (`EdOverlayLod.h`): roots of 64 cells over the visible rectangle, each cut into four while its longest projected edge is above 16 px (merged again below 11 px:
+  hysteresis kept per block between frames), down to single cells; the blocks nearest the camera are cut first and a leaf budget (40000) and a quad budget (120000) bound the
+  frame, so the ground under the camera is as fine as it gets and the horizon stays coarse (a single block size for the whole view was the "camera distance bug"). Projected
+  nodes are cached in a hash by ground position (shared by neighbouring blocks, kept while the camera stands still); a block next to a finer neighbour grows by 1 px over that
+  edge (no cracks). `ed_overlay_perf()` and the perf.lua report show the numbers.
+- **Build grid (2026-10-22):** `ed_overlay_grid(x0, z0, x1, z1)` draws it natively every frame: the outlines of the leaves of a second quadtree (a block of 2^L cells is a leaf
+  while 10 - 20 px big: lines every cell near the camera, every 2, 4 ... cells farther away, alpha fading with the block size, every fourth line brighter), each line once, laid on the real
+  ground (`DrapeEdge`). Nothing is rebuilt by Lua (no hitch when the density changes); `overlay.lua` GridView stays as the fallback without the native.
+- **Occlusion:** the ground overlays (slope, build grid, node grids) were drawn with `TAlphaBlendLinearSampleNoDepth` and vertex z = 0, so they showed through hills (x-ray).
+  They now use `TEdGroundOverlay` (depth test less-equal, writes off; `edtext_techniques.fx.part`) with the depth of the ground point in the vertex z (`EdOverlayLod.h`
+  `BiasedDepth` / `VertexZ`), moved towards the camera by 0.25 + 0.008 x distance world units so the overlay wins over the coarser terrain mesh. `ed_overlay_depth(false)` switches the
+  test off again. Lines, icons and decals are still drawn without depth. Node grids (`ed_overlay_nodes`, terrain type layers) share one projection per window, project only the nodes a drawn cell needs, draw
   merged runs of flat cells and take `ed_overlay_nodes_rect` for a dab. Tests: `EdOverlaySlopeTest`, `EdOverlayNodesTest` (`scripts/ed_native_tests.py`).
 - **Not covered yet:** terrain-type "blocking" cells (`STIMap::IsBlockingTerrain`, from TerrainTypes.lua and the terrain-type layer), water depth limits, and the
   `FlattenSkirt` perimeter check (`OCCUPY_CheckEdgeFlatness`) that normal structures use on top of the flatness rule.
