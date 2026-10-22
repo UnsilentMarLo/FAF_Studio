@@ -60,8 +60,11 @@ local function Sections(report, c)
             table.insert(Section(string.upper(string.sub(l.kind, 1, 1)) .. string.sub(l.kind, 2), c.text).items, l.text)
         end
     end
-    for _, f in report.files or {} do
-        table.insert(Section('Created files', c.text).items, type(f) == 'table' and (f.text or f.path or tostring(f)) or tostring(f))
+    -- report.files is a COUNT (stratumconv.lua); a list of files is drawn when a caller gives one (a `for` over a number is an error that left the dialog without its report and its Close button)
+    if type(report.files) == 'table' then
+        for _, f in report.files do
+            table.insert(Section('Created files', c.text).items, type(f) == 'table' and (f.text or f.path or tostring(f)) or tostring(f))
+        end
     end
     -- the order is Changed, Needs your attention, then the rest
     local out = {}
@@ -234,17 +237,27 @@ function Open(targetId, done)
             return
         end
         state.report = report
-        view:Heading('Done (one undo step)', { color = c.accent, before = 0 })
-        for _, sec in Sections(report, c) do
-            view:Heading(sec.title, { color = sec.color == c.text and c.textDim or sec.color })
-            for _, t in sec.items do view:Bullet(t, { color = sec.color }) end
+        CloseButton()          -- first: whatever happens while the report is drawn, the dialog can be closed
+        local ok, err = pcall(function()
+            view:Heading('Done (one undo step)', { color = c.accent, before = 0 })
+            for _, sec in Sections(report, c) do
+                view:Heading(sec.title, { color = sec.color == c.text and c.textDim or sec.color })
+                for _, t in sec.items do view:Bullet(t, { color = sec.color }) end
+            end
+            view:Show()
+        end)
+        if not ok then
+            LOG('EDITOR convert dialog: the report could not be drawn: ' .. tostring(err))
+            view:Clear()
+            view:Heading('Done (one undo step)', { color = c.accent, before = 0 })
+            view:Text(tostring(report.status or 'The conversion is done.'), { color = c.text, size = 'text' })
+            pcall(function() view:Show() end)
         end
-        view:Show()
-        CloseButton()
     end
 
     function state.Run()
-        local report, why = Conv.Run(plan, { layer8 = state.choice, mergeInto = state.mergeInto, upper = state.upper, textures = state.textures })
+        local ok, report, why = pcall(Conv.Run, plan, { layer8 = state.choice, mergeInto = state.mergeInto, upper = state.upper, textures = state.textures })
+        if not ok then report, why = nil, report end         -- an error inside the conversion: shown as a failure with a Close button
         state.ShowReport(report, why)
         if not report then
             Say('conversion failed: ' .. tostring(why))
