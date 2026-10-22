@@ -5,7 +5,7 @@
 -- height or slope ramp goes from 0 to 1 over 10 to 25 percent of the relief or 15 to 25 degrees) and a blur of 3 units or more; noise never cuts a shape out, it only wobbles the thresholds
 -- of the ramps by a few percent (fractal noise of 40 to 160 units) so that edges are ragged but soft. Secondary kinds stay below full opacity, so the kind below shows through.
 --   grass     open ground: gentle ground above the beach and below the snow line (only drawn when grass is NOT the base layer: the base is what is left). A second grass layer is a soft partial mix
---   dirt      a low contrast patchwork on flat ground: a wide smoothstep of fractal noise calibrated so that it covers Dirt coverage of the map, at most 0.85 opacity
+--   dirt      a low contrast patchwork on flat ground: a wide smoothstep of fractal noise calibrated so that it covers Dirt coverage of the map, at most 0.9 opacity
 --   wet       wet ground: concave drainage lines (gullies) and the strip along the waterline, at most 0.7 opacity
 --   sand      beach: the shore band of Beach half width on gentle ground (only when the map has water; a dry map only has it in the desert style: dry low basins)
 --   rock      slopes: opacity rises with the slope from Rock slope (0) to Cliff slope (1)
@@ -14,7 +14,7 @@
 --   snow      altitude: a ramp around the snow line (the top Snow covers share of the land), reduced on steep ground (it does not stay on cliffs), ragged but soft at the edge
 --
 -- Heights are PERCENTILES of the land heights (the cells above the water level, read from the field engine, Stats), the relief is the span from the 3rd to the 99.5th percentile, the noise
--- thresholds come from the noise itself (NoiseAt), so "snow covers the top 8%" and "dirt covers 32%" mean that on any map.
+-- thresholds come from the noise itself (NoiseAt), so "snow covers the top 8%" and "dirt covers 38%" mean that on any map.
 --
 -- ROLE DETECTION, NOT LAYER NUMBERS. Which layer holds which role is found from the textures (roledetect.lua: file name words, then the colour of a 16 x 16 reduction), corrected by the user
 -- per texture (the table in the panel). Plan() lists, per role, the layers that hold it. A role with no layer is skipped (a layer is never painted with a texture of the wrong kind). Two layers of
@@ -61,8 +61,8 @@ local function Rule(type, values, op, invert)
 end
 
 
-Knobs = { cliff = 45, rock = 28, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.32, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
-KnobDefaults = { cliff = 45, rock = 28, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.32, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
+Knobs = { cliff = 45, rock = 28, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
+KnobDefaults = { cliff = 45, rock = 28, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
 
 KnobInfo = {
     { key = 'cliff', label = 'Cliff slope from (degrees)', min = 20, max = 85, step = 1, fmt = '%d' },
@@ -84,10 +84,10 @@ ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', '
 Presets = {
     { id = 'temperate', name = 'Natural (all eight kinds of ground)', uses = ALL_KNOBS, knobs = {}, off = {} },
     { id = 'alpine', name = 'Alpine (more rock, high rock and snow)', uses = ALL_KNOBS, knobs = { snow = 0.18, high = 0.4, cliff = 42, rock = 24, dark = 0.6 }, off = {} },
-    { id = 'desert', name = 'Desert (dust and sand, no snow)', uses = ALL_KNOBS, knobs = { snow = 0, beach = 4, dirt = 0.35, dark = 0.4, wet = 1 }, off = { snow = true }, drySand = true },
+    { id = 'desert', name = 'Desert (dust and sand, no snow)', uses = ALL_KNOBS, knobs = { snow = 0, beach = 4, dirt = 0.42, dark = 0.4, wet = 1 }, off = { snow = true }, drySand = true },
     { id = 'arctic', name = 'Arctic (snow and ice, rock)', uses = ALL_KNOBS, knobs = { snow = 0.4, high = 0.35, beach = 2, dirt = 0.15 }, off = {} },
-    { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 36, rock = 20, dirt = 0.4, dark = 0.8, high = 0.4, snow = 0.05 }, off = {} },
-    { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.3, snow = 0, rock = 34, cliff = 50 }, off = { snow = true } },
+    { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 36, rock = 20, dirt = 0.5, dark = 0.8, high = 0.4, snow = 0.05 }, off = {} },
+    { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.36, snow = 0, rock = 34, cliff = 50 }, off = { snow = true } },
 }
 
 State = { preset = 1, types = true, selected = 0 }          -- State.layers (nil): detect the roles from the textures; a list: the roles are on those layers
@@ -270,8 +270,8 @@ local function FlatTo(a0, a1, wob, size, seed, op)
     return Rule('slope', { lo = 0, hi = a0, soft = math.max(1, a1 - a0), wobble = wob or 0, wsize = size or 80, wseed = seed or 1 }, op)
 end
 --- Height ramp: 0 at h0, 1 from h1 on.
-local function RiseFrom(st, h0, h1, wob, size, seed, op)
-    return Rule('height', { lo = h1, hi = st.hmax + 1000, soft = math.max(0.5, h1 - h0), wobble = wob or 0, wsize = size or 80, wseed = seed or 1 }, op)
+local function RiseFrom(st, h0, h1, wob, size, seed, op, sun)
+    return Rule('height', { lo = h1, hi = st.hmax + 1000, soft = math.max(0.5, h1 - h0), wobble = wob or 0, wsize = size or 80, wseed = seed or 1, sun = sun or 0 }, op)
 end
 --- Height ramp: 1 up to h0, 0 from h1 on.
 local function FallTo(st, h0, h1, wob, size, seed, op)
@@ -317,7 +317,7 @@ Builders.dirt = function(k, st, cx)
     if cx.base == 'dirt' then return {} end
     if k.dirt <= 0.005 then return false end
     local size, bk = Wob(k)
-    local rules = { Mix(k.seed, k.patch * 2.4, 1 - k.dirt - 0.22, 1 - k.dirt + 0.22), AtMost(0.85), FlatTo(k.rock - 6, k.rock + 10, 3 * bk, size, k.seed + 3, 'mul') }
+    local rules = { Mix(k.seed, k.patch * 2.4, 1 - k.dirt - 0.22, 1 - k.dirt + 0.22), AtMost(0.9), FlatTo(k.rock - 6, k.rock + 10, 3 * bk, size, k.seed + 3, 'mul') }
     if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then
         local _, R = Zone(st)
         local sl = SnowLine(k, st)
@@ -378,7 +378,7 @@ Builders.snow = function(k, st, cx)
     local _, R = Zone(st)
     local size, bk = Wob(k)
     local sl = SnowLine(k, st)
-    return { RiseFrom(st, sl - 0.14 * R, sl + 0.06 * R, 0.08 * R * bk, size, k.seed + 21), FlatTo(k.cliff, k.cliff + 22, 4 * bk, size, k.seed + 22, 'mul'), Blur(4) }
+    return { RiseFrom(st, sl - 0.14 * R, sl + 0.06 * R, 0.08 * R * bk, size, k.seed + 21, nil, 0.05 * R), FlatTo(k.cliff, k.cliff + 22, 4 * bk, size, k.seed + 22, 'mul'), Blur(4) }
 end
 
 -- ---- the layers of the map and their roles ---------------------------------------------------------------------------------------------------------------------

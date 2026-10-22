@@ -4,6 +4,8 @@
 -- A definition is { rules = { rule, ... } }; a rule is { type, op, invert, enabled, v = { parameter values } }.
 --   Source rules make a mask and combine it with what the rules above made (rule.op): and (the smaller), or (the larger), mul (multiply), sub (difference: what is there minus this),
 --   add; rule.invert turns the rule into its "not" first. Modifier rules work on the result so far: not, blur, grow, shrink, open, close, threshold, smoothstep, amount.
+--   The height and slope rules can WOBBLE their limits by fractal noise (wobble, wsize, wseed: an edge that is ragged but stays soft) and the height rule can start higher on the sun side (sun, sunaz);
+--   noise kind 5 is the engine's `fractal` (every octave in its own turned frame, no lattice seams).
 --   Sources: slope (degrees), unitclass (the engine's own rule for a footprint: pathable / blocked for land, hover and amphibious units, or buildable for structures), height, curvature
 --   (convex / concave), aspect (facing an azimuth: sun side), water (above, below, shoreline band, relative to the map's water surface), noise, flow (drainage area: rivers), position
 --   (gradient or distance from the middle: map edge masks), layer (what a texture layer covers), free_above (not covered by the layers above a layer: the strata cascade), near_layer, const.
@@ -54,7 +56,8 @@ Types = {
         P('soft', 'Soft edge', 0, 1, 0.01, '%.2f', 0.05), P('blocked', 'Mask the blocked ground (1) or the passable (0)', 0, 1, 1, '%d', 0) } },
     height = { label = 'Height band', kind = 'source', params = {
         P('lo', 'From (units)', -100, 600, 0.5, '%.1f', 0), P('hi', 'To (units)', -100, 600, 0.5, '%.1f', 40), P('soft', 'Soft edge (units)', 0, 100, 0.5, '%.1f', 4),
-        P('wobble', 'Wobble (units, fractal noise)', 0, 100, 0.5, '%.1f', 0), P('wsize', 'Wobble feature size (units)', 8, 600, 2, '%d', 80), P('wseed', 'Wobble seed', 0, 9999, 1, '%d', 1) } },
+        P('wobble', 'Wobble (units, fractal noise)', 0, 100, 0.5, '%.1f', 0), P('wsize', 'Wobble feature size (units)', 8, 600, 2, '%d', 80), P('wseed', 'Wobble seed', 0, 9999, 1, '%d', 1),
+        P('sun', 'Sun side starts the band higher by (units; negative: lower)', -100, 100, 0.5, '%.1f', 0), P('sunaz', 'Sun direction (degrees, 0 = +x, 90 = +z)', 0, 360, 5, '%d', 225) } },
     curvature = { label = 'Curvature', kind = 'source', params = {
         P('radius', 'Radius (units)', 1, 60, 1, '%d', 6), P('gain', 'Gain', 1, 300, 1, '%d', 25), P('lo', 'From (0.5 = flat)', 0, 1, 0.01, '%.2f', 0.56),
         P('hi', 'To (1 = sharpest ridge)', 0, 1, 0.01, '%.2f', 1), P('soft', 'Soft edge', 0, 0.5, 0.01, '%.2f', 0.04) } },
@@ -196,8 +199,20 @@ function SOURCE.unitclass(c, v)
     return pass
 end
 
+--- The heights as a height rule reads them: moved by the wobble and, with `sun` (units), lowered on the ground that faces the sun (azimuth `sunaz`) and raised on the far side: a band that
+--- starts high up (snow) then starts `sun` units higher on the sunny side and `sun` units lower on the far side.
+local function RuleHeights(c, v)
+    local f = Wobbled(c, c.H, v.wobble, v.wsize, v.wseed)
+    if v.sun and v.sun ~= 0 then
+        local n = Samples(c, 6)
+        local facing = Cached(c, 'facing' .. v.sunaz .. '_' .. n, function() return Op(c, 'aspect', { a = c.H, azimuth = v.sunaz, flat = 0.03, radius = n }) end)
+        f = Op(c, 'sub', { a = f, b = Op(c, 'affine', { a = facing, mul = 2 * v.sun, add = -v.sun }) })
+    end
+    return f
+end
+
 function SOURCE.height(c, v)
-    return Op(c, 'height_band', { a = Wobbled(c, c.H, v.wobble, v.wsize, v.wseed), lo = v.lo, hi = v.hi, soft = v.soft })
+    return Op(c, 'height_band', { a = RuleHeights(c, v), lo = v.lo, hi = v.hi, soft = v.soft })
 end
 
 function SOURCE.curvature(c, v)

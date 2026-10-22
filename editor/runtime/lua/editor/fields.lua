@@ -28,6 +28,7 @@
 local Sim = import('/lua/editor/sim.lua')
 local History = import('/lua/editor/history.lua')
 local Terrain = import('/lua/editor/terrain.lua')
+local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 
 local function Available()
     return rawget(_G, 'ed_field_op') ~= nil
@@ -228,6 +229,9 @@ function CommitHeight(f, opts)
     local depth = Terrain.UndoDepth()
     local changed, x0, z0, x1, z1 = ed_field_commit_height(f, opts)
     if not changed then return nil, x0 end
+    -- every height write moves the revision the terrain graph watches (terrainepoch.lua Stamp), whether or not the native stack got a new entry: a write that merges into an open stroke or
+    -- hits the stack limit leaves UndoDepth as it was, and History.Version did not move then
+    if changed > 0 then TerrainEpoch.Touch() end
     if Terrain.UndoDepth() ~= depth then
         if not opts.noHistory then History.PushTerrain() end
         Sim.Resnap(x0, z0, x1, z1)
