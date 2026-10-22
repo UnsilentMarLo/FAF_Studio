@@ -124,8 +124,10 @@ function Open(done, opts)
         y = y + 20
         y = Para(s.summary, x, y, w, { color = c.text }, 200) + 2
         -- the masks of the map are in the encoding of its shader: a shader that reads them the other way changes the picture
-        if s.id ~= state.current and s.profile and Shaders.RangeOf(s.id) ~= Shaders.RangeOf(state.current) then
-            y = Para('This shader reads paint masks in the ' .. s.profile.range .. ' range, the map\'s are in the ' .. Shaders.RangeOf(state.current) .. ' range: "Use this shader" changes how the paint looks; "Convert layers..." keeps the picture.',
+        local mis = Shaders.Mismatch()           -- masks left in the range of the shader they were made for by an earlier plain switch
+        local maskRange = mis and mis.range or Shaders.RangeOf(state.current)
+        if s.profile and Shaders.RangeOf(s.id) ~= maskRange then
+            y = Para('This shader reads paint masks in the ' .. s.profile.range .. ' range, the map\'s are in the ' .. maskRange .. ' range: "Use this shader" changes how the paint looks; "Convert layers..." keeps the picture.',
                 x, y, w, { color = c.warn, size = 'small' }, 260, 14) + 2
         end
         y = y + 4
@@ -225,7 +227,7 @@ function Open(done, opts)
     convert = d:Button('Convert layers...', 150, HEIGHT - 84, 140, 28, function()
         local s = Selected()
         if not s then return end
-        if s.id == state.current then say:SetText('The map already uses ' .. s.id) return end
+        if s.id == state.current and not Shaders.Mismatch() then say:SetText('The map already uses ' .. s.id) return end
         if not (s.profile and s.profile.supported) then say:SetText('The editor cannot convert layers to ' .. s.id .. (s.profile and s.profile.reason and (': ' .. s.profile.reason) or '')) return end
         say:SetText('')
         import('/lua/editor/gui/convertdialog.lua').Open(s.id, function() if done then done(s.id) end end)

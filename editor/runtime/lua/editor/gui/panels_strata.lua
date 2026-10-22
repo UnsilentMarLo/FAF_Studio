@@ -19,6 +19,7 @@ local UI = import('/lua/editor/ui.lua')
 local Strata = import('/lua/editor/strata.lua')
 local History = import('/lua/editor/history.lua')
 local Terrain = import('/lua/editor/terrain.lua')
+local Shaders = import('/lua/editor/shaders.lua')
 
 live = {}
 picker = false     -- the open texture picker { group }
@@ -240,6 +241,24 @@ Panels.Register{
             end, { convert = true })
         end, { tip = 'Change the shader and adapt the layers to it in one undo step: paint masks re-encoded where the mask range differs, layer 8 and the Upper layer handled. Opens the shader browser; choose the shader and press Convert layers.' })
 
+        -- A plain shader switch only changes the technique: when the new shader reads a mask byte in another range than the masks were written in (shaders.lua Mismatch), a warning
+        -- stands at the top of the panel with a button that opens the Convert layers dialog for the map's shader.
+        P.warnParas = {}
+        P.warnBtn = W.Button(group, 'Convert masks...', 0, 0, Skin.S(150), Skin.S(24), function()
+            local cur = Shaders.Current()
+            if not cur then return end
+            import('/lua/editor/gui/convertdialog.lua').Open(cur, function(report)
+                Say('terrain shader: ' .. cur)
+                P:Refresh()
+            end)
+        end, { tip = 'Open the Convert layers dialog for the shader of the map: the paint masks are re-encoded from the range they were made in to the range this shader reads, so the picture stays the same. One undo step.' })
+        local function WarnText()
+            local mis = Shaders.Mismatch()
+            if not mis then return '' end
+            return 'The paint masks are in the ' .. mis.range .. ' range (made for ' .. tostring(mis.shader) .. '), but ' .. tostring(mis.current) .. ' reads the ' .. mis.now ..
+                   ' range: the paint looks different. Convert the masks to keep the picture.'
+        end
+
         --- Picks a texture for the selected layer.
         function P:Change(kind)
             local l = Selected()
@@ -285,6 +304,10 @@ Panels.Register{
                 P.shaderShown = shaderName
                 P.shader:SetText('Shader: ' .. shaderName)
             end
+            if P.laidOut and WarnText() ~= P.warnShown then
+                P:OnResize(P.w, P.h)          -- the warning appeared or went away: the panel lays out again (this ends in a Refresh with the same text)
+                return
+            end
             local l = Selected()
             -- the preview and the size fields only change when the selected layer or its texture does (a field may be mid-edit)
             local key = l and (l.index .. '|' .. l.albedo .. '|' .. l.normal .. '|' .. tostring(l.size) .. '|' .. tostring(l.nsize)) or ''
@@ -312,12 +335,26 @@ Panels.Register{
 
         function P:OnResize(w, h)
             P.w, P.h = w, h
+            P.laidOut = true
             local pad = Skin.S(8)
             local rowH = Skin.S(26)
             local detail = Skin.S(396)
-            local listH = math.max(rowH * 3, math.min(rowH * 10, h - 2 * pad - detail))
-            P.list:SetRect(pad, pad, w - 2 * pad, listH)
-            local y = pad + listH + Skin.S(8)
+            local top = pad
+            for _, l in P.warnParas do l:Destroy() end
+            P.warnParas = {}
+            P.warnShown = WarnText()
+            if P.warnShown ~= '' then
+                local labels, endY = W.Paragraph(group, P.warnShown, pad, top, w - 2 * pad, { color = Skin.color.warn, size = 'small' })
+                P.warnParas = labels
+                W.Place(P.warnBtn, group, pad, endY + Skin.S(4), Skin.S(150), Skin.S(24))
+                W.Center(P.warnBtn.label, P.warnBtn, 0, 0, Skin.S(150), Skin.S(24))
+                top = endY + Skin.S(36)
+            else
+                W.Place(P.warnBtn, group, -4000, 0, Skin.S(150), Skin.S(24))
+            end
+            local listH = math.max(rowH * 3, math.min(rowH * 10, h - top - pad - detail))
+            P.list:SetRect(pad, top, w - 2 * pad, listH)
+            local y = top + listH + Skin.S(8)
             local ps = math.max(Skin.S(56), math.min(Skin.S(120), math.floor((w - 3 * pad) / 2)))
             P.previewW = ps
             W.Place(P.preview, group, pad, y, ps, ps)

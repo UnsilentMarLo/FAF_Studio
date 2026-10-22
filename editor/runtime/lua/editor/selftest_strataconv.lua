@@ -55,6 +55,7 @@ function Run()
 
     -- save the map's state
     local shader0 = ed_stratum_shader()
+    local maskState0 = Shaders.MaskState()
     local w, h = ed_stratum_info()
     local layers0 = {}
     for i = 0, 9 do layers0[i] = Strata.Snapshot(i) end
@@ -62,6 +63,7 @@ function Run()
     for s = 0, 7 do masks0[s] = ed_stratum_read(s, 0, 0, w - 1, h - 1) end
 
     local function Restore()
+        Shaders.SetMaskState(maskState0)
         ed_stratum_shader(shader0)
         for i = 0, 9 do
             if layers0[i].albedo ~= '' then Strata.Restore(layers0[i]) end
@@ -153,6 +155,28 @@ function Run()
         check('Terrain000: layer 8 only holds map-wide data, refused', Strata.WhyNotPaintable(8) ~= nil)
         ed_stratum_shader('TTerrainGlow')
         check('TTerrainGlow paints layers 1-4 only', Strata.PaintCap() == 4 and Strata.WhyNotPaintable(4) == nil and Strata.WhyNotPaintable(5) ~= nil)
+        ed_stratum_shader('TTerrainXP')
+
+        -- a plain shader switch leaves the masks in the old range: shaders.lua tracks it (the Layers panel warns, Convert starts from the authored shader)
+        Shaders.SetMaskState(false)
+        check('no mismatch when the masks were made for the shader', Shaders.Mismatch() == nil and Shaders.SidecarText() == '')
+        local okSet = Shaders.Set('Terrain000')
+        local mis = Shaders.Mismatch()
+        check('a plain switch XP -> Terrain000 leaves a range mismatch', okSet and mis ~= nil and mis.range == 'half' and mis.now == 'full' and mis.shader == 'TTerrainXP' and mis.current == 'Terrain000')
+        check('the mismatch is saved with the map', string.find(Shaders.SidecarText(), 'StrataAuthored', 1, true) ~= nil)
+        if Shaders.Set('TTerrainXPExt') then check('a switch to a shader of the same range as the masks clears it', Shaders.Mismatch() == nil) end
+        Shaders.Set('Terrain000')
+        check('switching again brings it back', Shaders.Mismatch() ~= nil)
+        local planM = Conv.Plan('Terrain000')
+        check('convert plan after a plain switch starts from the authored shader', planM.refused == nil and planM.from == 'TTerrainXP' and planM.cur == 'Terrain000' and planM.fromP.range == 'half' and planM.toP.range == 'full', tostring(planM.refused))
+        local repM = Conv.Run(planM, { layer8 = 'move', upper = false })
+        check('the conversion runs and the masks match the shader afterwards', repM ~= nil and Shaders.Mismatch() == nil and Shaders.SidecarText() == '')
+        History.Undo()
+        check('undo restores the mismatch', ed_stratum_shader() == 'Terrain000' and Shaders.Mismatch() ~= nil)
+        History.Redo()
+        check('redo clears it again', Shaders.Mismatch() == nil)
+        History.Undo()
+        Shaders.SetMaskState(false)
         ed_stratum_shader('TTerrainXP')
     end)
     if not ok then check('no error while running', false, err) end

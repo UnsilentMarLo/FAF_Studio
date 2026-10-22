@@ -127,6 +127,8 @@ function SetLimitAreas(on)
     pcall(function()
         local Tools = import('/lua/editor/tools.lua')
         local f = rawget(Tools, 'LimitAreas')
-        if type(f) ~= 'function' and f ~= nil then Tools.LimitAreas = on and true or false end
+        local set = rawget(Tools, 'SetLimitAreas')
+        if type(set) == 'function' then set(on and true or false)      -- tools.lua keeps its own saved copy (the Properties panel reads the same switch)
+        elseif type(f) ~= 'function' and f ~= nil then Tools.LimitAreas = on and true or false end
     end)
 end

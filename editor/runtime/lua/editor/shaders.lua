@@ -11,6 +11,9 @@
 --                          l8 = 'paint' | 'rough' | 'data' | 'none' (what layer 8 is: a painted layer, the roughness multiplier mask, map-wide data in its textures, not drawn),
 --                          upper = 'overlay' | 'specular' | 'atlas', alpha = 'spec' | 'matte' | 'glow' | 'unused' (the albedo alpha of the layers), supported, reason }
 --   RangeOf(id)          'half' or 'full': the encoding of the paint masks a shader reads (strata.lua uses it for every mask it reads or writes)
+--   Mismatch()           nil, or { range, shader, now, current } when the paint masks are still in the range of `shader` (they were written for it) while the map's shader reads the range `now`: a plain
+--                          Set(id) changes the technique only, so the paint looks different until Convert layers (stratumconv.lua) re-encodes the masks. Saved with the map (SidecarText / LoadSidecar,
+--                          the `_editor.lua` file); MaskState() / SetMaskState(state) are for the undo of a conversion
 --   Rows(id)             the layer table of a shader: { { layer, albedo, normal }, ... } Base, Layer 1-8, Upper;  Notes(id): the lines under it
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
@@ -273,6 +276,59 @@ function Set(id)
     if not rawget(_G, 'ed_stratum_shader') then return nil, 'no terrain' end
     local found = Discover()
     if next(found) and not found[id] then return nil, 'the shader file of this game version has no terrain shader named ' .. tostring(id) end
+    local old = ed_stratum_shader()
     ed_stratum_shader(id)
+    NoteSwitch(old, id)
     return true
+end
+
+-- ---- the range the paint masks were written for ----------------------------------------------------------------------------------------------------
+-- Set() only changes the technique. When the new shader reads a mask byte in another range than the old one, the bytes stay as they were: the paint looks different (half range: bytes up to 127
+-- mean "none"). `authored` remembers the range (and the shader) the masks are really in until they match the map's shader again (a switch back, or Convert layers). It is the minimal state
+-- for the Layers panel's warning; the convert plan (stratumconv.lua) takes the layer roles from the authored shader.
+
+local authored = false          -- false | { range = 'half' | 'full', shader = id }
+
+--- Called by Set(old, new): remembers the range of the first shader the masks were made for; forgets it when the new shader reads that range.
+function NoteSwitch(old, new)
+    if not old or old == new then return end
+    if not authored then authored = { range = RangeOf(old), shader = old } end
+    if RangeOf(new) == authored.range then authored = false end
+end
+
+function MaskState()
+    if not authored then return false end
+    return { range = authored.range, shader = authored.shader }
+end
+
+function SetMaskState(state)
+    authored = state and { range = state.range, shader = state.shader } or false
+end
+
+function Mismatch()
+    if not authored then return nil end
+    local cur = Current()
+    if not cur then return nil end
+    local now = RangeOf(cur)
+    if now == authored.range then return nil end
+    return { range = authored.range, shader = authored.shader, now = now, current = cur }
+end
+
+--- The saved form: nothing for a map whose masks match its shader.
+function SidecarText()
+    if not authored then return '' end
+    return import('/lua/editor/luaser.lua').Chunk({ { 'StrataAuthored', { range = authored.range, shader = authored.shader } } })
+end
+
+--- Reads the sidecar of a map (a new map or one without the entry: the masks match).
+function LoadSidecar(scenarioFile)
+    authored = false
+    local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
+    if not path or not DiskGetFileInfo(path) then return end
+    local env = {}
+    doscript(path, env)
+    local d = env.StrataAuthored
+    if type(d) == 'table' and (d.range == 'half' or d.range == 'full') and type(d.shader) == 'string' then
+        authored = { range = d.range, shader = d.shader }
+    end
 end

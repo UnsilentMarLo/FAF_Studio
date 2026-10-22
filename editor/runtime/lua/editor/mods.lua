@@ -192,6 +192,7 @@ function SidecarText(pathsText)
         .. import('/lua/editor/graph.lua').SidecarText()
         .. (pathsText or import('/lua/editor/paths.lua').SidecarText())
         .. import('/lua/editor/interop.lua').SidecarText()
+        .. import('/lua/editor/shaders.lua').SidecarText()
 end
 
 --- Called before a map opens: the map's own mod list becomes the selection (empty when it has none).

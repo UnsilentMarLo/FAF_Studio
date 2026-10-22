@@ -70,14 +70,17 @@ end
 -- ---- the plan ------------------------------------------------------------------------------------------------------------------------------------
 
 function Plan(targetId)
-    local fromId = rawget(_G, 'ed_stratum_shader') and ed_stratum_shader() or nil
-    local plan = { from = fromId, to = targetId, lines = {}, warnings = {}, extra = {}, layers = {}, default = 'drop' }
+    local cur = rawget(_G, 'ed_stratum_shader') and ed_stratum_shader() or nil
+    -- after a plain shader switch (Shaders.Set) the masks are still in the range of the shader they were made for (shaders.lua Mismatch): the conversion starts from that shader
+    local mis = cur and Shaders.Mismatch() or nil
+    local fromId = mis and mis.shader or cur
+    local plan = { from = fromId, cur = cur, to = targetId, lines = {}, warnings = {}, extra = {}, layers = {}, default = 'drop' }
     if not fromId or not rawget(_G, 'ed_stratum_info') or not ed_stratum_info() or not Fields.IsAvailable() then
         plan.refused = 'the map has no paint masks'
         return plan
     end
     if fromId == targetId then
-        plan.refused = 'the map already uses ' .. tostring(targetId)
+        plan.refused = mis and ('the paint was made for ' .. tostring(targetId) .. ': use that shader to go back') or ('the map already uses ' .. tostring(targetId))
         return plan
     end
     local from, to = Shaders.Profile(fromId), Shaders.Profile(targetId)
@@ -125,6 +128,9 @@ function Plan(targetId)
         plan.default = plan.canMove and 'move' or 'merge'
     end
 
+    if mis then
+        Line('The paint masks were made for ' .. fromId .. ' (' .. RANGE_NAME[mis.range] .. '); the map\'s shader is now ' .. tostring(cur) .. ', which reads the ' .. RANGE_NAME[mis.now] .. '.')
+    end
     Line(fromId .. ' -> ' .. targetId .. '.')
     -- masks
     if from.range ~= to.range then
@@ -236,6 +242,7 @@ function Run(plan, opts)
     if choice == 'move' and not plan.canMove then choice = 'merge' end
     local report = { lines = {}, cells = 0 }
     local function Add(kind, text) table.insert(report.lines, { kind = kind, text = text }) end
+    local maskBefore = Shaders.MaskState()          -- the range the masks were made for, kept for the undo
     local ok, why = Shaders.Set(plan.to)
     if not ok then return nil, why end
     local before = {}
@@ -244,7 +251,8 @@ function Run(plan, opts)
     local function Undo()
         for i = table.getn(parts), 1, -1 do parts[i].undo() end
         ApplyLayers(before)
-        ed_stratum_shader(plan.from)
+        ed_stratum_shader(plan.cur or plan.from)
+        Shaders.SetMaskState(maskBefore)
     end
 
     -- the arrangement of the layers: perm[j] = the source layer whose paint and textures slot j gets
@@ -368,6 +376,7 @@ function Run(plan, opts)
         return nil, 'converting failed (nothing changed): ' .. failed
     end
     ed_stratum_shader(plan.to)
+    Shaders.SetMaskState(false)          -- the masks are in the range of the new shader now
     if Strata.Active > K then Strata.Active = K end
 
     local after = {}
@@ -378,6 +387,7 @@ function Run(plan, opts)
         redo = function()
             ApplyLayers(after)
             ed_stratum_shader(plan.to)
+            Shaders.SetMaskState(false)
             for i = 1, table.getn(parts) do parts[i].redo() end
         end,
         release = function() for _, e in parts do e.release() end end,
