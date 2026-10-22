@@ -61,8 +61,8 @@ local function Slope(lo, hi, soft, op) return Rule('slope', { lo = math.max(0, l
 local function Above(st, h, soft, op) return Rule('height', { lo = h, hi = st.hmax + 1000, soft = soft }, op) end
 local function Below(st, h, soft, op) return Rule('height', { lo = st.hmin - 1000, hi = h, soft = soft }, op) end
 
-Knobs = { cliff = 45, rock = 28, snow = 0.08, high = 0.62, beach = 3, wet = 1.5, dirt = 0.25, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
-KnobDefaults = { cliff = 45, rock = 28, snow = 0.08, high = 0.62, beach = 3, wet = 1.5, dirt = 0.25, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
+Knobs = { cliff = 45, rock = 28, snow = 0.08, high = 0.62, beach = 3, wet = 1.5, dirt = 0.32, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
+KnobDefaults = { cliff = 45, rock = 28, snow = 0.08, high = 0.62, beach = 3, wet = 1.5, dirt = 0.32, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
 
 KnobInfo = {
     { key = 'cliff', label = 'Cliff slope from (degrees)', min = 20, max = 85, step = 1, fmt = '%d' },
@@ -248,76 +248,143 @@ RoleInfo = {
     snow = { label = 'Snow (high, flat)', keywords = { 'snow', 'ice', 'frost' } },
 }
 
---- Noise that breaks a hard edge up: 1 where the noise is high, falling off where it is low; the stronger the knob the more is taken away.
-local function Breakup(k, seedAdd, size)
-    return Rule('noise', { kind = 1, seed = k.seed + seedAdd, size = size or k.patch, octaves = 4, from = 0.05, to = 0.05 + k.breakup * 0.5 }, 'mul')
+-- ---- the rules: wide ramps, never cut -------------------------------------------------------------------------------------------------------------------------
+-- Every selection is a product of SMOOTH RAMPS (a height or slope ramp is 0 at one value and 1 at another, 10 to 25 percent of the relief wide; maskgen.lua height / slope rules with a soft edge),
+-- blurred by 3 units or more. Noise never cuts a shape out: it only WOBBLES the ramp thresholds (the `wobble` of a height / slope rule: fractal noise of 40..160 units, a few percent of the
+-- ramp's range), so edges are ragged but soft, and where a role is a gentle mix on flat ground (dirt, a second grass) the mix is a wide smoothstep of a fractal noise at partial opacity.
+
+local function Zone(st)
+    local z0 = HeightAt(st, 0.03)
+    return z0, math.max(1, HeightAt(st, 0.995) - z0)
 end
 
---- The height of the snow line (top share of the land heights).
-function SnowLine(k, st) return HeightAt(st, 1 - k.snow) end
+--- A size for the wobble noise and the breakup strength (0..2, 1 = the knob's middle) of the settings.
+local function Wob(k) return math.max(40, math.min(160, k.patch * 1.6)), k.breakup * 2 end
+
+--- Slope ramp: 0 below a0 degrees, 1 from a1 on.
+local function SteepFrom(a0, a1, wob, size, seed, op)
+    return Rule('slope', { lo = a1, hi = 90, soft = math.max(1, a1 - a0), wobble = wob or 0, wsize = size or 80, wseed = seed or 1 }, op)
+end
+--- Slope ramp: 1 below a0 degrees, 0 from a1 on.
+local function FlatTo(a0, a1, wob, size, seed, op)
+    return Rule('slope', { lo = 0, hi = a0, soft = math.max(1, a1 - a0), wobble = wob or 0, wsize = size or 80, wseed = seed or 1 }, op)
+end
+--- Height ramp: 0 at h0, 1 from h1 on.
+local function RiseFrom(st, h0, h1, wob, size, seed, op)
+    return Rule('height', { lo = h1, hi = st.hmax + 1000, soft = math.max(0.5, h1 - h0), wobble = wob or 0, wsize = size or 80, wseed = seed or 1 }, op)
+end
+--- Height ramp: 1 up to h0, 0 from h1 on.
+local function FallTo(st, h0, h1, wob, size, seed, op)
+    return Rule('height', { lo = st.hmin - 1000, hi = h0, soft = math.max(0.5, h1 - h0), wobble = wob or 0, wsize = size or 80, wseed = seed or 1 }, op)
+end
+local function Blur(r) return Rule('blur', { radius = r }) end
+local function AtMost(f) return Rule('amount', { factor = f }) end              -- the opacity a role reaches at most
+
+--- The height of the snow line (50 percent snow): the top share of the land heights, never lower than a floor that keeps a flat map from being white (the lower the share the higher the floor).
+function SnowLine(k, st)
+    local z0, R = Zone(st)
+    return math.max(HeightAt(st, 1 - k.snow), z0 + R * math.max(0, 0.45 - 1.2 * k.snow))
+end
+
+--- The value a share p (0..1) of a fractal noise lies BELOW: the noise (mask generator kind 5) is close to normal with mean 0.5 and spread 0.155 at any feature size (measured on the field engine's
+--- op `fractal`), so no map statistics are needed. Abramowitz and Stegun 26.2.23 for the normal quantile.
+local function NoiseValue(p)
+    p = math.max(0.01, math.min(0.99, p))
+    local q = p < 0.5 and p or (1 - p)
+    local t = math.sqrt(-2 * math.log(q))
+    local z = t - (2.515517 + 0.802853 * t + 0.010328 * t * t) / (1 + 1.432788 * t + 0.189269 * t * t + 0.001308 * t * t * t)
+    if p < 0.5 then z = -z end
+    return 0.5 + 0.155 * z
+end
+--- A fractal noise as a gentle 0..1 mix: 0 at the noise value of percentile p0, 1 at p1.
+local function Mix(seed, size, p0, p1)
+    return Rule('noise', { kind = 5, seed = seed, size = size, octaves = 5, from = NoiseValue(p0), to = NoiseValue(p1) })
+end
 
 Builders = {}           -- role id -> function(knobs, stats, context) -> rule list | {} (the base: no mask) | false (switched off)
 
 Builders.grass = function(k, st, cx)
     if cx.base == 'grass' then return {} end
-    local rules = { Slope(0, k.rock + 6, 8) }
-    if st.hasWater then table.insert(rules, Rule('water', { mode = 1, offset = cx.has.sand and (k.beach + 0.5) or 0.5, soft = 2 })) end
-    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then table.insert(rules, Below(st, SnowLine(k, st), (st.hmax - st.hmin) * 0.05)) end
-    table.insert(rules, Breakup(k, 5, k.patch * 1.5))
-    table.insert(rules, Rule('blur', { radius = 1.5 }))
+    local size, bk = Wob(k)
+    local rules = { Mix(k.seed + 5, size * 1.6, 0.05, 0.6) }
+    table.insert(rules, Rule('const', { value = 0.75 }, 'or'))                           -- the mix only takes a quarter away: grass is what is left
+    table.insert(rules, FlatTo(k.rock - 4, k.rock + 12, 3 * bk, size, k.seed + 6, 'mul'))
+    if st.hasWater then table.insert(rules, Rule('water', { mode = 1, offset = cx.has.sand and (k.beach + 0.5) or 0.5, soft = math.max(2, k.beach) }, 'mul')) end
+    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then
+        local _, R = Zone(st)
+        local sl = SnowLine(k, st)
+        table.insert(rules, FallTo(st, sl - 0.12 * R, sl + 0.04 * R, 0.1 * R * bk, size, k.seed + 7, 'mul'))
+    end
+    table.insert(rules, Blur(3))
     return rules
 end
 
 Builders.dirt = function(k, st, cx)
     if cx.base == 'dirt' then return {} end
     if k.dirt <= 0.005 then return false end
-    local q = NoiseAt(1, k.seed, k.patch, 4, 1 - k.dirt)
-    local rules = { Rule('noise', { kind = 1, seed = k.seed, size = k.patch, octaves = 4, from = q - 0.035, to = q + 0.035 }), Slope(0, k.rock + 4, 8) }
-    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then table.insert(rules, Below(st, SnowLine(k, st), (st.hmax - st.hmin) * 0.05)) end
-    table.insert(rules, Rule('blur', { radius = 1.5 }))
+    local size, bk = Wob(k)
+    local rules = { Mix(k.seed, k.patch * 2.4, 1 - k.dirt - 0.22, 1 - k.dirt + 0.22), AtMost(0.85), FlatTo(k.rock - 6, k.rock + 10, 3 * bk, size, k.seed + 3, 'mul') }
+    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then
+        local _, R = Zone(st)
+        local sl = SnowLine(k, st)
+        table.insert(rules, FallTo(st, sl - 0.12 * R, sl + 0.04 * R, 0.1 * R * bk, size, k.seed + 7, 'mul'))
+    end
+    table.insert(rules, Blur(3))
     return rules
 end
 
 Builders.wet = function(k, st, cx)
     if cx.base == 'wet' then return {} end
-    local rules = { Rule('flow', { range = 1000, from = 0.55, to = 0.75 }), Rule('curvature', { radius = 4, gain = 25, lo = 0, hi = 0.5, soft = 0.05 }) }
-    if st.hasWater and k.wet > 0 then table.insert(rules, Rule('water', { mode = 3, offset = 0, width = k.wet, soft = 1.5 }, 'or')) end
-    table.insert(rules, Slope(0, 22, 8))
-    table.insert(rules, Rule('blur', { radius = 1.2 }))
+    local size, bk = Wob(k)
+    local rules = { Rule('flow', { range = 1000, from = 0.5, to = 0.8 }), Rule('curvature', { radius = 5, gain = 20, lo = 0, hi = 0.46, soft = 0.1 }), FlatTo(8, 24, 0, size, 1, 'mul'), Blur(5), AtMost(0.7) }
+    if st.hasWater and k.wet > 0 then
+        table.insert(rules, Rule('water', { mode = 3, offset = 0, width = k.wet, soft = 2 + k.wet }, 'or'))
+    end
     return rules
 end
 
 Builders.sand = function(k, st, cx)
     if cx.base == 'sand' then return {} end
+    local size, bk = Wob(k)
     if st.hasWater then
         if k.beach <= 0 then return false end
-        return { Rule('water', { mode = 3, offset = 0.5, width = k.beach, soft = 2 }), Slope(0, 24, 6), Rule('blur', { radius = 1.2 }) }
+        return { Rule('water', { mode = 3, offset = 0.3, width = k.beach, soft = 1 + k.beach }), FlatTo(10, 26, 2 * bk, size, k.seed + 8, 'mul'), Blur(3), AtMost(0.9) }
     end
-    return { Below(st, HeightAt(st, 0.06), (st.hmax - st.hmin) * 0.03), Slope(0, 20, 6), Rule('blur', { radius = 1.2 }) }
+    local p = Presets[State.preset]
+    if not (p and p.drySand) then return false end                            -- sand lies along water; a dry map only has it when the style asks (desert: dry basins)
+    local z0, R = Zone(st)
+    return { FallTo(st, z0 + R * 0.04, z0 + R * 0.12, 0.08 * R * bk, size * 1.5, k.seed + 9), FlatTo(6, 18, 0, size, 1, 'mul'), Blur(4), AtMost(0.65) }
 end
 
 Builders.rock = function(k, st, cx)
     if cx.base == 'rock' then return {} end
-    return { Slope(k.rock, 90, 6), Breakup(k, 11, k.patch * 0.6), Slope(k.cliff, 90, 4, 'or'), Rule('blur', { radius = 1.5 }) }
+    local size, bk = Wob(k)
+    return { SteepFrom(k.rock, math.max(k.rock + 4, k.cliff), 4 * bk, size, k.seed + 11), Blur(3) }
 end
 
 Builders.darkrock = function(k, st, cx)
     if cx.base == 'darkrock' then return {} end
     if k.dark <= 0.01 then return false end
-    return { Rule('curvature', { radius = 5, gain = 30, lo = 0, hi = 0.36 + 0.2 * k.dark, soft = 0.04 }), Below(st, HeightAt(st, 0.25), (st.hmax - st.hmin) * 0.05, 'or'),
-             Slope(k.rock * 0.8, 90, 8), Breakup(k, 31, k.patch * 0.5), Rule('blur', { radius = 1.2 }) }
+    local size, bk = Wob(k)
+    return { Rule('curvature', { radius = 6, gain = 18, lo = 0, hi = 0.42, soft = 0.1 }), SteepFrom(k.rock * 0.45, k.rock + 6, 3 * bk, size, k.seed + 31, 'mul'), Blur(6), AtMost(0.2 + 0.5 * k.dark) }
 end
 
 Builders.highrock = function(k, st, cx)
     if cx.base == 'highrock' then return {} end
-    return { Slope(k.rock * 0.6, 90, 8), Rule('curvature', { radius = 6, gain = 30, lo = 0.56, hi = 1, soft = 0.05 }, 'or'), Above(st, HeightAt(st, k.high), (st.hmax - st.hmin) * 0.06),
-             Breakup(k, 41, k.patch * 0.7), Rule('blur', { radius = 1.5 }) }
+    local z0, R = Zone(st)
+    local size, bk = Wob(k)
+    local h = z0 + R * k.high
+    return { SteepFrom(k.rock * 0.4, k.rock + 8), Rule('curvature', { radius = 6, gain = 25, lo = 0.56, hi = 1, soft = 0.1 }, 'or'), Rule('const', { value = 0.3 }, 'or'),
+             RiseFrom(st, h - 0.12 * R, h + 0.14 * R, 0.1 * R * bk, size, k.seed + 41, 'mul'), Blur(3) }
 end
 
 Builders.snow = function(k, st, cx)
     if cx.base == 'snow' then return {} end
     if k.snow <= 0.004 then return false end
-    return { Above(st, SnowLine(k, st), (st.hmax - st.hmin) * 0.05), Slope(0, k.cliff - 4, 8), Breakup(k, 21, k.patch * 0.7), Rule('blur', { radius = 1.5 }) }
+    local _, R = Zone(st)
+    local size, bk = Wob(k)
+    local sl = SnowLine(k, st)
+    return { RiseFrom(st, sl - 0.1 * R, sl + 0.1 * R, 0.12 * R * bk, size, k.seed + 21), FlatTo(k.cliff - 8, k.cliff + 16, 4 * bk, size, k.seed + 22, 'mul'), Blur(4) }
 end
 
 -- ---- the layers of the map and their roles ---------------------------------------------------------------------------------------------------------------------
@@ -537,15 +604,14 @@ for _, y in { 1, 1.1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 100 } do
 end
 RECIP_POINTS = RECIP
 
---- The patch field of variant n of a role: noise covering about 45% of the map.
+--- The mix field of variant n of a role (a second grass layer, ...): a wide smoothstep of fractal noise at partial opacity (at most 0.55), covering about a quarter of the region. No hard edge.
 local function PatchField(c, k, st, id, n)
-    local size = k.patch * 1.4
+    local size = math.max(60, k.patch * 2.2)
     local seed = k.seed + 91 + n * 17
     for i, rid in Order do
         if rid == id then seed = seed + i * 7 end
     end
-    local q = NoiseAt(2, seed, size, 3, 0.55)
-    local m, err = MaskGen.Evaluate(c, { rules = { Rule('noise', { kind = 2, seed = seed, size = size, octaves = 3, from = q - 0.04, to = q + 0.04 }) } })
+    local m, err = MaskGen.Evaluate(c, { rules = { Mix(seed, size, 0.3, 0.85), AtMost(0.55), Blur(3) } })
     if not m then error(err or 'patch noise failed') end
     return m
 end

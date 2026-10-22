@@ -47,12 +47,14 @@ CLASSES = {
 
 Types = {
     slope = { label = 'Slope', kind = 'source', params = {
-        P('lo', 'From (degrees)', 0, 89, 0.5, '%.1f', 0), P('hi', 'To (degrees)', 0.5, 90, 0.5, '%.1f', 25), P('soft', 'Soft edge (degrees)', 0, 45, 0.5, '%.1f', 3) } },
+        P('lo', 'From (degrees)', 0, 89, 0.5, '%.1f', 0), P('hi', 'To (degrees)', 0.5, 90, 0.5, '%.1f', 25), P('soft', 'Soft edge (degrees)', 0, 45, 0.5, '%.1f', 3),
+        P('wobble', 'Wobble (degrees, fractal noise)', 0, 30, 0.5, '%.1f', 0), P('wsize', 'Wobble feature size (units)', 8, 600, 2, '%d', 80), P('wseed', 'Wobble seed', 0, 9999, 1, '%d', 1) } },
     unitclass = { label = 'Unit class slope', kind = 'source', params = {
         P('class', 'Class (1-3 land by size, 4 experimental, 5 structure)', 1, 5, 1, '%d', 1), P('limit', 'Limit (0 = the class rule)', 0, 4, 0.05, '%.2f', 0),
         P('soft', 'Soft edge', 0, 1, 0.01, '%.2f', 0.05), P('blocked', 'Mask the blocked ground (1) or the passable (0)', 0, 1, 1, '%d', 0) } },
     height = { label = 'Height band', kind = 'source', params = {
-        P('lo', 'From (units)', -100, 600, 0.5, '%.1f', 0), P('hi', 'To (units)', -100, 600, 0.5, '%.1f', 40), P('soft', 'Soft edge (units)', 0, 100, 0.5, '%.1f', 4) } },
+        P('lo', 'From (units)', -100, 600, 0.5, '%.1f', 0), P('hi', 'To (units)', -100, 600, 0.5, '%.1f', 40), P('soft', 'Soft edge (units)', 0, 100, 0.5, '%.1f', 4),
+        P('wobble', 'Wobble (units, fractal noise)', 0, 100, 0.5, '%.1f', 0), P('wsize', 'Wobble feature size (units)', 8, 600, 2, '%d', 80), P('wseed', 'Wobble seed', 0, 9999, 1, '%d', 1) } },
     curvature = { label = 'Curvature', kind = 'source', params = {
         P('radius', 'Radius (units)', 1, 60, 1, '%d', 6), P('gain', 'Gain', 1, 300, 1, '%d', 25), P('lo', 'From (0.5 = flat)', 0, 1, 0.01, '%.2f', 0.56),
         P('hi', 'To (1 = sharpest ridge)', 0, 1, 0.01, '%.2f', 1), P('soft', 'Soft edge', 0, 0.5, 0.01, '%.2f', 0.04) } },
@@ -63,7 +65,7 @@ Types = {
         P('mode', 'Mode (1 land above, 2 under water, 3 shore band)', 1, 3, 1, '%d', 1), P('offset', 'Level above the water surface (units)', -60, 200, 0.5, '%.1f', 0),
         P('width', 'Band half width (mode 3, units)', 0, 50, 0.5, '%.1f', 2), P('soft', 'Soft edge (units)', 0, 50, 0.5, '%.1f', 2) } },
     noise = { label = 'Noise', kind = 'source', params = {
-        P('kind', 'Kind (1 perlin, 2 simplex, 3 ridged, 4 billow)', 1, 4, 1, '%d', 1), P('seed', 'Seed', 0, 9999, 1, '%d', 1), P('size', 'Feature size (units)', 4, 600, 2, '%d', 60),
+        P('kind', 'Kind (1 perlin, 2 simplex, 3 ridged, 4 billow, 5 fractal)', 1, 5, 1, '%d', 1), P('seed', 'Seed', 0, 9999, 1, '%d', 1), P('size', 'Feature size (units)', 4, 600, 2, '%d', 60),
         P('octaves', 'Octaves', 1, 8, 1, '%d', 4), P('from', 'From', 0, 1, 0.01, '%.2f', 0.45), P('to', 'To', 0, 1, 0.01, '%.2f', 0.65) } },
     flow = { label = 'Flow (drainage)', kind = 'source', params = {
         P('range', 'Catchment area that reads 1 (x1000 units squared)', 10, 100000, 10, '%d', 1000), P('from', 'From', 0, 1, 0.01, '%.2f', 0.5), P('to', 'To', 0, 1, 0.01, '%.2f', 0.7) } },
@@ -169,9 +171,19 @@ end
 local SOURCE = {}
 local MODIFY = {}
 
+--- The field f moved by up to +-amount of fractal noise (feature size `size`, 5 octaves; the noise has mean 0.5 and spread 0.155, so the factor makes the typical shift +-amount / 2): the
+--- thresholds of a rule that reads f wobble by a little instead of being cut by noise blobs. amount 0 / nil: f itself.
+local function Wobbled(c, f, amount, size, seed)
+    if not amount or amount <= 0 then return f end
+    local n = Cached(c, 'fractal' .. size .. '_' .. seed, function()
+        return Op(c, 'fractal', { like = c.H, seed = math.floor(seed or 1), scale = size or 80, octaves = 5 })
+    end)
+    return Op(c, 'add', { a = f, b = Op(c, 'affine', { a = n, mul = amount / 0.31, add = -amount * 0.5 / 0.31 }) })
+end
+
 function SOURCE.slope(c, v)
     local s = Cached(c, 'slope', function() return Op(c, 'slope', { a = c.H, mode = 'degrees', radius = 1 }) end)
-    return Op(c, 'height_band', { a = s, lo = v.lo, hi = v.hi, soft = v.soft })
+    return Op(c, 'height_band', { a = Wobbled(c, s, v.wobble, v.wsize, v.wseed), lo = v.lo, hi = v.hi, soft = v.soft })
 end
 
 function SOURCE.unitclass(c, v)
@@ -185,7 +197,7 @@ function SOURCE.unitclass(c, v)
 end
 
 function SOURCE.height(c, v)
-    return Op(c, 'height_band', { a = c.H, lo = v.lo, hi = v.hi, soft = v.soft })
+    return Op(c, 'height_band', { a = Wobbled(c, c.H, v.wobble, v.wsize, v.wseed), lo = v.lo, hi = v.hi, soft = v.soft })
 end
 
 function SOURCE.curvature(c, v)
@@ -207,10 +219,10 @@ function SOURCE.water(c, v)
     return Op(c, 'water_above', { a = c.H, level = level, soft = v.soft })
 end
 
-local NOISE = { 'perlin', 'simplex', 'ridged', 'billow' }
+local NOISE = { 'perlin', 'simplex', 'ridged', 'billow', 'fractal' }
 
 function SOURCE.noise(c, v)
-    local n = Op(c, NOISE[math.max(1, math.min(4, math.floor(v.kind + 0.5)))], { like = c.H, seed = math.floor(v.seed), scale = v.size, octaves = math.floor(v.octaves) })
+    local n = Op(c, NOISE[math.max(1, math.min(5, math.floor(v.kind + 0.5)))], { like = c.H, seed = math.floor(v.seed), scale = v.size, octaves = math.floor(v.octaves) })
     return Op(c, 'smoothstep', { a = n, edge0 = v.from, edge1 = v.to })
 end
 
