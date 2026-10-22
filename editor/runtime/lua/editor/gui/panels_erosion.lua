@@ -17,13 +17,15 @@ live = {}
 
 -- the brush sliders: key of EroBrush.Values, label, min, max, step, format
 local BRUSH = {
-    { 'iterations', 'Iterations per strength', 1, 12, 1, '%d' },
-    { 'rain', 'Rain per step (units)', 0.0005, 0.05, 0.0005, '%.4f' },
+    { 'iterations', 'Drop rounds per strength', 1, 12, 1, '%d' },
+    { 'rain', 'Rain amount', 0.0005, 0.05, 0.0005, '%.4f' },
     { 'capacity', 'Sediment capacity', 0.05, 4, 0.05, '%.2f' },
     { 'erosion', 'Dissolving rate', 0.01, 0.6, 0.01, '%.2f' },
     { 'deposition', 'Settling rate', 0.01, 0.6, 0.01, '%.2f' },
+    { 'inertia', 'Inertia', 0, 0.9, 0.05, '%.2f' },
+    { 'conserve', 'Keep volume', 0, 1, 0.05, '%.2f' },
     { 'thermal', 'Thermal slides', 0, 1, 0.05, '%.2f' },
-    { 'margin', 'Window around the brush', 0.1, 1.5, 0.05, '%.2f' },
+    { 'reach', 'Rain run-off reach', 0.1, 2, 0.05, '%.2f' },
     { 'amount', 'Deposit amount (units)', 0.05, 5, 0.05, '%.2f' },
     { 'vary', 'Hardness variation', 0, 1, 0.05, '%.2f' },
     { 'vary_scale', 'Hardness feature size (units)', 4, 200, 2, '%d' },
