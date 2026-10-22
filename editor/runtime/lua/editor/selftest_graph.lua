@@ -249,6 +249,44 @@ function Run(verbose)
     big:Free()
     check('the 1/4 resolution preview samples the same noise as the full run', match and sw < w)
 
+    -- the Symmetrize node: fresh nodes get a soft seam, the master part is clamped to the parts the symmetry has, the result is symmetric and a turn has no hard cut at the borders
+    do
+        local sy = Graph.Add('symmetrize', 600, 400, { mode = 'rot4' })
+        check('a fresh Symmetrize node has a soft seam by default', sy.params.seam == 24, tostring(sy.params.seam))
+        check('Symmetrize wedge counts', Nodes.SymWedges('rot4') == 4 and Nodes.SymWedges('rot2') == 2 and Nodes.SymWedges('mirror_x') == 2 and Nodes.SymWedges('mirror_xz') == 4
+              and Nodes.SymWedges('diag_both') == 4 and Nodes.SymWedges('rotn', 5) == 5)
+        Graph.Connect(p1.id, 'out', sy.id, 'a')
+        Graph.SetParam(sy.id, 'side', 3)
+        GRun.Refresh()
+        local f3 = GRun.Main:Value(sy.id, 'out')
+        local c3 = f3 and Fields.Checksum(f3)
+        Graph.SetParam(sy.id, 'side', 9)
+        GRun.Refresh()
+        local f9 = GRun.Main:Value(sy.id, 'out')
+        check('a master part past the last one is brought back to the last (side 9 of 4 = side 3)', c3 ~= nil and f9 ~= nil and Fields.Checksum(f9) == c3)
+        check('the canvas text names the part', string.find(Nodes.Describe(Graph.NodeById(sy.id)), 'part 3 of 4', 1, true) ~= nil, Nodes.Describe(Graph.NodeById(sy.id)))
+        Graph.SetParam(sy.id, 'side', 0)
+        Graph.SetParam(sy.id, 'seam', 0)
+        GRun.Refresh()
+        local fh = GRun.Main:Value(sy.id, 'out')
+        local fw, fhh = Fields.Info(fh)
+        local okSym = true
+        if fw == fhh then
+            for _, xz in { { 3, 5 }, { 10, 20 }, { 30, 7 }, { 40, 41 } } do
+                local x, z = xz[1], xz[2]
+                local v = Fields.Get(fh, x, z)
+                okSym = okSym and v == Fields.Get(fh, fw - 1 - z, x) and v == Fields.Get(fh, fw - 1 - x, fw - 1 - z) and v == Fields.Get(fh, z, fw - 1 - x)
+            end
+        end
+        check('Turn by 90 is symmetric under quarter turns', okSym)
+        Graph.SetParam(sy.id, 'seam', 24)
+        GRun.Refresh()
+        local fs2 = GRun.Main:Value(sy.id, 'out')
+        check('the soft seam changes the borders', fs2 ~= nil and Fields.Checksum(fs2) ~= Fields.Checksum(fh))
+        Graph.Remove({ sy.id })
+        GRun.Refresh()
+    end
+
     -- errors
     local th = Graph.Add('thermal', 0, 500)
     Graph.Connect(th.id, 'out', oh.id, 'mask')

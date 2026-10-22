@@ -16,6 +16,7 @@ VCVARS = r"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Bu
 
 # test name -> engine sources it links (paths under src/sdk)
 TESTS = {"MapDocumentTest": ["moho/editor/MapDocument.cpp"], "EdFieldTest": ["moho/editor/EdFieldCore.cpp"],
+         "EdSymTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldSc.cpp"],
          "EdErosionTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdErosion.cpp"],
          "EdLandTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldGen.cpp", "moho/editor/EdFieldLand.cpp"],
          "EdBrushTest": ["moho/editor/MapDocument.cpp"], "MeshLodDepthTest": [], "EdTerrainTypeTest": [], "EdOverlayGeomTest": [], "EdOverlaySlopeTest": [], "EdOverlayNodesTest": [], "EdOverlayDrapeTest": [], "EdOverlayLodTest": [], "EdOverlayFieldTest": [], "EdDdsDecodeTest": [], "EdTexConvTest": [], "EdDirtyRectTest": []}

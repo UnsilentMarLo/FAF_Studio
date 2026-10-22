@@ -28,10 +28,13 @@ sym_diag_both|symmetrize|mode=diag_both|a=H|464225f7bcd032bc
 sym_rot2|symmetrize|mode=rot2|a=H|1c190075da3ec138
 sym_rot4|symmetrize|mode=rot4|a=H|eba17ebb50593034
 sym_rot4_sector1|symmetrize|mode=rot4,sector=1|a=H|8a40f6705068dda4
-sym_rot3|symmetrize|mode=rotn,n=3,cx=30.5,cz=34.25|a=H|4eb7a4c2249d61fa
-sym_rot5_angle|symmetrize|mode=rotn,n=5,angle=20|a=H|7439777e8fb8a01b
-sym_nearest|symmetrize|mode=rotn,n=3,cx=30.5,cz=34.25,nearest=1|a=H|93af7643bc5de58d
-sym_rot3_seam|symmetrize|mode=rotn,n=3,cx=32,cz=32,seam=6|a=H|467fcfa6809017e4
+sym_rot3|symmetrize|mode=rotn,n=3,cx=30.5,cz=34.25|a=H|d8c62289c655f13b
+sym_rot5_angle|symmetrize|mode=rotn,n=5,angle=20|a=H|07625a375b025875
+sym_nearest|symmetrize|mode=rotn,n=3,cx=30.5,cz=34.25,nearest=1|a=H|3ac3415cc203df50
+sym_rot3_seam|symmetrize|mode=rotn,n=3,cx=32,cz=32,seam=6|a=H|1875dfb026c812bb
+sym_rot4_seam|symmetrize|mode=rot4,seam=8|a=H|5bbd4c5aac10f724
+sym_rot4_angle90|symmetrize|mode=rot4,angle=90|a=H|8a40f6705068dda4
+sym_rot2_seam|symmetrize|mode=rot2,seam=8,side=1|a=H|db8e07d685d5dfbc
 sym_avg|symmetrize|mode=mirror_x,combine=avg|a=H|7139c28f36e09b16
 sym_max_rot4|symmetrize|mode=rot4,combine=max|a=H|b39f6c7890d61e64
 sym_min_diag_both|symmetrize|mode=diag_both,combine=min|a=H|0b2788c0e6c0b7a0
