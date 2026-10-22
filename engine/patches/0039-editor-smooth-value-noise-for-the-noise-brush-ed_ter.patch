@@ -1,0 +1,759 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 12:35:00 +0000
+Subject: [PATCH] editor: smooth value noise for the noise brush
+ (ed_terrain_brush noise settings), ed_tt_disc / ed_tt_nodes for the terrain
+ type brush and overlay
+
+ed_terrain_brush takes three optional trailing arguments (noiseScale, noiseOctaves, noiseRoughness). The noise mode is now smooth value noise on a lattice
+(seeded integer hash, intermediates below 2^24, smoothstep blend, up to 4 octaves) sampled at the world position, so it is continuous across the dabs of a
+stroke; EdBrush.h and terrain.lua compute it with the same operations in the same order, EdBrushTest compares the two and checks smoothness and coherence.
+
+ed_tt_disc(cx, cz, radius, code) paints a hard disc of one terrain type in one call (session grid and sim copy) and returns the changed rectangle;
+ed_tt_nodes(x0, z0, nw, nh, step, csx, csz) returns the codes under an overlay node window in one call. Math in EdTerrainTypeMath.h, tested by EdTerrainTypeTest.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdBrush.cpp b/src/sdk/moho/editor/EdBrush.cpp
+index 138a0f9..9828414 100644
+--- a/src/sdk/moho/editor/EdBrush.cpp
++++ b/src/sdk/moho/editor/EdBrush.cpp
+@@ -1,6 +1,6 @@
+ // EDITOR: the native terrain brush dab (docs/projects/MAP_EDITOR.md, "Native brush dab"; math in EdBrush.h, caller editor/runtime/lua/editor/terrain.lua DabOne).
+ //
+-//   ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed) -> changed, x0, z0, x1, z1, level
++//   ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, noiseRoughness]) -> changed, x0, z0, x1, z1, level
+ //       One dab of the round brush at sample position (cx, cz) inside the open stroke of the document (ed_cmd_begin). mode = 'raise' | 'lower' |
+ //       'plateau' | 'flatten' | 'smooth' | 'noise' (anything else: returns nil and does nothing, the caller keeps its Lua path). strength, falloff and the
+ //       weight profile are the ones of terrain.lua; dir = -1 inverts; level (world units, flatten / plateau) nil or negative = the ground under the
+@@ -8,6 +8,8 @@
+ //       MapDocument::EditHeights, the path ed_doc_height_write takes (undo stroke, view field, sim queue). Returns the number of changed samples,
+ //       the inclusive window it worked on (the rectangle to re-snap units in; clamped to the map) and, for plateau / flatten, the level it used
+ //       (nil for the other modes) so the caller can keep it for the rest of the stroke. nil without a terrain.
++//       Noise mode: smooth value noise at the sample coordinates (so it is continuous across the dabs of a stroke, seed = the stroke id); noiseScale = the
++//       lattice cell size in samples (default 8), noiseOctaves 1..4 (default 2), noiseRoughness = amplitude share of each further octave (default 0.5).
+ #include <cstdint>
+ #include <vector>
+ 
+@@ -46,6 +48,10 @@ namespace
+     dab.falloff = static_cast<float>(NumberOr(L, 7, 1.0));
+     dab.level = static_cast<float>(NumberOr(L, 8, -1.0));
+     dab.seed = static_cast<int>(NumberOr(L, 9, 0.0));
++    // optional trailing arguments (the noise mode); an exe without them ignores the extras
++    dab.noiseScale = static_cast<float>(NumberOr(L, 10, 8.0));
++    dab.noiseOctaves = static_cast<int>(NumberOr(L, 11, 2.0));
++    dab.noiseRoughness = static_cast<float>(NumberOr(L, 12, 0.5));
+ 
+     if (!moho::editor::AttachDocument(false)) {
+       lua_pushnil(L);
+@@ -102,7 +108,7 @@ namespace
+     {
+       (void)new moho::CScrLuaBinder(
+         UserLuaInitSet(), "ed_terrain_brush", &cfunc_EdTerrainBrush, nullptr, "<global>",
+-        "ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed) -> changed, x0, z0, x1, z1, level"
++        "ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, noiseRoughness]) -> changed, x0, z0, x1, z1, level"
+       );
+     }
+   };
+diff --git a/src/sdk/moho/editor/EdBrush.h b/src/sdk/moho/editor/EdBrush.h
+index c0f66cb..d9966b2 100644
+--- a/src/sdk/moho/editor/EdBrush.h
++++ b/src/sdk/moho/editor/EdBrush.h
+@@ -8,6 +8,9 @@
+ // operation, `float` locals, so a dab gives the same words as the Lua loop (the self test compares the two when the native exists). Do not
+ // "simplify" an expression into a different operation order, and build with /fp:precise (the default), not /fp:fast.
+ //
++// The noise mode is smooth value noise on a lattice (terrain.lua ValueNoise / SmoothNoise): the lattice values come from a seeded integer hash whose
++// intermediates stay below 2^24, so the Lua VM's floats and these integers agree exactly.
++//
+ // Units: heights are words, 128 per world unit; a dab at (cx, cz) in sample coordinates with a radius in samples; words are clamped to 0..65535.
+ #pragma once
+ 
+@@ -66,6 +69,9 @@ namespace moho::editor::brush
+     float falloff = 1.0f;    // 0..1, the share of the radius the edge falls off over
+     float level = -1.0f;     // flatten / plateau target in world units; < 0 = the ground under the centre of the dab
+     int seed = 0;            // noise: the stroke id
++    float noiseScale = 8.0f;      // noise: lattice cell size in samples (>= 1)
++    int noiseOctaves = 2;         // noise: 1..4 layers, each one with half the cell size
++    float noiseRoughness = 0.5f;  // noise: the share of the amplitude the next octave keeps (0..1)
+   };
+ 
+   /** Inclusive sample window of a dab (what the Lua path read: one sample beyond the brush on every side), clamped to a width x height grid. */
+@@ -97,7 +103,7 @@ namespace moho::editor::brush
+     constexpr float kPi = 3.14159265f;
+ 
+     /**
+-     * terrain.lua Noise(): a hash of (x, z, stroke) in -1..1. Every intermediate stays below 2^24, so it is exact in the game's 32-bit float Lua numbers
++     * terrain.lua Hash(): a hash of (x, z, stroke) in -1..1 (the value of one lattice point of the smooth noise below). Every intermediate stays below 2^24, so it is exact in the game's 32-bit float Lua numbers
+      * and in these integers alike (the first version multiplied by 374761393 and took math.mod: in 32-bit floats that product lost its low bits and
+      * the hash was -1 nearly everywhere). Keep it the same as the Lua function.
+      */
+@@ -116,6 +122,82 @@ namespace moho::editor::brush
+       return v;
+     }
+ 
++    /**
++     * terrain.lua ValueNoise(): smooth noise in -1..1 at the sample (x, z). The lattice has one random value (the hash above, per lattice point) every
++     * `cell` samples; the value at a point is the bilinear blend of the four corners with a smoothstep weight, so it is continuous and has no
++     * per-sample speckle. It depends on the world position only, so the dabs of one stroke join into continuous bumps. One operation per statement
++     * (float roundings as in the Lua VM).
++     */
++    [[nodiscard]] inline float ValueNoise(const int x, const int z, const float cell, const int seed)
++    {
++      const float fx = static_cast<float>(x) / cell;
++      const float fz = static_cast<float>(z) / cell;
++      const float flx = std::floor(fx);
++      const float flz = std::floor(fz);
++      float tx = fx - flx;
++      float tz = fz - flz;
++      float bx = 2.0f * tx;
++      bx = 3.0f - bx;
++      tx = (tx * tx) * bx;
++      float bz = 2.0f * tz;
++      bz = 3.0f - bz;
++      tz = (tz * tz) * bz;
++      const int ix = static_cast<int>(flx);
++      const int iz = static_cast<int>(flz);
++      const float v00 = Noise(ix, iz, seed);
++      const float v10 = Noise(ix + 1, iz, seed);
++      const float v01 = Noise(ix, iz + 1, seed);
++      const float v11 = Noise(ix + 1, iz + 1, seed);
++      float top = v10 - v00;
++      top = top * tx;
++      top = v00 + top;
++      float bottom = v11 - v01;
++      bottom = bottom * tx;
++      bottom = v01 + bottom;
++      float r = bottom - top;
++      r = r * tz;
++      return top + r;
++    }
++
++    /**
++     * terrain.lua SmoothNoise(): up to four octaves of ValueNoise, each with half the cell size of the one before and `roughness` times its amplitude,
++     * divided by the sum of the amplitudes so the result stays in -1..1. Octaves whose cell would be under one sample are left out.
++     */
++    [[nodiscard]] inline float SmoothNoise(const int x, const int z, const int seed, const float scale, const int octaves, const float roughness)
++    {
++      float cell = scale;
++      if (cell < 1.0f) {
++        cell = 1.0f;
++      }
++      int count = octaves;
++      if (count < 1) {
++        count = 1;
++      } else if (count > 4) {
++        count = 4;
++      }
++      float rough = roughness;
++      if (rough < 0.0f) {
++        rough = 0.0f;
++      } else if (rough > 1.0f) {
++        rough = 1.0f;
++      }
++      float total = 0.0f;
++      float amp = 1.0f;
++      float norm = 0.0f;
++      for (int o = 0; o < count; ++o) {
++        if (o > 0 && cell < 1.0f) {
++          break;
++        }
++        float v = ValueNoise(x, z, cell, seed + o * 1013);
++        v = v * amp;
++        total = total + v;
++        norm = norm + amp;
++        amp = amp * rough;
++        cell = cell / 2.0f;
++      }
++      return total / norm;
++    }
++
+     /** terrain.lua Weight() for the round brush: 0 outside the radius, 1 inside the flat part, a cosine edge between. */
+     struct Profile
+     {
+@@ -342,7 +424,7 @@ namespace moho::editor::brush
+           break;
+         }
+         case Mode::Noise: {
+-          float t = dir * detail::Noise(x, z, dab.seed);
++          float t = dir * detail::SmoothNoise(x, z, dab.seed, dab.noiseScale, dab.noiseOctaves, dab.noiseRoughness);
+           t = t * strength;
+           t = t * weight;
+           t = t * word;
+diff --git a/src/sdk/moho/editor/EdTerrainType.cpp b/src/sdk/moho/editor/EdTerrainType.cpp
+index 35c580a..0edb806 100644
+--- a/src/sdk/moho/editor/EdTerrainType.cpp
++++ b/src/sdk/moho/editor/EdTerrainType.cpp
+@@ -4,6 +4,8 @@
+ //   ed_tt_info()                              -> width, height   (cells; nil without a grid)
+ //   ed_tt_read(x0, z0, x1, z1)                -> values, x0, z0, x1, z1   (clamped, row major)
+ //   ed_tt_write(x0, z0, x1, z1, values)       -> number of cells written
++//   ed_tt_disc(cx, cz, radius, code)          -> changed, x0, z0, x1, z1   a hard disc of one code (cell units; the changed cells' rectangle), one call per brush dab
++//   ed_tt_nodes(x0, z0, nw, nh, step, csx, csz) -> values   the codes under a grid of nodes (overlay window), nw * nh numbers, one call
+ //
+ // The grid exists twice in a running editor: in the map the world session shows and in the simulation's own copy. Both are written so the sim
+ // (blocking cells, effects) sees the edit at once; the map writer saves the session's grid.
+@@ -17,6 +19,7 @@
+ #include "moho/lua/CScrLuaBinder.h"
+ #include "moho/lua/CScrLuaInitForm.h"
+ #include "moho/editor/EdTerrainType.h"
++#include "moho/editor/EdTerrainTypeMath.h"
+ #include "moho/sim/CWldMap.h"
+ #include "moho/sim/CWldSession.h"
+ #include "moho/sim/ISTIDriver.h"
+@@ -150,6 +153,66 @@ namespace
+     return 1;
+   }
+ 
++  // ed_tt_disc(cx, cz, radius, code): the cells whose centre is within `radius` of (cx, cz) (cell units) take `code`, in the session's grid and in the simulation's copy.
++  // Returns the number of cells that changed and their inclusive rectangle (the caller's dirty rectangle); nil without a grid.
++  int __cdecl cfunc_EdTtDisc(lua_State* const L)
++  {
++    moho::STIMap* const m = SessionMap();
++    const float cx = static_cast<float>(luaL_checknumber(L, 1));
++    const float cz = static_cast<float>(luaL_checknumber(L, 2));
++    const float radius = static_cast<float>(luaL_checknumber(L, 3));
++    const double codeValue = luaL_checknumber(L, 4);
++    if (!HasGrid(m)) {
++      lua_pushnil(L);
++      return 1;
++    }
++    const std::uint8_t code = static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, codeValue)));
++    const moho::editor::ttype::DiscResult r =
++      moho::editor::ttype::PaintDisc(m->mTerrainType.data, m->mTerrainType.width, m->mTerrainType.height, cx, cz, radius, code);
++    moho::STIMap* const sim = SimMap();
++    if (sim != nullptr && sim != m && HasGrid(sim) && sim->mTerrainType.width == m->mTerrainType.width && sim->mTerrainType.height == m->mTerrainType.height) {
++      (void)moho::editor::ttype::PaintDisc(sim->mTerrainType.data, sim->mTerrainType.width, sim->mTerrainType.height, cx, cz, radius, code);
++    }
++    lua_pushnumber(L, static_cast<lua_Number>(r.changed));
++    lua_pushnumber(L, static_cast<lua_Number>(r.x0));
++    lua_pushnumber(L, static_cast<lua_Number>(r.z0));
++    lua_pushnumber(L, static_cast<lua_Number>(r.x1));
++    lua_pushnumber(L, static_cast<lua_Number>(r.z1));
++    return 5;
++  }
++
++  // ed_tt_nodes(x0, z0, nw, nh, step, csx, csz): the codes under nw x nh overlay nodes (node (i, j) at world (x0 + i * step, z0 + j * step); cells are csx x csz world units, default 1).
++  int __cdecl cfunc_EdTtNodes(lua_State* const L)
++  {
++    const moho::STIMap* const m = SessionMap();
++    const int x0 = static_cast<int>(luaL_checknumber(L, 1));
++    const int z0 = static_cast<int>(luaL_checknumber(L, 2));
++    const int nw = static_cast<int>(luaL_checknumber(L, 3));
++    const int nh = static_cast<int>(luaL_checknumber(L, 4));
++    const int step = std::max(1, static_cast<int>(luaL_checknumber(L, 5)));
++    float csx = lua_type(L, 6) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(L, 6)) : 1.0f;
++    float csz = lua_type(L, 7) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(L, 7)) : 1.0f;
++    if (!HasGrid(m) || nw < 1 || nh < 1 || nw > 4096 || nh > 4096) {
++      lua_pushnil(L);
++      return 1;
++    }
++    if (!(csx > 0.0f)) {
++      csx = 1.0f;
++    }
++    if (!(csz > 0.0f)) {
++      csz = 1.0f;
++    }
++    std::vector<std::uint8_t> out(static_cast<std::size_t>(nw) * static_cast<std::size_t>(nh));
++    moho::editor::ttype::SampleNodes(m->mTerrainType.data, m->mTerrainType.width, m->mTerrainType.height, x0, z0, nw, nh, step, csx, csz, out.data());
++    lua_newtable(L);
++    for (std::size_t i = 0; i < out.size(); ++i) {
++      lua_pushnumber(L, static_cast<lua_Number>(i + 1));
++      lua_pushnumber(L, static_cast<lua_Number>(out[i]));
++      lua_settable(L, -3);
++    }
++    return 1;
++  }
++
+   [[nodiscard]] moho::CScrLuaInitFormSet& UserLuaInitSet()
+   {
+     if (moho::CScrLuaInitFormSet* const set = moho::SCR_FindLuaInitFormSet("User"); set != nullptr) {
+@@ -167,6 +230,8 @@ namespace
+       (void)new moho::CScrLuaBinder(set, "ed_tt_info", &cfunc_EdTtInfo, nullptr, "<global>", "ed_tt_info() -> width, height");
+       (void)new moho::CScrLuaBinder(set, "ed_tt_read", &cfunc_EdTtRead, nullptr, "<global>", "ed_tt_read(x0, z0, x1, z1) -> values, x0, z0, x1, z1");
+       (void)new moho::CScrLuaBinder(set, "ed_tt_write", &cfunc_EdTtWrite, nullptr, "<global>", "ed_tt_write(x0, z0, x1, z1, values) -> cells written");
++      (void)new moho::CScrLuaBinder(set, "ed_tt_disc", &cfunc_EdTtDisc, nullptr, "<global>", "ed_tt_disc(cx, cz, radius, code) -> changed, x0, z0, x1, z1");
++      (void)new moho::CScrLuaBinder(set, "ed_tt_nodes", &cfunc_EdTtNodes, nullptr, "<global>", "ed_tt_nodes(x0, z0, nw, nh, step, csx, csz) -> values");
+     }
+   };
+ 
+diff --git a/src/sdk/moho/editor/EdTerrainTypeMath.h b/src/sdk/moho/editor/EdTerrainTypeMath.h
+new file mode 100644
+index 0000000..7db114d
+--- /dev/null
++++ b/src/sdk/moho/editor/EdTerrainTypeMath.h
+@@ -0,0 +1,96 @@
++// EDITOR: the grid math of the terrain-type natives (EdTerrainType.cpp): a hard disc of one type code, and a sample of the grid at the nodes of an overlay window. Header-only and free
++// of engine types so it can be tested on its own (moho/editor/tests/EdTerrainTypeTest.cpp). It does the same arithmetic, in 32-bit floats and one operation per statement, as the Lua
++// code it replaces (terraintype.lua Dab and NodeCodes), so the Lua fallback and the native agree cell for cell.
++#pragma once
++
++#include <algorithm>
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++
++namespace moho::editor::ttype
++{
++  struct DiscResult
++  {
++    int changed = 0;   // cells that held another code
++    int x0 = 0;        // inclusive cell rectangle of the cells that changed (empty when changed == 0)
++    int z0 = 0;
++    int x1 = -1;
++    int z1 = -1;
++  };
++
++  /** Sets every cell of the w x h grid whose centre (x + 0.5, z + 0.5) lies within `radius` of (cx, cz) (all in cells) to `code`; reports the cells that changed. */
++  inline DiscResult PaintDisc(std::uint8_t* const data, const int w, const int h, const float cx, const float cz, const float radius, const std::uint8_t code)
++  {
++    DiscResult out;
++    const float lowX = cx - radius;
++    const float lowZ = cz - radius;
++    const float highX = cx + radius;
++    const float highZ = cz + radius;
++    const int x0 = std::max(0, static_cast<int>(std::floor(lowX)));
++    const int z0 = std::max(0, static_cast<int>(std::floor(lowZ)));
++    const int x1 = std::min(w - 1, static_cast<int>(std::ceil(highX)));
++    const int z1 = std::min(h - 1, static_cast<int>(std::ceil(highZ)));
++    if (x1 < x0 || z1 < z0) {
++      return out;
++    }
++    const float r2 = radius * radius;
++    for (int z = z0; z <= z1; ++z) {
++      const float cellZ = static_cast<float>(z) + 0.5f;
++      const float dz = cellZ - cz;
++      const float dz2 = dz * dz;
++      std::uint8_t* const row = data + static_cast<std::size_t>(z) * static_cast<std::size_t>(w);
++      for (int x = x0; x <= x1; ++x) {
++        const float cellX = static_cast<float>(x) + 0.5f;
++        const float dx = cellX - cx;
++        const float dx2 = dx * dx;
++        const float d2 = dx2 + dz2;
++        if (d2 <= r2 && row[x] != code) {
++          row[x] = code;
++          if (out.changed == 0) {
++            out.x0 = x;
++            out.z0 = z;
++            out.x1 = x;
++            out.z1 = z;
++          } else {
++            out.x0 = std::min(out.x0, x);
++            out.x1 = std::max(out.x1, x);
++            out.z0 = std::min(out.z0, z);
++            out.z1 = std::max(out.z1, z);
++          }
++          ++out.changed;
++        }
++      }
++    }
++    return out;
++  }
++
++  /** The cell a world position falls in on one axis: floor(pos / cellSize), clamped to 0 .. n - 1 (terraintype.lua NodeCodes). */
++  [[nodiscard]] inline int NodeCell(const float pos, const float cellSize, const int n)
++  {
++    const float q = pos / cellSize;
++    const int c = static_cast<int>(std::floor(q));
++    return std::max(0, std::min(n - 1, c));
++  }
++
++  /**
++   * The codes under a grid of nw x nh nodes: node (i, j) lies at world (x0 + i * step, z0 + j * step) and takes the code of the cell it is in (cells are csx x csz world units).
++   * `out` receives nw * nh codes, row major.
++   */
++  inline void SampleNodes(
++    const std::uint8_t* const data, const int w, const int h, const int x0, const int z0, const int nw, const int nh, const int step, const float csx, const float csz,
++    std::uint8_t* const out
++  )
++  {
++    for (int j = 0; j < nh; ++j) {
++      const float wz = static_cast<float>(z0 + j * step);
++      const int cz = NodeCell(wz, csz, h);
++      const std::uint8_t* const row = data + static_cast<std::size_t>(cz) * static_cast<std::size_t>(w);
++      std::uint8_t* const dst = out + static_cast<std::size_t>(j) * static_cast<std::size_t>(nw);
++      for (int i = 0; i < nw; ++i) {
++        const float wx = static_cast<float>(x0 + i * step);
++        dst[i] = row[NodeCell(wx, csx, w)];
++      }
++    }
++  }
++} // namespace moho::editor::ttype
+diff --git a/src/sdk/moho/editor/tests/EdBrushTest.cpp b/src/sdk/moho/editor/tests/EdBrushTest.cpp
+index d93dc99..f3f35ef 100644
+--- a/src/sdk/moho/editor/tests/EdBrushTest.cpp
++++ b/src/sdk/moho/editor/tests/EdBrushTest.cpp
+@@ -64,6 +64,8 @@ struct LuaBrush
+   const char* mode;
+   double level;   // < 0: nil
+   int strokeId;
++  double noiseScale = 8, noiseRough = 0.5;
++  int noiseOctaves = 2;
+ };
+ 
+ static double LuaWeight(const double distance, const double radius, const double falloff)
+@@ -95,6 +97,41 @@ static double LuaNoise(const double x, const double z, const double seed)
+   return Sub(Mul(Div(n, 4093), 2), 1);
+ }
+ 
++// terrain.lua ValueNoise / SmoothNoise: smooth value noise on the hash above
++static double LuaValueNoise(const double x, const double z, const double cell, const double seed)
++{
++  const double fx = Div(x, cell);
++  const double fz = Div(z, cell);
++  const double ix = Floor(fx);
++  const double iz = Floor(fz);
++  double tx = Sub(fx, ix);
++  double tz = Sub(fz, iz);
++  tx = Mul(Mul(tx, tx), Sub(3, Mul(2, tx)));
++  tz = Mul(Mul(tz, tz), Sub(3, Mul(2, tz)));
++  const double v00 = LuaNoise(ix, iz, seed), v10 = LuaNoise(Add(ix, 1), iz, seed);
++  const double v01 = LuaNoise(ix, Add(iz, 1), seed), v11 = LuaNoise(Add(ix, 1), Add(iz, 1), seed);
++  const double top = Add(v00, Mul(Sub(v10, v00), tx));
++  const double bottom = Add(v01, Mul(Sub(v11, v01), tx));
++  return Add(top, Mul(Sub(bottom, top), tz));
++}
++
++static double LuaSmoothNoise(const double x, const double z, const double seed, double scale, double octaves, double rough)
++{
++  if (scale < 1) scale = 1;
++  octaves = Floor(octaves);
++  if (octaves < 1) octaves = 1; else if (octaves > 4) octaves = 4;
++  if (rough < 0) rough = 0; else if (rough > 1) rough = 1;
++  double total = 0, amp = 1, norm = 0, cell = scale;
++  for (int o = 0; o < octaves; ++o) {
++    if (o > 0 && cell < 1) break;
++    total = Add(total, Mul(amp, LuaValueNoise(x, z, cell, Add(seed, Mul(o, 1013)))));
++    norm = Add(norm, amp);
++    amp = Mul(amp, rough);
++    cell = Div(cell, 2);
++  }
++  return Div(total, norm);
++}
++
+ // terrain.lua BoxBlur on 1-based arrays (index 0 unused)
+ static std::vector<double> LuaBoxBlur(const std::vector<double>& src, const int w, const int h, const int kr)
+ {
+@@ -144,6 +181,8 @@ static RefOut LuaDab(const std::vector<std::uint16_t>& grid, const int gw, const
+   b.falloff = F(b.falloff);
+   b.strength = F(b.strength);
+   b.level = b.level < 0 ? b.level : F(b.level);
++  b.noiseScale = F(b.noiseScale);
++  b.noiseRough = F(b.noiseRough);
+   const double K02 = F(0.2);
+   const double r = b.radius;
+   int x0 = static_cast<int>(Floor(Sub(cx, r))) - 1, z0 = static_cast<int>(Floor(Sub(cz, r))) - 1;
+@@ -208,7 +247,7 @@ static RefOut LuaDab(const std::vector<std::uint16_t>& grid, const int gw, const
+           const double k = Mul(Min(1, Mul(Mul(strength, K02), weight)), dir);
+           value = Add(value, Mul(Sub(blurred[i], value), k));
+         } else if (mode == "noise") {
+-          value = Add(value, Mul(Mul(Mul(Mul(dir, LuaNoise(x, z, b.strokeId)), strength), weight), 128));
++          value = Add(value, Mul(Mul(Mul(Mul(dir, LuaSmoothNoise(x, z, b.strokeId, b.noiseScale, b.noiseOctaves, b.noiseRough)), strength), weight), 128));
+         }
+         value = Floor(Add(value, 0.5));
+         if (value < 0) value = 0;
+@@ -334,6 +373,9 @@ static void CompareDab(const std::vector<std::uint16_t>& grid, const int gw, con
+   dab.falloff = static_cast<float>(lb.falloff);
+   dab.level = static_cast<float>(lb.level);
+   dab.seed = lb.strokeId;
++  dab.noiseScale = static_cast<float>(lb.noiseScale);
++  dab.noiseOctaves = lb.noiseOctaves;
++  dab.noiseRoughness = static_cast<float>(lb.noiseRough);
+   CHECK(br::ModeFromName(lb.mode, dab.mode), "mode %s", lb.mode);
+ 
+   br::Window win;
+@@ -418,6 +460,29 @@ static void TestSweep()
+   }
+ }
+ 
++static void TestNoiseDabs()
++{
++  // whole noise dabs with every setting against the Lua transliteration
++  const int gw = 61, gh = 47;
++  const std::vector<std::uint16_t> grid = MakeGrid(gw, gh, 0);
++  const double scales[] = {1, 3, 8, 12.5, 30};
++  const int octs[] = {1, 2, 3, 4};
++  const double roughs[] = {0.3, 0.5, 0.7};
++  char what[160];
++  for (const double sc : scales) {
++    for (const int oc : octs) {
++      for (const double ro : roughs) {
++        LuaBrush lb{9, 0.6, 4, 1, "noise", -1, 21};
++        lb.noiseScale = sc; lb.noiseOctaves = oc; lb.noiseRough = ro;
++        std::snprintf(what, sizeof(what), "noise scale %g oct %d rough %g", sc, oc, ro);
++        CompareDab(grid, gw, gh, 31.4, 22.7, lb, what);
++        lb.dir = -1;
++        CompareDab(grid, gw, gh, 3.2, 40.1, lb, what);
++      }
++    }
++  }
++}
++
+ static void TestNoise()
+ {
+   // the integer hash in long arithmetic, and the float transliteration of the Lua source
+@@ -449,6 +514,100 @@ static void TestNoise()
+   CHECK(std::fabs(cross / (static_cast<double>(n) * (n - 1))) < 0.03, "noise neighbour correlation %f", cross / (static_cast<double>(n) * (n - 1)));
+ }
+ 
++static void TestSmoothNoise()
++{
++  // the native smooth noise equals the float transliteration of terrain.lua for random points and settings
++  const double scales[] = {1, 2, 3.5, 8, 8.25, 16, 40, 0.4};
++  const double roughs[] = {0.3, 0.5, 0.7, 1.0, 0.0};
++  for (int i = 0; i < 20000; ++i) {
++    const int x = static_cast<int>(Rand() % 2100), z = static_cast<int>(Rand() % 2100), seed = static_cast<int>(Rand() % 100000);
++    const double scale = F(scales[Rand() % 8]), rough = F(roughs[Rand() % 5]);
++    const int oct = 1 + static_cast<int>(Rand() % 4);
++    const float n = br::detail::SmoothNoise(x, z, seed, static_cast<float>(scale), oct, static_cast<float>(rough));
++    const double ref = LuaSmoothNoise(x, z, seed, scale, oct, rough);
++    CHECK(n == static_cast<float>(ref), "smooth noise (%d,%d) seed %d scale %g oct %d rough %g: %.9g vs lua %.9g", x, z, seed, scale, oct, rough, static_cast<double>(n), ref);
++    CHECK(n >= -1.0001f && n <= 1.0001f, "smooth noise range %f", static_cast<double>(n));
++  }
++  // one octave on the lattice points is the hash itself
++  for (int i = 0; i < 400; ++i) {
++    const int ix = static_cast<int>(Rand() % 200), iz = static_cast<int>(Rand() % 200);
++    const float n = br::detail::SmoothNoise(ix * 8, iz * 8, 5, 8.0f, 1, 0.5f);
++    CHECK(n == br::detail::Noise(ix, iz, 5), "lattice point (%d,%d): %f vs %f", ix, iz, static_cast<double>(n), static_cast<double>(br::detail::Noise(ix, iz, 5)));
++  }
++  // smooth: neighbouring samples differ by at most the steepest smoothstep slope (3 / 2 of the range over one cell) while the white hash jumps
++  {
++    double worst = 0, sum = 0, whiteSum = 0;
++    int count = 0;
++    for (int z = 0; z < 120; ++z) {
++      for (int x = 0; x < 119; ++x) {
++        const double a = br::detail::SmoothNoise(x, z, 9, 8.0f, 1, 0.5f), b = br::detail::SmoothNoise(x + 1, z, 9, 8.0f, 1, 0.5f);
++        worst = std::max(worst, std::fabs(a - b));
++        sum += std::fabs(a - b);
++        whiteSum += std::fabs(static_cast<double>(br::detail::Noise(x, z, 9)) - br::detail::Noise(x + 1, z, 9));
++        ++count;
++      }
++    }
++    CHECK(worst <= 2.0 * 1.5 / 8.0 + 1e-4, "one octave of scale 8: neighbour step %f", worst);
++    CHECK(sum / count < 0.25 * whiteSum / count, "smooth noise steps %f vs white %f", sum / count, whiteSum / count);
++  }
++  // it still has spread (not flat): the standard deviation over a big window
++  {
++    double sum = 0, sum2 = 0;
++    const int n = 200;
++    for (int z = 0; z < n; ++z) for (int x = 0; x < n; ++x) {
++      const double v = br::detail::SmoothNoise(x + 300, z + 700, 4, 8.0f, 2, 0.5f);
++      sum += v;
++      sum2 += v * v;
++    }
++    const double mean = sum / (n * n), sd = std::sqrt(sum2 / (n * n) - mean * mean);
++    CHECK(std::fabs(mean) < 0.1 && sd > 0.2 && sd < 0.7, "smooth noise mean %f sd %f", mean, sd);
++  }
++  // the scale sets the size of the bumps: the number of sign changes along a line falls when the cell grows
++  {
++    auto crossings = [](const float scale) {
++      int c = 0;
++      float last = br::detail::SmoothNoise(0, 50, 3, scale, 1, 0.5f);
++      for (int x = 1; x < 400; ++x) {
++        const float v = br::detail::SmoothNoise(x, 50, 3, scale, 1, 0.5f);
++        if ((v < 0) != (last < 0)) ++c;
++        last = v;
++      }
++      return c;
++    };
++    CHECK(crossings(4.0f) > crossings(16.0f) && crossings(16.0f) > crossings(64.0f), "bigger scale, fewer zero crossings (%d %d %d)", crossings(4.0f), crossings(16.0f), crossings(64.0f));
++  }
++  // coherent across dabs: two overlapping flat dabs of one stroke (same seed) add the same amount to a sample, whatever their centres
++  {
++    const int gw = 80, gh = 80;
++    const std::vector<std::uint16_t> grid(static_cast<std::size_t>(gw) * gh, 30000);
++    br::Dab a;
++    a.mode = br::Mode::Noise; a.radius = 16; a.falloff = 0; a.strength = 6; a.seed = 11; a.noiseScale = 6; a.noiseOctaves = 3; a.noiseRoughness = 0.5f;
++    br::Dab b = a;
++    a.cx = 30; a.cz = 38;
++    b.cx = 44; b.cz = 40;
++    br::Window wa, wb;
++    std::vector<std::uint16_t> ra, rb;
++    br::ComputeDab(grid.data(), gw, gh, a, wa, ra);
++    br::ComputeDab(grid.data(), gw, gh, b, wb, rb);
++    int overlap = 0, bad = 0;
++    for (int z = 30; z <= 48; ++z) {
++      for (int x = 36; x <= 38; ++x) {
++        const int ia = (z - wa.z0) * wa.Width() + (x - wa.x0), ib = (z - wb.z0) * wb.Width() + (x - wb.x0);
++        ++overlap;
++        if (ra[static_cast<std::size_t>(ia)] != rb[static_cast<std::size_t>(ib)]) ++bad;
++      }
++    }
++    CHECK(overlap > 40 && bad == 0, "the two dabs give the same noise at shared samples (%d of %d differ)", bad, overlap);
++    // another stroke (seed) gives another pattern
++    br::Dab c = a;
++    c.seed = 12;
++    br::Window wc;
++    std::vector<std::uint16_t> rc;
++    br::ComputeDab(grid.data(), gw, gh, c, wc, rc);
++    CHECK(rc != ra, "another stroke id gives another pattern");
++  }
++}
++
+ static void TestProperties()
+ {
+   const int gw = 40, gh = 40;
+@@ -629,6 +788,8 @@ int main(int argc, char** /*argv*/)
+ {
+   TestSweep();
+   TestNoise();
++  TestNoiseDabs();
++  TestSmoothNoise();
+   TestProperties();
+   TestDocument();
+   if (argc > 1) {
+diff --git a/src/sdk/moho/editor/tests/EdTerrainTypeTest.cpp b/src/sdk/moho/editor/tests/EdTerrainTypeTest.cpp
+new file mode 100644
+index 0000000..ad62af1
+--- /dev/null
++++ b/src/sdk/moho/editor/tests/EdTerrainTypeTest.cpp
+@@ -0,0 +1,148 @@
++// Stand-alone test of the terrain-type grid math (EdTerrainTypeMath.h; no engine needed).
++//   g++ -std=c++20 -O2 -ffp-contract=off -I src/sdk src/sdk/moho/editor/tests/EdTerrainTypeTest.cpp -o EdTerrainTypeTest
++//   MSVC: cl /std:c++20 /EHsc /O2 /I src/sdk EdTerrainTypeTest.cpp
++//
++// References: terraintype.lua Dab (a disc of the cells whose centre is within the radius) and NodeCodes (the cell under a node), transliterated with every Lua operation rounded to a float.
++#include <algorithm>
++#include <chrono>
++#include <cmath>
++#include <cstdint>
++#include <cstdio>
++#include <vector>
++
++#include "moho/editor/EdTerrainTypeMath.h"
++
++namespace tt = moho::editor::ttype;
++
++static int gFailures = 0;
++static int gChecks = 0;
++#define CHECK(cond, ...)                               \
++  do {                                                 \
++    ++gChecks;                                         \
++    if (!(cond)) {                                     \
++      ++gFailures;                                     \
++      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
++      std::printf(__VA_ARGS__);                        \
++      std::printf("\n");                               \
++    }                                                  \
++  } while (0)
++
++static double F(const double v) { return static_cast<double>(static_cast<float>(v)); }
++
++static std::uint32_t gSeed = 777u;
++static std::uint32_t Rand()
++{
++  gSeed = gSeed * 1664525u + 1013904223u;
++  return gSeed >> 8;
++}
++
++// the Lua Dab: x0 = max(0, floor(cx - r)) ... ; dx = (x + 0.5) - cx; if dx * dx + dz * dz <= r * r
++static int LuaDisc(std::vector<std::uint8_t>& grid, const int w, const int h, double cx, double cz, double r, const int code, int bbox[4])
++{
++  cx = F(cx); cz = F(cz); r = F(r);
++  const int x0 = std::max(0, static_cast<int>(std::floor(F(cx - r))));
++  const int z0 = std::max(0, static_cast<int>(std::floor(F(cz - r))));
++  const int x1 = std::min(w - 1, static_cast<int>(std::ceil(F(cx + r))));
++  const int z1 = std::min(h - 1, static_cast<int>(std::ceil(F(cz + r))));
++  int changed = 0;
++  bbox[0] = 1 << 30; bbox[1] = 1 << 30; bbox[2] = -1; bbox[3] = -1;
++  if (x1 < x0 || z1 < z0) return 0;
++  for (int z = z0; z <= z1; ++z) {
++    for (int x = x0; x <= x1; ++x) {
++      const double dx = F(F(x + 0.5) - cx), dz = F(F(z + 0.5) - cz);
++      if (F(F(dx * dx) + F(dz * dz)) <= F(r * r)) {
++        std::uint8_t& v = grid[static_cast<std::size_t>(z) * w + x];
++        if (v != code) {
++          v = static_cast<std::uint8_t>(code);
++          ++changed;
++          bbox[0] = std::min(bbox[0], x); bbox[1] = std::min(bbox[1], z); bbox[2] = std::max(bbox[2], x); bbox[3] = std::max(bbox[3], z);
++        }
++      }
++    }
++  }
++  return changed;
++}
++
++static void TestDisc()
++{
++  const int w = 97, h = 61;
++  for (int it = 0; it < 3000; ++it) {
++    std::vector<std::uint8_t> a(static_cast<std::size_t>(w) * h);
++    for (auto& v : a) v = static_cast<std::uint8_t>(Rand() % 4 == 0 ? 7 : 1);
++    std::vector<std::uint8_t> b = a;
++    const double cx = (static_cast<int>(Rand() % 1400) - 200) / 10.0, cz = (static_cast<int>(Rand() % 1000) - 200) / 10.0, r = (Rand() % 400) / 10.0;
++    const int code = 1 + static_cast<int>(Rand() % 250);
++    int bb[4];
++    const int refChanged = LuaDisc(b, w, h, cx, cz, r, code, bb);
++    const tt::DiscResult res = tt::PaintDisc(a.data(), w, h, static_cast<float>(F(cx)), static_cast<float>(F(cz)), static_cast<float>(F(r)), static_cast<std::uint8_t>(code));
++    CHECK(a == b, "disc (%g,%g) r %g code %d: the grids differ", cx, cz, r, code);
++    CHECK(res.changed == refChanged, "changed %d vs %d", res.changed, refChanged);
++    if (refChanged > 0) {
++      CHECK(res.x0 == bb[0] && res.z0 == bb[1] && res.x1 == bb[2] && res.z1 == bb[3], "bbox %d,%d..%d,%d vs %d,%d..%d,%d", res.x0, res.z0, res.x1, res.z1, bb[0], bb[1], bb[2], bb[3]);
++    }
++  }
++  // a disc on the code it already holds changes nothing; off the map nothing; radius 0 nothing
++  std::vector<std::uint8_t> g(static_cast<std::size_t>(w) * h, 5);
++  CHECK(tt::PaintDisc(g.data(), w, h, 20, 20, 6, 5).changed == 0, "same code: no change");
++  CHECK(tt::PaintDisc(g.data(), w, h, -50, -50, 6, 9).changed == 0, "off the map");
++  CHECK(tt::PaintDisc(g.data(), w, h, 20, 20, 0, 9).changed == 0, "radius 0");
++  const tt::DiscResult d = tt::PaintDisc(g.data(), w, h, 20, 20, 3, 9);
++  CHECK(d.changed > 20 && d.changed < 40, "a disc of radius 3 has about 28 cells (%d)", d.changed);
++  CHECK(d.x0 >= 17 && d.x1 <= 22 && d.z0 >= 17 && d.z1 <= 22, "bbox of the radius 3 disc");
++  // a second dab on the same disc changes nothing
++  CHECK(tt::PaintDisc(g.data(), w, h, 20, 20, 3, 9).changed == 0, "painting twice changes nothing the second time");
++  // clamped at the map edge
++  const tt::DiscResult e = tt::PaintDisc(g.data(), w, h, 0, 0, 4, 11);
++  CHECK(e.changed > 0 && e.x0 == 0 && e.z0 == 0, "a disc at the corner");
++}
++
++static void TestNodes()
++{
++  const int w = 128, h = 128;
++  std::vector<std::uint8_t> g(static_cast<std::size_t>(w) * h);
++  for (int z = 0; z < h; ++z) for (int x = 0; x < w; ++x) g[static_cast<std::size_t>(z) * w + x] = static_cast<std::uint8_t>((x * 3 + z * 7) % 251);
++  const float sizes[] = {1.0f, 2.0f, 0.5f, 1.5f, 4.0f};
++  for (const float cs : sizes) {
++    for (int it = 0; it < 200; ++it) {
++      const int x0 = static_cast<int>(Rand() % 400) - 40, z0 = static_cast<int>(Rand() % 400) - 40;
++      const int nw = 2 + static_cast<int>(Rand() % 60), nh = 2 + static_cast<int>(Rand() % 60);
++      const int step = 1 << (Rand() % 4);
++      std::vector<std::uint8_t> out(static_cast<std::size_t>(nw) * nh);
++      tt::SampleNodes(g.data(), w, h, x0, z0, nw, nh, step, cs, cs, out.data());
++      int bad = 0;
++      for (int j = 0; j < nh; ++j) {
++        // terraintype.lua NodeCodes: cz = max(0, min(gh - 1, floor((z0 + j * step) / csz)))
++        const int cz = std::max(0, std::min(h - 1, static_cast<int>(std::floor(F(F(z0 + j * step) / F(cs))))));
++        for (int i = 0; i < nw; ++i) {
++          const int cx = std::max(0, std::min(w - 1, static_cast<int>(std::floor(F(F(x0 + i * step) / F(cs))))));
++          if (out[static_cast<std::size_t>(j) * nw + i] != g[static_cast<std::size_t>(cz) * w + cx]) ++bad;
++        }
++      }
++      CHECK(bad == 0, "nodes cs %g window %d,%d %dx%d step %d: %d wrong", static_cast<double>(cs), x0, z0, nw, nh, step, bad);
++    }
++  }
++}
++
++static void Bench()
++{
++  const int w = 2048, h = 2048;
++  std::vector<std::uint8_t> g(static_cast<std::size_t>(w) * h, 1);
++  const auto t0 = std::chrono::steady_clock::now();
++  long changed = 0;
++  for (int i = 0; i < 1000; ++i) changed += tt::PaintDisc(g.data(), w, h, 100.0f + i, 500.0f + i * 0.5f, 40.0f, static_cast<std::uint8_t>(2 + i % 3)).changed;
++  const auto t1 = std::chrono::steady_clock::now();
++  std::vector<std::uint8_t> out(160 * 160);
++  for (int i = 0; i < 100; ++i) tt::SampleNodes(g.data(), w, h, 0, 0, 160, 160, 8, 1.0f, 1.0f, out.data());
++  const auto t2 = std::chrono::steady_clock::now();
++  std::printf("bench: disc r=40 %.4f ms, 160x160 node sample %.4f ms (%ld cells changed)\n", std::chrono::duration<double, std::milli>(t1 - t0).count() / 1000,
++              std::chrono::duration<double, std::milli>(t2 - t1).count() / 100, changed);
++}
++
++int main(int argc, char** /*argv*/)
++{
++  TestDisc();
++  TestNodes();
++  if (argc > 1) Bench();
++  std::printf("%s: %d checks, %d failures\n", gFailures == 0 ? "PASS" : "FAIL", gChecks, gFailures);
++  return gFailures == 0 ? 0 : 1;
++}

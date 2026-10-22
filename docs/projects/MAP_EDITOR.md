@@ -346,6 +346,19 @@ CRI. The old local snapshot (`faf-re-master`) is superseded.
   checks of `selftest_terrain.lua`. A stroke's re-snap of units is coalesced (`sim.lua ResnapLater`: one `EdResnap` per ~0.15 s, flushed at the
   stroke's end) and `ui.lua PumpStroke` lays the dabs within a ~6 ms budget per frame. The noise brush's hash was replaced (the old one was -1 nearly
   everywhere in 32-bit float Lua numbers).
+  **Noise brush:** smooth value noise on a lattice (seeded integer hash with intermediates below 2^24, smoothstep blend, 1-4 octaves), sampled at the
+  world position with the stroke id as seed, so the dabs of one stroke join into continuous bumps. Settings `Brush.noiseScale` (lattice cell, default 8),
+  `noiseOctaves` (2), `noiseRoughness` (0.5), sliders in the Brush panel while the Noise tool is active, passed to `ed_terrain_brush` as arguments 10-12
+  (an older exe ignores them and keeps its white noise). `terrain.lua Noise` and `EdBrush.h SmoothNoise` do the same operations in the same order;
+  `EdBrushTest` compares them and checks smoothness and the coherence across dabs.
+  **Terrain type brush and overlay:** `terraintype.lua Dab` paints with one `ed_tt_disc` call and keeps the undo data per 32 x 32 tile (the tiles a dab
+  reached are read once per stroke, the ones that changed form the undo entry); `Mark` / `TakeDirty` report the changed cell rectangle; `ttoverlay.lua`
+  keeps the node layers and, for a dab, re-reads only the nodes under the dirty rectangle (`ed_tt_nodes` returns the codes under a node window in one call),
+  at most ~10 times a second and at most 160 nodes per side (fewer with many types: the engine projects every node of every layer each frame). Test:
+  `selftest_ttype.lua`, `EdTerrainTypeTest`.
+  **Symmetry detection:** `symmetry.lua Detect` (pure) / `AutoDetect` (called by `Map.Load`, and by the Symmetry panel's "Detect again"): start positions and
+  resource markers must map onto each other under the mode (tolerance ~0.012 of the map size, axis offsets are measured), confirmed by a 33 x 33 height
+  sample; test `selftest_symdetect.lua`.
   Open: no marker / area selection, move or delete by mouse yet; no prop / decal tool; the Save button writes to
   `mapout/editor_map.v0001` next to the exe (no folder picker).
   Next: selection / move / delete for markers and areas, prop and decal tools,

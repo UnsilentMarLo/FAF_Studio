@@ -5,6 +5,7 @@
 --   click the albedo    pick another albedo texture (the matching normal map follows when there is one next to it)
 --   click the normal    pick the normal map alone
 --   Shader              the terrain shader of the map (shaderbrowser.lua)
+--   Convert layers...   the shader browser asking for the shader to convert the layers to (paint masks, layer 8, Upper layer: stratumconv.lua, convertdialog.lua)
 --   Tile size           world units one texture tile covers; Enter applies
 --   right click a row   the same as menu entries ('context.list')
 
@@ -232,6 +233,13 @@ Panels.Register{
             end)
         end)
 
+        P.convert = W.Button(group, 'Convert layers...', 0, 0, Skin.S(220), Skin.S(24), function()
+            import('/lua/editor/gui/shaderbrowser.lua').Open(function(id)
+                Say('terrain shader: ' .. id)
+                P:Refresh()
+            end, { convert = true })
+        end, { tip = 'Change the shader and adapt the layers to it in one undo step: paint masks re-encoded where the mask range differs, layer 8 and the Upper layer handled. Opens the shader browser; choose the shader and press Convert layers.' })
+
         --- Picks a texture for the selected layer.
         function P:Change(kind)
             local l = Selected()
@@ -306,7 +314,7 @@ Panels.Register{
             P.w, P.h = w, h
             local pad = Skin.S(8)
             local rowH = Skin.S(26)
-            local detail = Skin.S(366)
+            local detail = Skin.S(396)
             local listH = math.max(rowH * 3, math.min(rowH * 10, h - 2 * pad - detail))
             P.list:SetRect(pad, pad, w - 2 * pad, listH)
             local y = pad + listH + Skin.S(8)
@@ -334,6 +342,9 @@ Panels.Register{
             y = y + Skin.S(30)
             W.Place(P.shader, group, pad, y, sw, Skin.S(24))
             W.Center(P.shader.label, P.shader, 0, 0, sw, Skin.S(24))
+            y = y + Skin.S(30)
+            W.Place(P.convert, group, pad, y, sw, Skin.S(24))
+            W.Center(P.convert.label, P.convert, 0, 0, sw, Skin.S(24))
             P:Refresh()
         end
 

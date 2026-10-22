@@ -24,3 +24,5 @@ selftest_mirror
 selftest_browser
 selftest_mission_import
 selftest_ttype
+selftest_symdetect
+selftest_strataconv

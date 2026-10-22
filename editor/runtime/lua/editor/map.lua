@@ -59,6 +59,7 @@ function Load()
     if Doc.resizePayload then pcall(function() import('/lua/editor/resize.lua').ApplyPending(Doc) end) end     -- a resized map: heights, masks, props, decals (Map > Resize)
     pcall(function() import('/lua/editor/meshview.lua').OnMapLoaded() end)                      -- mesh terrain of a TerrainSystem = 'mesh' map
     pcall(function() import('/lua/editor/units.lua').SpawnGroupEntities() end)                    -- units of the mission's own groups are shown while editing
+    pcall(function() import('/lua/editor/symmetry.lua').AutoDetect() end)                       -- sets the symmetry mode when the start positions, resource markers and heights are symmetric
     return Doc
 end
 

@@ -65,6 +65,10 @@ local ROWS_SPEC = MakeRows{ base = { 'RGB, alpha = macrotexture opacity (drawn o
     l8 = { 'map-wide data: alpha = baked shadow (always read)', UNUSED },
     upper = { 'specular RGB, alpha = sharpness', UNUSED } }
 
+local ROWS_301 = MakeRows{ base = { RGB, XYZ }, p = { RGB, XYZ },
+    l8 = { 'map-wide colour RGB, alpha = opacity', 'atlas: roughness in G and A, height in R and B' },
+    upper = { 'B = water depth', UNUSED } }
+
 local function RowsPbr(macro, biplanar, splat)
     local cliff = biplanar and { 'RGB, also mapped from the side (cliffs)', 'XYZ, also mapped from the side' } or nil
     return MakeRows{ base = { macro and 'RGB, alpha = macrotexture opacity' or RGB, XYZ }, p = { RGB, XYZ },
@@ -125,6 +129,7 @@ local Info = {
     Terrain301 = { family = 'old', summary = 'Height splatting, the first version (kept for old maps).', mask = 'half',
         instructions = 'The earlier form of the splatting of the 2xx shaders. Prefer Terrain200 / Terrain250 for new maps. It uses an older texture layout (the roughness atlas is in the normal map of layer 8, the water depth in the Upper layer), so the editor does not convert layers to or from it.',
         layout = 'Layers: Base, painted layers 1-7. The atlas for roughness and height is in the normal map of layer 8; layer 8\'s albedo is a map-wide colour with its opacity in alpha; the Upper layer holds the water depth in its blue channel.',
+        rows = ROWS_301, notes = { 'Layer 8 has no paint: its mask is a roughness multiplier (128 = neutral).', 'Masks use the half range.' },
         profile = { supported = false, range = 'half', painted = 7, l8 = 'rough', upper = 'atlas', alpha = 'unused',
                     reason = 'Terrain301 uses an older texture layout (the atlas is in the normal map of layer 8)' } },
 }

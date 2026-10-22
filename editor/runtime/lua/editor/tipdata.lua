@@ -694,6 +694,7 @@ Widget = {
     ["symmetry/centre of the map"] = "Reset the centre of symmetry to the middle of the map.",
     ["symmetry/centre x"] = "X position of the point or line the copies are mirrored around.",
     ["symmetry/centre z"] = "Z position of the point or line the copies are mirrored around.",
+    ["symmetry/detect again"] = "Look at the start positions, resource markers and heights again and set the symmetry that fits the map. Does nothing if no symmetry fits.",
     ["symmetry/diagonal mirror"] = "Mirror across the diagonal of the map.",
     ["symmetry/mirror both"] = "Mirror in both directions: four copies.",
     ["symmetry/mirror left / right"] = "Everything you do is mirrored across the vertical centre line.",

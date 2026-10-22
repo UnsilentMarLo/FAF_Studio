@@ -946,6 +946,8 @@ end
 for _, op in { 'crop', 'resize', 'path_paste' } do Covers[op] = true end
 -- the stage T7 nodes (graphnodes_t7.lua): the kit hands it the constructors of this file
 import('/lua/editor/graphnodes_t7.lua').Install({ Def = Def, N = N, C = C, B = B, T = T, In = In, Out = Out, One = One, Fit = Fit, SEED = SEED, Fields = Fields }, Covers)
+-- the nodes of the map-wide shader textures (graphnodes_map.lua, maptextures.lua): normal map, environment lighting, lighting texture and their two outputs
+import('/lua/editor/graphnodes_map.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
 
 --- Parses `key=value,key=value` (a number, a word, or a list x:y;x:y) into op parameters: the text format of the golden cases.
 function ParseArgs(text)

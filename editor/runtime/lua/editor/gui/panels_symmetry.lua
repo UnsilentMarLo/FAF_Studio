@@ -19,7 +19,7 @@ Panels.Register{
         for _, m in Sym.Modes do
             local mode = m.id
             local b = W.Button(group, m.label, 0, 0, Skin.S(150), Skin.S(24), function()
-                Sym.Mode = mode
+                Sym.SetMode(mode)
                 P:Refresh()
             end, { toggle = true })
             table.insert(P.buttons, { id = mode, b = b })
@@ -47,15 +47,35 @@ Panels.Register{
             import('/lua/editor/gui/dialogs_mirror.lua').Open()
         end)
         P.note = W.Label(group, 'Applies to brushes, texture brush, markers, areas, props, decals and units.', 0, 0, { color = Skin.color.textDim, size = 'small' })
+        P.detect = W.Button(group, 'Detect again', 0, 0, Skin.S(150), Skin.S(24), function()
+            Sym.AutoDetect(true)
+            P:Refresh()
+        end)
+        P.detected = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
 
         function P:Refresh()
             for _, e in P.buttons do e.b:SetOn(Sym.Mode == e.id) end
             P.cx:Refresh()
             P.cz:Refresh()
             P.armyMap:SetOn(import('/lua/editor/mirrorhalf.lua').ArmyMode == 'map')
+            -- what the detection found when the map was opened (or the last time "Detect again" ran)
+            local d = Sym.Detected
+            local text = ''
+            if d and d.text then
+                if d.mode then
+                    text = (d.applied and 'Detected: ' or 'Found, not applied: ') .. d.text
+                else
+                    text = d.text
+                end
+            end
+            if text ~= P.shownText or P.shownW ~= P.width then
+                P.shownText, P.shownW = text, P.width
+                W.Fit(P.detected, text, math.max(Skin.S(60), (P.width or Skin.S(300)) - 2 * Skin.S(10)))
+            end
         end
 
         function P:OnResize(w, h)
+            P.width = w
             local pad = Skin.S(10)
             local y = pad
             local cols = (w >= Skin.S(340)) and 2 or 1
@@ -76,6 +96,8 @@ Panels.Register{
             W.Place(P.armyMap, group, pad, y + Skin.S(30), Skin.S(150), Skin.S(24))
             W.Place(P.half, group, pad + Skin.S(156), y + Skin.S(30), Skin.S(150), Skin.S(24))
             W.Place(P.note, group, pad, y + Skin.S(62))
+            W.Place(P.detect, group, pad, y + Skin.S(84), Skin.S(150), Skin.S(24))
+            W.Place(P.detected, group, pad, y + Skin.S(114))
             P:Refresh()
         end
         return P

@@ -44,13 +44,25 @@ local function RoleOf(p, slot)
     return p.l8
 end
 
---- Layers 1..N as text: "layer 3", "layers 5 and 8", "layers 5, 6 and 8".
+--- Layers as text, runs joined: "layer 3", "layers 5 and 8", "layers 1-7", "layers 1-3, 5 and 8".
 local function LayerList(list)
     local n = table.getn(list)
     if n == 1 then return 'layer ' .. list[1] end
+    local parts = {}
+    local i = 1
+    while i <= n do
+        local j = i
+        while j < n and list[j + 1] == list[j] + 1 do j = j + 1 end
+        if j - i >= 2 then table.insert(parts, list[i] .. '-' .. list[j])
+        else
+            for k = i, j do table.insert(parts, tostring(list[k])) end
+        end
+        i = j + 1
+    end
     local text = ''
-    for i, l in list do
-        if i == n then text = text .. ' and ' .. l elseif i > 1 then text = text .. ', ' .. l else text = text .. l end
+    local m = table.getn(parts)
+    for k, part in parts do
+        if k == m and m > 1 then text = text .. ' and ' .. part elseif k > 1 then text = text .. ', ' .. part else text = part end
     end
     return 'layers ' .. text
 end
@@ -330,16 +342,23 @@ function Run(plan, opts)
                 end
             end
             -- commit what differs
+            local recodedCells, recodedLayers = 0, {}
             for j = 1, 8 do
                 if fin[j] ~= raw[j] then
                     local entry, n = Fields.CommitMask(fin[j], j, { raw = true, noPush = true, label = 'convert layer ' .. j })
                     if entry then
                         table.insert(parts, entry)
                         report.cells = report.cells + n
-                        if recoded[j] then Add('done', 'Mask of layer ' .. j .. ': ' .. n .. ' cells re-encoded to the ' .. RANGE_NAME[to.range] .. '.') end
+                        if recoded[j] then
+                            recodedCells = recodedCells + n
+                            table.insert(recodedLayers, j)
+                        end
                         if j == 8 and to.l8 == 'rough' and from.l8 ~= 'rough' then Add('done', 'Mask of layer 8 set to the neutral roughness multiplier (' .. n .. ' cells).') end
                     end
                 end
+            end
+            if table.getn(recodedLayers) > 0 then
+                Add('done', 'Masks of ' .. LayerList(recodedLayers) .. ' re-encoded from the ' .. RANGE_NAME[from.range] .. ' to the ' .. RANGE_NAME[to.range] .. ': ' .. recodedCells .. ' cells changed, the picture stays the same.')
             end
         end)
     end)
@@ -367,9 +386,6 @@ function Run(plan, opts)
     -- the report: the plan's lines that apply, then what was done, then the warnings
     local lines = {}
     table.insert(lines, { kind = 'done', text = 'Shader: ' .. plan.from .. ' -> ' .. plan.to .. '.' })
-    if from.range ~= to.range then
-        table.insert(lines, { kind = 'done', text = 'Masks now use the ' .. RANGE_NAME[to.range] .. ' (they were in the ' .. RANGE_NAME[from.range] .. ').' })
-    end
     for _, l in report.lines do table.insert(lines, l) end
     local nWarn = 0
     for _, w in plan.warnings do
