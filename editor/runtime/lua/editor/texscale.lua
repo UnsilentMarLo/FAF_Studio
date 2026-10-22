@@ -10,7 +10,7 @@
 --   p of a perspective view of height H pixels, vertical field of view f, at eye distance D from the ground point looked at:  p = H / (2 D tan(f / 2)).
 --   Reference view (an assumption, not read from the engine): H = 1080 px, f = 45 degrees, D = 27 world units (the near end of the zoom range of the game camera):
 --       p = 1080 / (2 * 27 * 0.41421) = 48.3 texels per world unit.
---   That gives a 1024 px texture T = 21.2 (the 18 - 24 band mapmakers use), 512 px T = 10.6, 2048 px T = 42.4. The result is rounded to STEP (0.5) and clamped to [MIN, MAX] = [4, 64]
+--   That gives a 1024 px texture T = 21.2 (the 18 - 24 band mapmakers use), 2048 px T = 42.4; a smaller texture would ask for less (512 px: 10.6) but is lifted to REPEAT_MIN = 20, because a tile of about 10 units repeats so often that the grain shows as a regular pattern. The result is rounded to STEP (0.5) and clamped to [MIN, MAX] = [4, 64]
 --   (a 128 px texture would ask for 2.7, a 4096 px one for 85). A camera zoomed in further, or a taller screen, shows the blur; only DENSITY (or REF_DISTANCE) needs changing then.
 --
 --   The normal map defaults to the SAME tile size as its albedo: the two are sampled with the same UVs and a different size would let the bumps drift off the colours they belong to.
@@ -46,6 +46,7 @@ DENSITY = REF_HEIGHT / (2 * REF_DISTANCE * math.tan(REF_FOV * 3.14159265 / 360))
 STEP = 0.5
 MIN = 4
 MAX = 64
+REPEAT_MIN = 20                         -- world units: below this a tile repeats so often that the pattern shows as a regular grain over the ground (a 512 px texture at 10.5 did)
 FALLBACK_PIXELS = 1024                  -- width assumed when the file cannot be read
 ENGINE_DEFAULT = 4                      -- tile size of an empty slot in the engine and in the blank map templates
 PHI = 1.6180339887
@@ -66,6 +67,7 @@ function ForPixels(px)
     px = tonumber(px) or FALLBACK_PIXELS
     if px < 1 then px = FALLBACK_PIXELS end
     local t = Round(px / DENSITY)
+    if t < REPEAT_MIN then t = REPEAT_MIN end         -- small textures are stretched a little (a bit blurrier at the closest zoom) rather than tiled densely
     if t < MIN then t = MIN end
     if t > MAX then t = MAX end
     return t

@@ -20,7 +20,7 @@ def optimal_tile(px):
     """Tile size in world units for a texture px pixels wide: the same formula as editor/runtime/lua/editor/texscale.lua (texel density: px / (screen pixels per world unit
     at 1080 px, 45 degrees field of view, 27 units eye distance), rounded to 0.5, 4 .. 64)."""
     density = 1080 / (2 * 27 * math.tan(math.radians(45) / 2))
-    return min(64.0, max(4.0, math.floor(px / density / 0.5 + 0.5) * 0.5))
+    return min(64.0, max(4.0, 20.0, math.floor(px / density / 0.5 + 0.5) * 0.5))      # 20 = texscale.lua REPEAT_MIN (a smaller tile repeats visibly)
 
 
 # grass001_albedo.dds / _normals.dds of Evergreen are 512 x 512 (174904 bytes: DXT1 with mip maps, _asset_index/scd/env.scd.tsv)
