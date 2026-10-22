@@ -311,6 +311,17 @@ Panels.Register{
             if v.frame == true then v.body:Destroy() else v.frame:Destroy() end      -- the children go with it
         end
 
+        --- Cuts the status line (the parameter summary, an error, the output caption) to the node's real width at the zoom. ONE place for it: Geometry (creation, zoom change, a
+        --- change of the rows or the label) and UpdateNodes (the text changed) both call it. It is keyed on (text, width), so a call that changes nothing measures nothing. A pan, a
+        --- zoom and the editor's first fit only lay out (SetView does not run UpdateNodes), so a line cut at an old zoom used to stay as wide as it was then.
+        local function FitStatus(v, node, z)
+            local maxW = math.floor(NodeW(node) * z) - Skin.S(10)
+            local key = maxW .. '|' .. (v.statusRaw or '')
+            if v.statusFitKey == key then return end
+            v.statusFitKey = key
+            W.Fit(v.status, v.statusRaw or '', maxW)
+        end
+
         --- Places the children of a node at the zoom (relative to the frame).
         local function Geometry(v, node, z)
             local def = Nodes.Defs[node.type]
@@ -345,6 +356,7 @@ Panels.Register{
             v.title:SetText(node.label or (def and def.label) or node.type)
             W.Fit(v.title, node.label or (def and def.label) or node.type, nw - Skin.S(10))
             In(v.title, Skin.S(5), math.floor((math.floor(HEAD * z) - v.title.Height()) / 2))
+            FitStatus(v, node, z)
             -- the status line is centred in the strip below the ports and the thumbnail, inside the frame (it used to start inside the thumbnail's rows and ran over the bottom edge)
             local stripTop = math.floor((HEAD + PAD + BodyH(node)) * z)
             In(v.status, Skin.S(5), stripTop + math.max(0, math.floor((math.floor(STAT * z) - v.status.Height()) / 2)))
@@ -605,7 +617,8 @@ Panels.Register{
                         v.thumb:SetSolidColor('00000000')
                     end
                     v.frame:SetSolidColor(fill)
-                    W.Fit(v.status, text, math.floor(NW * zoom) - Skin.S(10))
+                    v.statusRaw = text
+                    FitStatus(v, n, zoom)
                     v.status:SetColor(col)
                 end
               end

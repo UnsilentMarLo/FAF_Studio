@@ -364,7 +364,7 @@ function Plan()
         plan.has[role] = true
         if layer == 0 then plan.base = role end
     end
-    if State.layers then
+    if State.layers and table.getn(State.layers) == table.getn(Order) then
         plan.manual = true
         local fit = FitLayers(State.layers)
         for i, id in Order do

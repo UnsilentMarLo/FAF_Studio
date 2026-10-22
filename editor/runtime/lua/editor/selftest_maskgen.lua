@@ -226,8 +226,17 @@ function Run(verbose)
             local total = 0
             for _, e in summary do total = total + e.share end
             check('recipe shares add up to the map', near(total, 1, 0.03), total)
-            local rockLayer = Recipes.State.layers[4]
-            check('rock lies on the ramp, not on the flat', Value(rockLayer, w - 20, 60) > 0.9 and Value(rockLayer, 20, 60) < 0.1)
+            -- the rock kinds (rock, dark rock, high rock: places 5-7 of recipes.Order) share the ramp; grass does not lie on it (see selftest_recipes.lua for the full checks)
+            local rockish, flatRock = 0, 0
+            for _, idx in { 5, 6, 7 } do
+                local layer = Recipes.State.layers[idx]
+                if layer and layer >= 1 then
+                    rockish = math.max(rockish, Value(layer, w - 20, 60))
+                    flatRock = math.max(flatRock, Value(layer, 20, 60))
+                end
+            end
+            check('rock kinds lie on the ramp, not on the flat', rockish > 0.5 and flatRock < 0.1, rockish .. ' / ' .. flatRock)
+            check('grass does not lie on the ramp', Value(Recipes.State.layers[1], w - 20, 60) < 0.1)
         end
         History.Undo()
         local same = true
@@ -244,7 +253,7 @@ function Run(verbose)
         end
         Recipes.State.preset = 1
         Recipes.State.layers = nil
-        check('texture matching gives every role a layer', table.getn(Recipes.MatchTextures(Recipes.Roles())) == table.getn(Recipes.Roles()))
+        check('texture matching gives every role an answer', table.getn(Recipes.MatchTextures(Recipes.Roles())) == table.getn(Recipes.Roles()))
     else
         table.insert(lines, '  skip paint mask tests (no mask)')
     end

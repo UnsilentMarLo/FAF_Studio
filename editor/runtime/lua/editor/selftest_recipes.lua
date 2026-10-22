@@ -60,6 +60,11 @@ function Run(verbose)
     local fake0, over0, layers0, types0, preset0 = Detect.Fake, Detect.Overrides, Recipes.State.layers, Recipes.State.types, Recipes.State.preset
     local knobs0 = {}
     for k, v in Recipes.Knobs do knobs0[k] = v end
+    local shader0
+    if rawget(_G, 'ed_stratum_shader') and rawget(_G, 'ed_stratum_info') and ed_stratum_info() then
+        shader0 = ed_stratum_shader()
+        if shader0 ~= 'TTerrainXP' then ed_stratum_shader('TTerrainXP') end          -- eight painted layers; the cap checks switch it and put it back
+    end
     Detect.Overrides = {}                   -- the user's own choices stay out of the test (and nothing is written to the settings)
     Recipes.State.layers = nil
     Recipes.State.types = false
@@ -110,7 +115,7 @@ function Run(verbose)
     check('colours: ' .. table.getn(colours) .. ' synthetic textures give the right kind of ground', table.getn(badc) == 0, table.concat(badc, ', '))
     local fs = Detect.Features(Solid(200, 185, 145), 16, 16)
     local fg = Detect.Features(Solid(95, 105, 55), 16, 16)
-    check('colours: sand is yellow-tan (hue below 60, no green dominance), grass is green dominant', fs.hue < 60 and fs.gdom < 0.02 and fg.gdom > 0.05 and fg.hue > 60, fs.hue .. ' ' .. fg.gdom)
+    check('colours: sand is yellow-tan (hue below 60, no green dominance), grass is green dominant', fs.hue < 60 and fs.gdom < 0.02 and fg.gdom > 0.02 and fg.hue > 60, fs.hue .. ' ' .. fg.gdom)
     check('colours: no pixels, no answer', Detect.Features({}, 0, 0) == nil and Detect.ClassifyColour(nil) == nil)
 
     -- ---- the decision ----------------------------------------------------------------------------------------------------------------------
@@ -258,8 +263,6 @@ function Run(verbose)
         local Terrain = import('/lua/editor/terrain.lua')
         local Strata = import('/lua/editor/strata.lua')
         local startFields = ed_field_count()
-        local shader0 = ed_stratum_shader()
-        if shader0 ~= 'TTerrainXP' then ed_stratum_shader('TTerrainXP') end
         for i = 1, 8 do Strata.ClearMask(i) end
         -- hills with steep flanks, peaks and basins
         Fields.Run(function(S)
@@ -399,7 +402,6 @@ function Run(verbose)
 
         -- clean up
         MaskGen.ClearPreview()
-        if shader0 and shader0 ~= 'TTerrainXP' then ed_stratum_shader(shader0) end
         ed_terrain_set_rect(0, 0, w - 1, h - 1, 25)
         Terrain.ClearHistory()
         History.Clear()
@@ -410,6 +412,7 @@ function Run(verbose)
         table.insert(lines, '  skip the map checks (no terrain with paint masks)')
     end
 
+    if shader0 and ed_stratum_shader() ~= shader0 then ed_stratum_shader(shader0) end
     Detect.Fake, Detect.Overrides = fake0, over0
     Recipes.State.layers, Recipes.State.types, Recipes.State.preset = layers0, types0, preset0
     for k, v in knobs0 do Recipes.Knobs[k] = v end

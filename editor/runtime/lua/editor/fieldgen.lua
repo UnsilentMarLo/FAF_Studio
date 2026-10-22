@@ -132,10 +132,9 @@ end
 local function Weather(S, raw, p)
     local Erosion = import('/lua/editor/erosion.lua')
     local v = Erosion.Defaults('droplet')
-    for k, x in { density = 0.3 + 3.2 * p.gullies, lifetime = 70, inertia = 0.25, capacity = 6, erode = 0.45, deposit = 0.12, gravity = 5, thermal = 0.4, thermal_steps = 3,
-                  talus = 0.9, vary = 0.4, protect = 0.5, drop_vary = 0.6, radius = 2, max_change = math.max(1, p.amplitude * 0.5) } do
-        v[k] = x
-    end
+    local mine = { density = 0.3 + 3.2 * p.gullies, lifetime = 70, inertia = 0.25, capacity = 6, erode = 0.45, deposit = 0.12, gravity = 5, thermal = 0.4, thermal_steps = 3,
+                   talus = 0.9, vary = 0.4, protect = 0.5, drop_vary = 0.6, radius = 2, max_change = math.max(1, p.amplitude * 0.5) }
+    for k, x in mine do v[k] = x end
     local relief = S:Op('amplitude', { a = raw, amplitude = math.max(1, p.amplitude) * 2, mode = 'range', centre = 'min' })
     local params = Erosion.OpParams('droplet', v, 1, Seed(p, 100))
     params.a = relief
