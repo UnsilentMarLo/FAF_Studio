@@ -1,5 +1,6 @@
 -- The terrain shader browser (Layers panel > Shader): every terrain shader of the game's shader file with a search, the family it belongs to, what it does, a table of what each layer holds for
 -- it (albedo and normal map) and notes on how to use it. Data: shaders.lua (descriptions, layer tables, discovery of new shaders). One modal dialog like the other browsers.
+-- The info column keeps its title and tabs fixed; everything below scrolls (textview.lua), so nothing leaves the dialog. The dialog is clamped to the window.
 -- "Use this shader" only switches the shader; "Convert layers..." (convertdialog.lua) also converts the paint masks, the layer slots and the Upper layer to the shader's format.
 --
 --   Open(done[, opts])   done(shaderId) is called after the user chose one and the map uses it (or converted the layers to it); opts.convert: the browser is for choosing the shader to convert to
@@ -211,6 +212,7 @@ function Open(done, opts)
         if state.sel then list:SetSelected(state.sel) end
         ShowInfo()
     end })
+    table.insert(state.fixed, field.frame)
 
     use = Own(d:Button('Use this shader', 14, HEIGHT - 84, 128, 28, function()
         local s = Selected()
@@ -241,43 +243,6 @@ function Open(done, opts)
     end, { toggle = true, tip = 'How the textures of this shader have to be made and how to use it.' }))
     view = TextView.New(d, X, VIEW_Y, INFOW, VIEW_BOTTOM - VIEW_Y)
     state.view = view
-
-    if state.sel then list:SetSelected(state.sel) end
-        ShowInfo()
-    end })
-
-    use = Own(d:Button('Use this shader', 14, HEIGHT - 84, 128, 28, function()
-        local s = Selected()
-        if not s then return end
-        local ok, why = Shaders.Set(s.id)
-        if not ok then Say(tostring(why)) return end
-        Dialog.Close()
-        if done then done(s.id) end
-    end, { tip = 'Make the map draw its terrain with the chosen shader. Only the shader changes: paint masks, textures and layers stay as they are (use Convert layers... to adapt them).' }))
-    convert = Own(d:Button('Convert layers...', 150, HEIGHT - 84, 140, 28, function()
-        local s = Selected()
-        if not s then return end
-        if s.id == state.current and not Shaders.Mismatch() then Say('The map already uses ' .. s.id) return end
-        if not (s.profile and s.profile.supported) then Say('The editor cannot convert layers to ' .. s.id .. (s.profile and s.profile.reason and (': ' .. s.profile.reason) or '')) return end
-        Say('')
-        import('/lua/editor/gui/convertdialog.lua').Open(s.id, function() if done then done(s.id) end end)
-    end, { tip = 'Change the shader and convert the map\'s layers to its format in one undo step: paint masks re-encoded where the mask range differs, layer 8 handled, the Upper layer replaced where it must be. A dialog lists what is done and what is not.' }))
-    if opts.convert then convert:SetOn(true) end
-    Own(d:Button('Close', WIDTH - 110, HEIGHT - 84, 96, 28, function() Dialog.Close() end, { tip = 'Close without changing the shader.' }))
-
-    tabLayers = d:Button('Layers', 332, 200, 110, 24, function()
-        state.tab = 'layers'
-        ShowInfo()
-    end, { toggle = true, tip = 'A table of what each layer (Base, layers 1 to 8, Upper) holds for this shader: the albedo (colour) texture and the normal map.' })
-    tabNotes = d:Button('Notes', 448, 200, 110, 24, function()
-        state.tab = 'notes'
-        ShowInfo()
-    end, { toggle = true, tip = 'How the textures of this shader have to be made and how to use it.' })
-    moreBtn = d:Button('Show more', 332, 400, 110, 24, function()
-        state.more = not state.more
-        ShowInfo()
-    end, { tip = 'Show the whole text, or cut it short again.' })
-
 
     if state.sel then list:SetSelected(state.sel) list:ScrollTo(state.sel) end
     ShowInfo()
