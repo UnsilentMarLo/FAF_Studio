@@ -1026,10 +1026,11 @@ Panels.Register{
         Pn.buttons = {}
         local function Add(b) table.insert(Pn.buttons, b) return b end
 
-        Pn.status = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
+        -- the status text under the toolbar is wrapped (at most 3 lines) in labels made by UpdateStatus; the canvas starts below it
+        Pn.statusLines, Pn.statusH, Pn.statusY, Pn.statusKey = {}, Skin.S(14) + Skin.S(2), 0, false
 
         Add(Btn('Build', 54, function()
-            local r, err = GRun.Build()
+            local r, err, trace = GRun.Build()
             if r then
                 local slow = ''
                 for i, s in r.slow do
@@ -1040,10 +1041,24 @@ Panels.Register{
                 end
                 state.text = string.format('built in %.0f ms: %d height samples, %d layers, %d types, %d props (one undo step)%s', r.ms, r.changed, r.layers, r.types, r.props, slow)
                 if r.mapNote then state.text = state.text .. r.mapNote end
+                Say(state.text)
+                -- a part of the build that could not be applied is a warning, not a failure: the status line (warning colour, with a Switch shader button when the shader is the cause) and the Console say it
+                if r.warnings and r.warnings[1] then
+                    local texts, shader = {}, false
+                    for _, wn in r.warnings do
+                        table.insert(texts, wn.text)
+                        if wn.code == 'shader' then shader = true end
+                        WARN(wn.text)
+                    end
+                    state.text = state.text .. '   Warning: ' .. table.concat(texts, ' ')
+                    state.warnText, state.shaderWarn = state.text, shader
+                end
             else
                 state.text = 'not built: ' .. tostring(err)
+                Say(state.text)
+                -- the traceback of an unexpected error goes to the log once, as SPEW (the lowest priority), never into the message
+                if trace and rawget(_G, 'SPEW') then SPEW('terrain graph build: ' .. tostring(trace)) end
             end
-            Say(state.text)
             Pn:Tick(true)
         end))
         Pn.bTerrain = Add(Btn('On terrain', 80, function(self)
@@ -1105,9 +1120,12 @@ Panels.Register{
         end))
 
         -- ---- ticking -----------------------------------------------------------------------------------------------------------------
+        --- The status text, wrapped under the toolbar (2 - 3 lines; the full text is in the Console), in the warning colour while a build warning is shown, with the Switch shader button when
+        --- the warning is about the shader. When the height of the status area changes the panel is laid out again, so the canvas gives up exactly that height.
         function Pn:UpdateStatus()
             local g = Graph.Current
             self.seedLabel:SetText('seed ' .. g.seed)
+            if not self.w then return end
             local rep = GRun.Report
             local line = state.text
             if line == '' and rep then
@@ -1120,7 +1138,39 @@ Panels.Register{
                         errs > 0 and ('   ' .. errs .. ' with errors') or '')
                 end
             end
-            W.Fit(self.status, line, math.max(Skin.S(60), self.w - Skin.S(16)))
+            line = string.gsub(tostring(line), '%c+', ' ')
+            local warn = state.warnText ~= nil and state.warnText == state.text
+            local shaderBtn = warn and state.shaderWarn
+            local key = line .. '|' .. self.w .. '|' .. self.statusY .. '|' .. (warn and 'w' or '') .. (shaderBtn and 's' or '')
+            if key == self.statusKey then return end
+            self.statusKey = key
+            for _, l in self.statusLines do l:Destroy() end
+            if self.bSwitch then self.bSwitch:Destroy() self.bSwitch = false end
+            local pad, lineH = Skin.S(6), Skin.S(14)
+            local width = math.max(Skin.S(60), self.w - 2 * pad)
+            local maxChars = math.max(8, math.floor(width / Skin.S(7)))
+            local lines, bottom = W.Paragraph(group, import('/lua/editor/consolelog.lua').BreakWords(line, maxChars), pad, self.statusY, width,
+                { color = warn and c.warn or c.textDim, size = 'small' }, lineH, self.statusY + 3 * lineH)
+            self.statusLines = lines
+            local h = math.max(1, table.getn(lines)) * lineH + Skin.S(2)
+            if shaderBtn then
+                self.bSwitch = W.Button(group, 'Switch shader...', 0, 0, Skin.S(120), Skin.S(22), function()
+                    import('/lua/editor/gui/shaderbrowser.lua').Open(function(id)
+                        Say('terrain shader: ' .. id)
+                        state.warnText, state.shaderWarn, state.text = nil, false, 'terrain shader: ' .. id .. '. Press Build again to apply the map textures.'
+                        Pn:Tick(true)
+                    end)
+                end, { tip = 'Open the shader browser to choose a terrain shader that reads the map-wide textures (Terrain000 or a later one). Build again afterwards.' })
+                W.Place(self.bSwitch, group, pad, self.statusY + h, Skin.S(120), Skin.S(22))
+                h = h + Skin.S(26)
+            end
+            if h ~= self.statusH and not self.relaying then
+                self.statusH = h
+                self.relaying = true
+                self:OnResize(self.w, self.h)
+                self.relaying = false
+            end
+            self.statusH = h
         end
 
         --- Evaluates when the graph changed, refreshes the pictures, the live terrain preview and the mask view.
@@ -1178,8 +1228,9 @@ Panels.Register{
                 end
                 x = x + iw + Skin.S(4)
             end
-            W.Place(self.status, group, pad, y + rowH + 2)
-            local top = y + rowH + Skin.S(22)
+            -- the status text (UpdateStatus) sits under the toolbar; the canvas starts below its height, whatever it is
+            self.statusY = y + rowH + 2
+            local top = y + rowH + Skin.S(6) + self.statusH
             self.toolbarH = top
             self.cw, self.ch = w, math.max(Skin.S(80), h - top)
             bg.Left:Set(function() return group.Left() end)

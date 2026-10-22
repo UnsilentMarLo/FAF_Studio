@@ -596,6 +596,24 @@ function Run(verbose)
             canvasMod.state.onTerrain = false
             GRun.RevertTerrain()
             check('revert takes it off', Sum() == flat)
+            -- the status text wraps inside the panel (at most 3 lines, the full text is in the Console) and the canvas gives up exactly its height
+            canvasMod.state.text = 'built'
+            Pn:Tick(true)
+            local ch1, h1 = Pn.ch, Pn.statusH
+            canvasMod.state.text = 'not built: ' .. string.rep('a very long failure text ', 30) .. 'C:\\some\\long\\path\\' .. string.rep('x', 200) .. '\nstack traceback:\n\tgraphrun.lua:767: in function f'
+            Pn:Tick(true)
+            local nl = table.getn(Pn.statusLines)
+            check('a long status text wraps into 2 or 3 lines', nl >= 2 and nl <= 3, nl)
+            local widest = 0
+            for _, l in Pn.statusLines do widest = math.max(widest, l.Width()) end
+            check('the status lines stay inside the panel', widest <= Pn.w, widest .. ' > ' .. Pn.w)
+            check('the canvas is shorter by what the status needs', Pn.statusH > h1 and Pn.ch < ch1 and Pn.toolbarH >= Pn.statusY + Pn.statusH, Pn.ch .. ' ' .. ch1)
+            canvasMod.state.warnText, canvasMod.state.shaderWarn = canvasMod.state.text, true
+            Pn:Tick(true)
+            check('a shader warning in the status adds the Switch shader button', Pn.bSwitch and true or false)
+            canvasMod.state.warnText, canvasMod.state.shaderWarn, canvasMod.state.text = nil, false, ''
+            Pn:Tick(true)
+            check('and a new text takes the button away', not Pn.bSwitch)
             Graph.New('untitled')
             Pn:Tick(true)
         end

@@ -1,6 +1,6 @@
 -- Self test of consolelog.lua (the data and logic of the Console panel): capture of LOG with all arguments (a fake LOG in a fake environment), the wrapper keeping its
 -- return values and being installed once, the repeat counter, the ring cap, the text cut, many-line texts, the level / text filter, the formats, the command line
--- (results, errors, history) and the sim path. Through /edcmd in an /editor session:
+-- (results, errors, history) and the sim path, single-line entries, W.Fit / W.FitCached with tiny widths on a fake label, and Fields.CleanError / ErrorTrace / Try. Through /edcmd in an /editor session:
 --   return import('/lua/editor/selftest_console.lua').Run()
 -- It works on a state of its own and puts the live console back afterwards.
 --
@@ -141,6 +141,67 @@ function Run()
         Check(Console.HistoryStep(1, 'x') == nil, 'and then there is nothing further')
         Console.UseState(nil)
         Check(Console.HistoryStep(-1, '') == nil, 'an empty history gives nothing')
+
+        -- one line per entry: a text control draws the lines of a many-line text on top of each other (a long error message with its traceback was one unreadable row)
+        Console.UseState(nil)
+        local tb = 'not built: map normal map: boom\nstack traceback:\n\tgraphrun.lua:767: in function `BuildMapTextures`\r\n\t[C]: in function `pcall`\vx\fy'
+        Console.Add('status', tb, 'status')
+        local flat = true
+        for i = 1, Console.Count() do
+            local e = Console.Get(i)
+            if string.find(e.text, '%c') or string.find(Console.RowText(e), '%c') then flat = false end
+        end
+        Check(Console.Count() == 4 and flat, 'a message with a traceback becomes single-line entries without any control character')
+        Check(Console.Get(4).text == '    [C]: in function `pcall` x y', 'a vertical tab and a form feed become spaces too: ' .. tostring(Console.Get(4).text))
+        Console.Add('info', 'a\1b\2c', 'editor')
+        Check(Console.Get(Console.Count()).text == 'a b c', 'other control characters become spaces')
+
+        -- Fit never leaves overprinting: one line, nothing wider than the room, nothing at all when not even "..." fits
+        local okW, W = pcall(import, '/lua/editor/gui/widgets.lua')
+        if okW and W and W.Fit then
+            local label = { text = '' }
+            label.SetText = function(self, t) self.text = t end
+            label.GetText = function(self) return self.text end
+            label.Width = function() return string.len(label.text) * 10 end
+            label.Height = function() return 14 end
+            local long = 'stack traceback:\n\t...dist\\fafstudio\\bin\\..\\editor\\lua\\editor\\graphrun.lua:767: in function BuildMapTextures'
+            W.Fit(label, long, 100000)
+            Check(not string.find(label.text, '%c') and label.text == string.gsub(long, '%c+', ' '), 'Fit makes the text one line')
+            W.Fit(label, long, 200)
+            Check(string.len(label.text) * 10 <= 200 and string.sub(label.text, -3) == '...' and not string.find(label.text, '%c'), 'Fit cuts to the room with an ellipsis: ' .. label.text)
+            W.Fit(label, long, 30)
+            Check(label.text == '...', 'room for the ellipsis only: ' .. label.text)
+            W.Fit(label, long, 29)
+            Check(label.text == '', 'no room for even the ellipsis: nothing is drawn')
+            W.Fit(label, long, 0)
+            Check(label.text == '', 'zero room: nothing is drawn')
+            W.Fit(label, long, -40)
+            Check(label.text == '', 'negative room: nothing is drawn')
+            W.Fit(label, 'ok', 100)
+            Check(label.text == 'ok', 'a text that fits is left alone')
+            W.Fit(label, nil, 100)
+            Check(label.text == '', 'a nil text is empty')
+            -- a row binds many times: the same label is reused, the text is the same one line every time, and a narrow row shows less, not more
+            local e = Console.Add('error', tb, 'editor')
+            for _, room in { 400, 60, 25, 400 } do
+                W.FitCached(label, Console.RowText(e), room)
+                Check(not string.find(label.text, '%c') and string.len(label.text) * 10 <= room, 'a row bound at ' .. room .. ' pixels is one line that fits: ' .. label.text)
+            end
+        else
+            table.insert(out, '  skip the Fit checks (no widget kit in this state)')
+        end
+
+        -- an error message as the user reads it
+        local Fields = import('/lua/editor/fields.lua')
+        local raw = 'x\\y\\graphrun.lua(835): ...graphrun.lua(767): map normal map: boom\nstack traceback:\n\tgraphrun.lua:767: in function f\nstack traceback:\n\tfields.lua:122: in function g'
+        Check(Fields.CleanError(raw) == 'map normal map: boom', 'CleanError drops the tracebacks and every position prefix: ' .. Fields.CleanError(raw))
+        Check(Fields.CleanError('gui.lua:12: attempt to call a nil value') == 'attempt to call a nil value' and Fields.CleanError('[string "x"]:3: bad') == 'bad', 'both prefix forms of the interpreter go')
+        Check(Fields.CleanError('plain message') == 'plain message' and Fields.CleanError('see: here') == 'see: here', 'a message without a position is kept')
+        Check(Fields.ErrorTrace(raw) == 'stack traceback:\n\tgraphrun.lua:767: in function f' and Fields.ErrorTrace('plain') == nil, 'ErrorTrace gives the first (deepest) traceback once')
+        local okT, a1 = Fields.Try(function(S) error('inner failure', 0) end)
+        Check(okT == false and Fields.CleanError(a1) == 'inner failure', 'Fields.Try returns the failure instead of raising it')
+        local okT2, a2 = Fields.Try(function(S) return 7 end)
+        Check(okT2 == true and a2 == 7, 'and the results of a run that works')
     end)
     if not ok then Check(false, 'error: ' .. tostring(err)) end
     Console.UseState(live)

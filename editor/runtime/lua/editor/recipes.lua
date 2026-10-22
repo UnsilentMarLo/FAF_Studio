@@ -1,23 +1,44 @@
--- Stratum recipes (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T2): a preset says which kinds of ground the map has (grass, dirt, sand, rock, cliff, snow ...), from which slope / height /
--- curvature / water / noise rules each one is made, and in which order they lie on top of each other. Apply fills the paint masks of the texture layers (and, if asked, the terrain-type
--- grid) in one undo step. The rules are the mask generator's (maskgen.lua), so every role is also something you can open there.
+-- Stratum recipes (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T2): a recipe paints the texture layers of the map with the eight kinds of ground a landscape is made of, from height, slope,
+-- curvature, water and noise rules. Apply fills the paint masks (and, if asked, the terrain-type grid) in one undo step. The rules are the mask generator's (maskgen.lua).
 --
--- Roles are listed from the bottom up. The first role is the base layer (no mask: it is what is left). The other roles go to texture layers 1..Cap() (Layers[i] = the layer of role i, 0 = skip
--- the role); the layers above take away: the shader lets a higher layer cover a lower one, and the terrain types follow what is seen most in each cell, so a cell gets the type of its
--- visible ground (the default type of the layer's texture, terraintype.lua).
+-- THE EIGHT ROLES. Every role has a SELECTION rule (where this kind of ground belongs) built from the map's own numbers, never fixed heights:
+--   grass     open ground: land above the beach, not steep, below the snow line (only drawn when grass is NOT the base layer: the base is what is left)
+--   dirt      patches: noise whose threshold is calibrated so the patches cover Dirt coverage (a share) of the flat ground
+--   wet       wet ground: the strip along the waterline and the concave drainage lines (gullies)
+--   sand      beach: the shore band of Beach half width, on gentle ground (without water: the lowest 6% of the land)
+--   rock      cliffs: slope from Rock slope on, broken up by noise, solid from Cliff slope on
+--   darkrock  cavities: steep ground that is concave (ambient-occlusion like) or in the lowest quarter of the land
+--   highrock  peaks: steep or convex ground above High rock starts at (a percentile of the land heights)
+--   snow      the top Snow covers share of the land heights (a percentile), not steep, with a breakup
+-- Heights are PERCENTILES of the land heights (the cells above the water level) read from the field engine (Stats), noise thresholds are percentiles of the noise itself (NoiseAt), so
+-- "snow covers the top 8%" and "dirt covers 25%" mean that on any map.
 --
--- The shader of the map decides two things (strata.lua Profile / Range): how many layers have a paint mask (TTerrainXP 8; the numbered shaders 7, their 8th mask is the roughness multiplier or unused;
--- TTerrainGlow 4; TTerrain 4 too, but layers 5-8 switch the map to TTerrainXP as before) and how a mask byte is read (half or full range). A role on a layer the shader cannot paint is moved to the highest
--- free layer (or shares the top layer: the masks are merged); the masks are written in the shader's encoding by the field commit (fields.lua), so a recipe looks the same on every shader.
+-- ROLE DETECTION, NOT LAYER NUMBERS. Which layer holds which role is found from the textures (roledetect.lua: file name words, then the colour of a 16 x 16 reduction), corrected by the user
+-- per texture (the table in the panel). Plan() lists, per role, the layers that hold it. A role with no layer is skipped (a layer is never painted with a texture of the wrong kind). Two layers of
+-- one role: the lower one gets the role's region, the others get noise patches inside it (variants). The BASE layer (0) can be any role: it has no mask and is the default ground of its role,
+-- so the recipe drops that role's own rule and lets the other roles claim their places (base sand: no beach rule, grass covers the interior; base snow: no snow rule, grass and dirt stay
+-- below the snow line; base rock: cliffs are what is left). The result does not depend on which layer number holds what.
 --
---   Presets                       { id, name, uses = { knob names }, roles = function(knobs, stats) -> list of { id, label, keywords, rules } }
---   Knobs, KnobInfo               the settings shared by the presets (cliff / rock angle, snow line, beach width, breakup, patch size, seed)
---   State                         { preset, layers = { [roleIndex] = layer }, types = bool }
---   Roles() -> list               the roles of the current preset with the current knobs
---   Cap()                         the highest layer the shader of the map paints with a mask       FitLayers(layers) -> layers the roles really get       Notes(roles) -> { shaderLine, warnings }
---   AutoLayers(roles)             layer numbers in order (1, 2, 3 ...)      MatchTextures(roles)     layer numbers by the names of the textures the layers hold now
---   PreviewRole(i) -> field       evaluates one role at preview resolution and shows it (maskgen preview)
---   Apply() -> summary | nil, message       writes everything: ONE undo step; the summary lists the share of each role
+-- ORDER AND OPACITY. The engine draws layer 0, then 1 .. 8 on top; a mask byte is the OPACITY of its layer, so what you see of layer l is m_l * (1 - m_above). The recipe works in VISIBLE WEIGHTS
+-- instead: the roles are resolved from the top of the priority list down (Priority: snow, high rock, dark rock, rock, wet, sand, dirt, grass; a role takes its selection of what the roles
+-- above left, so the weights add up to 1 and never fire all at once), and then every layer gets the opacity that shows exactly its weight whatever its layer number is:
+--     m_l = w_l / (1 - sum of the weights of the layers above l)         (clamped to 0..1; the division is a monotone curve through 1 / x, RECIP)
+-- The bottom-to-top reading is base, grass, dirt, wet, sand, rock, dark rock, high rock, snow; the priority list is that stack read from the top. A layer outside the recipe (unknown texture,
+-- role switched off) keeps its mask and covers what lies under it. The terrain types follow what is seen most in each cell (terraintype.lua).
+--
+-- The shader of the map decides how many layers have a paint mask (strata.lua Profile / Range): TTerrainXP 8; the numbered shaders 7; TTerrainGlow 4; TTerrain 4, but layers 5-8 switch it to
+-- TTerrainXP as before. A texture on a layer the shader cannot paint is not used (Notes says so). The masks are written in the shader's encoding by the field commit (fields.lua).
+--
+--   Presets, SelectPreset(i)       styles: knob values and roles switched off      Knobs, KnobInfo      the settings (cliff / rock angle, snow share, high rock start, beach, wet strip, dirt share, dark rock, breakup, patch, seed)
+--   State                          { preset, types, selected (layer), layers = nil | explicit role -> layer list (AutoLayers / MatchTextures; nil = detect) }
+--   Order, Priority, RoleInfo      the roles bottom to top, in conflict order, their labels
+--   Stats() / HeightAt(st, p) / NoiseAt(kind, seed, size, octaves, p)    the map's height percentiles, the percentile of a noise
+--   Plan() -> plan                 { base, has, byRole, missing, unknown, beyond, info, cap }       Context(plan) -> { base, has }
+--   Roles([cx]) -> list            { id, label, keywords, rules, base, off } for the plan of the map (or the given context)
+--   Cap()  FitLayers(layers)  Notes(roles) -> line, warnings    the shader cap; the explicit-list helper; what the panel says
+--   AutoLayers(roles)  MatchTextures(roles)    explicit layer lists (-1 = skip): the texture set layout / what the detection found
+--   AssignMissing() -> count, text   gives empty layers the textures of the roles the map lacks (texsets.lua)
+--   PreviewRole(i)  Apply() -> summary | nil, message   Coverage() -> { mask = {[layer]=share}, seen = {...} } from the committed masks
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
@@ -25,6 +46,8 @@ local Fields = import('/lua/editor/fields.lua')
 local History = import('/lua/editor/history.lua')
 local MaskGen = import('/lua/editor/maskgen.lua')
 local Strata = import('/lua/editor/strata.lua')
+local Detect = import('/lua/editor/roledetect.lua')
+local World = import('/lua/editor/world.lua')
 
 local function Rule(type, values, op, invert)
     local r = MaskGen.NewRule(type)
@@ -34,16 +57,195 @@ local function Rule(type, values, op, invert)
     return r
 end
 
-Knobs = { cliff = 45, rock = 28, snow = 0.78, beach = 3, breakup = 0.5, patch = 50, seed = 1 }
+local function Slope(lo, hi, soft, op) return Rule('slope', { lo = math.max(0, lo), hi = math.min(90, hi), soft = soft or 5 }, op) end
+local function Above(st, h, soft, op) return Rule('height', { lo = h, hi = st.hmax + 1000, soft = soft }, op) end
+local function Below(st, h, soft, op) return Rule('height', { lo = st.hmin - 1000, hi = h, soft = soft }, op) end
+
+Knobs = { cliff = 45, rock = 28, snow = 0.08, high = 0.62, beach = 3, wet = 1.5, dirt = 0.25, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
+KnobDefaults = { cliff = 45, rock = 28, snow = 0.08, high = 0.62, beach = 3, wet = 1.5, dirt = 0.25, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
 
 KnobInfo = {
     { key = 'cliff', label = 'Cliff slope from (degrees)', min = 20, max = 85, step = 1, fmt = '%d' },
     { key = 'rock', label = 'Rock slope from (degrees)', min = 5, max = 80, step = 1, fmt = '%d' },
-    { key = 'snow', label = 'Snow line (share of the height range)', min = 0, max = 1, step = 0.01, fmt = '%.2f' },
+    { key = 'snow', label = 'Snow covers the top (share of land)', min = 0, max = 0.6, step = 0.01, fmt = '%.2f' },
+    { key = 'high', label = 'High rock starts at (share of land height)', min = 0.2, max = 0.95, step = 0.01, fmt = '%.2f' },
     { key = 'beach', label = 'Beach half width (units)', min = 0, max = 20, step = 0.5, fmt = '%.1f' },
+    { key = 'wet', label = 'Wet strip half width (units)', min = 0, max = 10, step = 0.5, fmt = '%.1f' },
+    { key = 'dirt', label = 'Dirt coverage (share of flat ground)', min = 0, max = 0.8, step = 0.01, fmt = '%.2f' },
+    { key = 'dark', label = 'Dark rock in cavities (amount)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
     { key = 'breakup', label = 'Edge breakup (noise)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
     { key = 'patch', label = 'Patch size (units)', min = 8, max = 300, step = 2, fmt = '%d' },
     { key = 'seed', label = 'Seed', min = 0, max = 9999, step = 1, fmt = '%d' },
+}
+
+ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', 'breakup', 'patch', 'seed' }
+
+--- The styles. `knobs` replaces the settings when the style is chosen (SelectPreset); `off` lists roles the style does not paint.
+Presets = {
+    { id = 'temperate', name = 'Natural (all eight kinds of ground)', uses = ALL_KNOBS, knobs = {}, off = {} },
+    { id = 'alpine', name = 'Alpine (more rock, high rock and snow)', uses = ALL_KNOBS, knobs = { snow = 0.18, high = 0.5, cliff = 42, rock = 24, dark = 0.6 }, off = {} },
+    { id = 'desert', name = 'Desert (dust and sand, no snow)', uses = ALL_KNOBS, knobs = { snow = 0, beach = 4, dirt = 0.35, dark = 0.4, wet = 1 }, off = { snow = true } },
+    { id = 'arctic', name = 'Arctic (snow and ice, rock)', uses = ALL_KNOBS, knobs = { snow = 0.4, high = 0.45, beach = 2, dirt = 0.15 }, off = {} },
+    { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 36, rock = 20, dirt = 0.4, dark = 0.8, high = 0.5, snow = 0.05 }, off = {} },
+    { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.3, snow = 0, rock = 34, cliff = 50 }, off = { snow = true } },
+}
+
+State = { preset = 1, types = true, selected = 0 }          -- State.layers (nil): detect the roles from the textures; a list: the roles are on those layers
+
+--- Chooses a style: the settings go back to the defaults, then the style's own values are put on top.
+function SelectPreset(i)
+    local p = Presets[i]
+    if not p then return false end
+    State.preset = i
+    for k, v in KnobDefaults do Knobs[k] = v end
+    for k, v in p.knobs or {} do Knobs[k] = v end
+    return true
+end
+
+-- ---- numbers of the map ------------------------------------------------------------------------------------------------------------------------------------
+
+--- Heights 0..100 percent (index p + 1) of the values >= minv (all when nil), by a 1024 bin histogram; the count. nil when no value qualifies.
+function Percentiles(vals, minv)
+    local n = table.getn(vals)
+    local lo, hi, cnt = nil, nil, 0
+    for i = 1, n do
+        local v = vals[i]
+        if not minv or v >= minv then
+            cnt = cnt + 1
+            if not lo or v < lo then lo = v end
+            if not hi or v > hi then hi = v end
+        end
+    end
+    if cnt < 1 then return nil end
+    local pct = {}
+    if hi - lo < 0.000001 then
+        for p = 0, 100 do pct[p + 1] = lo end
+        return pct, cnt
+    end
+    local B = 1024
+    local bins = {}
+    for b = 1, B do bins[b] = 0 end
+    local scale = (B - 0.001) / (hi - lo)
+    for i = 1, n do
+        local v = vals[i]
+        if not minv or v >= minv then
+            local b = math.floor((v - lo) * scale) + 1
+            bins[b] = bins[b] + 1
+        end
+    end
+    local b, cum = 1, 0
+    for p = 0, 100 do
+        local target = p / 100 * cnt
+        while b < B and cum + bins[b] < target do
+            cum = cum + bins[b]
+            b = b + 1
+        end
+        local frac = bins[b] > 0 and math.min(1, math.max(0, (target - cum) / bins[b])) or 0
+        pct[p + 1] = lo + (b - 1 + frac) / B * (hi - lo)
+    end
+    pct[1], pct[101] = lo, hi
+    return pct, cnt
+end
+
+--- The height at land percentile p (0..1) of st (Stats).
+function HeightAt(st, p)
+    local pct = st.pct
+    if p <= 0 then return pct[1] end
+    if p >= 1 then return pct[101] end
+    local x = p * 100
+    local i = math.floor(x)
+    return pct[i + 1] + (pct[i + 2] - pct[i + 1]) * (x - i)
+end
+
+local statsCache = { key = false, st = false }
+
+--- Drops the remembered numbers of the map (the next call reads them again).
+function Invalidate()
+    statsCache = { key = false, st = false }
+    noiseCache = {}
+end
+
+--- The map's numbers: { hmin, hmax, water (level), hasWater, pct = land height percentiles }. Land = the cells above the water level (all cells when little is above it or there is no water).
+--- Cached until the history changes.
+function Stats()
+    local size = rawget(_G, 'ed_terrain_info') and ed_terrain_info() or false
+    local world = World.Get()
+    local wl, on = world.water_elev or 0, (world.water_on or 0) ~= 0
+    local key = tostring(size) .. '|' .. History.Version .. '|' .. wl .. '|' .. tostring(on)
+    if statsCache.key == key then return statsCache.st end
+    local st = { hmin = 0, hmax = 100, water = wl, hasWater = false, pct = {} }
+    local got = false
+    if size and Fields.IsAvailable() then
+        local ok, r = pcall(Fields.Run, function(S)
+            local H = S:Height(size > 1100 and 8 or 4)
+            local w, h = Fields.Info(H)
+            local mn, mx = Fields.Stats(H)
+            return { vals = Fields.Read(H, 0, 0, w - 1, h - 1), lo = mn, hi = mx }
+        end)
+        if ok and r and r.vals then
+            st.hmin, st.hmax = r.lo, r.hi
+            st.hasWater = on and wl > r.lo + 0.5 and wl < r.hi - 0.5
+            local pct, cnt
+            if st.hasWater then
+                pct, cnt = Percentiles(r.vals, wl)
+                if cnt and cnt < table.getn(r.vals) * 0.03 then pct = nil end
+            end
+            pct = pct or Percentiles(r.vals, nil)
+            if pct then st.pct, got = pct, true end
+        end
+    end
+    if not got then
+        for p = 0, 100 do st.pct[p + 1] = st.hmin + (st.hmax - st.hmin) * p / 100 end
+    end
+    statsCache = { key = key, st = st }
+    return st
+end
+
+noiseCache = {}
+local NOISE_OPS = { 'perlin', 'simplex', 'ridged', 'billow' }
+
+--- The noise value (0..1) that a share p of the map lies BELOW, for the noise rule with these settings: a rule that smoothsteps around it covers 1 - p of the map. Read from the noise at
+--- the preview resolution (the noise depends on the world position only); cached.
+function NoiseAt(kind, seed, size, octaves, p)
+    local tsize = rawget(_G, 'ed_terrain_info') and ed_terrain_info() or 0
+    local key = tsize .. '|' .. kind .. '|' .. seed .. '|' .. size .. '|' .. octaves
+    local pct = noiseCache[key]
+    if pct == nil then
+        pct = false
+        if tsize > 0 and Fields.IsAvailable() then
+            local ok, res = pcall(Fields.Run, function(S)
+                local H = S:Height(tsize > 1100 and 8 or 4)
+                local n = S:Op(NOISE_OPS[math.max(1, math.min(4, kind))], { like = H, seed = math.floor(seed), scale = size, octaves = math.floor(octaves) })
+                local w, h = Fields.Info(n)
+                return (Percentiles(Fields.Read(n, 0, 0, w - 1, h - 1), nil))
+            end)
+            if ok and res then pct = res end
+        end
+        if table.getsize(noiseCache) > 60 then noiseCache = {} end
+        noiseCache[key] = pct
+    end
+    p = math.max(0, math.min(1, p))
+    if not pct then return 0.5 + (p - 0.5) * 0.4 end          -- no natives: a typical spread
+    local x = p * 100
+    local i = math.floor(x)
+    if i >= 100 then return pct[101] end
+    return pct[i + 1] + (pct[i + 2] - pct[i + 1]) * (x - i)
+end
+
+-- ---- the roles ------------------------------------------------------------------------------------------------------------------------------------------------
+
+Order = { 'grass', 'dirt', 'wet', 'sand', 'rock', 'darkrock', 'highrock', 'snow' }               -- bottom to top
+Priority = { 'snow', 'highrock', 'darkrock', 'rock', 'wet', 'sand', 'dirt', 'grass' }            -- who wins where selections overlap
+
+RoleInfo = {
+    grass = { label = 'Grass (open ground)', keywords = { 'grass', 'gras', 'moss' } },
+    dirt = { label = 'Dirt (patches)', keywords = { 'dirt', 'mud', 'soil', 'gravel' } },
+    wet = { label = 'Wet ground (waterline, gullies)', keywords = { 'wet', 'melt', 'lava' } },
+    sand = { label = 'Sand (beach)', keywords = { 'sand', 'dune', 'beach' } },
+    rock = { label = 'Rock (cliffs)', keywords = { 'rock', 'cliff', 'stone' } },
+    darkrock = { label = 'Dark rock (cavities)', keywords = { 'darkrock', 'obsidian', 'ash' } },
+    highrock = { label = 'High rock (peaks)', keywords = { 'highrock', 'peak', 'icerock' } },
+    snow = { label = 'Snow (high, flat)', keywords = { 'snow', 'ice', 'frost' } },
 }
 
 --- Noise that breaks a hard edge up: 1 where the noise is high, falling off where it is low; the stronger the knob the more is taken away.
@@ -51,91 +253,74 @@ local function Breakup(k, seedAdd, size)
     return Rule('noise', { kind = 1, seed = k.seed + seedAdd, size = size or k.patch, octaves = 4, from = 0.05, to = 0.05 + k.breakup * 0.5 }, 'mul')
 end
 
-local function Slope(lo, hi, soft) return Rule('slope', { lo = lo, hi = hi, soft = soft or 5 }) end
+--- The height of the snow line (top share of the land heights).
+function SnowLine(k, st) return HeightAt(st, 1 - k.snow) end
 
-local function Role(id, label, keywords, rules) return { id = id, label = label, keywords = keywords, rules = rules } end
+Builders = {}           -- role id -> function(knobs, stats, context) -> rule list | {} (the base: no mask) | false (switched off)
 
-local function Beach(k)
-    return { Rule('water', { mode = 3, offset = 0.5, width = k.beach, soft = 2 }), Slope(0, 24, 6), Rule('blur', { radius = 1.2 }) }
+Builders.grass = function(k, st, cx)
+    if cx.base == 'grass' then return {} end
+    local rules = { Slope(0, k.rock + 6, 8) }
+    if st.hasWater then table.insert(rules, Rule('water', { mode = 1, offset = cx.has.sand and (k.beach + 0.5) or 0.5, soft = 2 })) end
+    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then table.insert(rules, Below(st, SnowLine(k, st), (st.hmax - st.hmin) * 0.05)) end
+    table.insert(rules, Breakup(k, 5, k.patch * 1.5))
+    table.insert(rules, Rule('blur', { radius = 1.5 }))
+    return rules
 end
 
-local function Cliff(k)
-    return { Slope(k.cliff, 90, 4), Rule('blur', { radius = 1.5 }) }
+Builders.dirt = function(k, st, cx)
+    if cx.base == 'dirt' then return {} end
+    if k.dirt <= 0.005 then return false end
+    local q = NoiseAt(1, k.seed, k.patch, 4, 1 - k.dirt)
+    local rules = { Rule('noise', { kind = 1, seed = k.seed, size = k.patch, octaves = 4, from = q - 0.035, to = q + 0.035 }), Slope(0, k.rock + 4, 8) }
+    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then table.insert(rules, Below(st, SnowLine(k, st), (st.hmax - st.hmin) * 0.05)) end
+    table.insert(rules, Rule('blur', { radius = 1.5 }))
+    return rules
 end
 
-local function Rock(k, seedAdd)
-    return { Slope(k.rock, 90, 6), Breakup(k, seedAdd, k.patch * 0.6), Rule('blur', { radius = 1.5 }) }
+Builders.wet = function(k, st, cx)
+    if cx.base == 'wet' then return {} end
+    local rules = { Rule('flow', { range = 1000, from = 0.55, to = 0.75 }), Rule('curvature', { radius = 4, gain = 25, lo = 0, hi = 0.5, soft = 0.05 }) }
+    if st.hasWater and k.wet > 0 then table.insert(rules, Rule('water', { mode = 3, offset = 0, width = k.wet, soft = 1.5 }, 'or')) end
+    table.insert(rules, Slope(0, 22, 8))
+    table.insert(rules, Rule('blur', { radius = 1.2 }))
+    return rules
 end
 
-Presets = {
-    { id = 'temperate', name = 'Temperate (grass, dirt, sand, rock, cliff)', uses = { 'cliff', 'rock', 'beach', 'breakup', 'patch', 'seed' },
-      roles = function(k, st)
-        return {
-            Role('grass', 'Grass (base)', { 'grass', 'hostas', 'jung' }, {}),
-            Role('dirt', 'Dirt patches', { 'dirt', 'mud', 'soil' }, {
-                Rule('noise', { kind = 1, seed = k.seed, size = k.patch, octaves = 4, from = 0.5, to = 0.62 }), Slope(0, 30, 8), Rule('blur', { radius = 1.5 }) }),
-            Role('sand', 'Sand (shore)', { 'sand' }, Beach(k)),
-            Role('rock', 'Rock', { 'rock', 'stone', 'gravel' }, Rock(k, 11)),
-            Role('cliff', 'Cliff', { 'cliff' }, Cliff(k)),
-        } end },
-    { id = 'alpine', name = 'Alpine (grass, rock, snow, cliff)', uses = { 'cliff', 'rock', 'snow', 'breakup', 'patch', 'seed' },
-      roles = function(k, st)
-        local lo = st.hmin + (st.hmax - st.hmin) * k.snow
-        return {
-            Role('grass', 'Grass (base)', { 'grass', 'hostas' }, {}),
-            Role('dirt', 'Dirt on the slopes', { 'dirt', 'mud', 'soil', 'gravel' }, { Slope(12, k.cliff, 8), Breakup(k, 3, k.patch), Rule('blur', { radius = 2 }) }),
-            Role('rock', 'Rock', { 'rock', 'stone' }, Rock(k, 11)),
-            Role('snow', 'Snow', { 'snow', 'ice' }, {
-                Rule('height', { lo = lo, hi = st.hmax + 100, soft = math.max(1, (st.hmax - st.hmin) * 0.06) }), Slope(0, k.cliff - 4, 8), Breakup(k, 21, k.patch * 0.7), Rule('blur', { radius = 1.5 }) }),
-            Role('cliff', 'Cliff', { 'cliff' }, Cliff(k)),
-        } end },
-    { id = 'desert', name = 'Desert (sand, dust, rock, cliff)', uses = { 'cliff', 'rock', 'beach', 'breakup', 'patch', 'seed' },
-      roles = function(k, st)
-        return {
-            Role('sand', 'Sand (base)', { 'sand' }, {}),
-            Role('dust', 'Dust and hardpan', { 'dirt', 'soil', 'gravel', 'mud' }, {
-                Rule('noise', { kind = 2, seed = k.seed, size = k.patch, octaves = 4, from = 0.48, to = 0.6 }), Rule('blur', { radius = 1.5 }) }),
-            Role('wet', 'Wet sand (shore)', { 'sandwet', 'wet' }, Beach(k)),
-            Role('rock', 'Rock', { 'rock', 'stone' }, Rock(k, 7)),
-            Role('cliff', 'Cliff', { 'cliff' }, Cliff(k)),
-        } end },
-    { id = 'arctic', name = 'Arctic (snow, rock, ice, cliff)', uses = { 'cliff', 'rock', 'beach', 'breakup', 'patch', 'seed' },
-      roles = function(k, st)
-        return {
-            Role('snow', 'Snow (base)', { 'snow' }, {}),
-            Role('rock', 'Rock', { 'rock', 'stone', 'gravel' }, Rock(k, 5)),
-            Role('ice', 'Ice (shore)', { 'ice' }, Beach(k)),
-            Role('cliff', 'Cliff', { 'cliff', 'rock' }, Cliff(k)),
-        } end },
-    { id = 'rocky', name = 'Rocky (rock, gravel, grass pockets, cliff)', uses = { 'cliff', 'rock', 'breakup', 'patch', 'seed' },
-      roles = function(k, st)
-        return {
-            Role('rock', 'Rock (base)', { 'rock', 'stone' }, {}),
-            Role('gravel', 'Gravel', { 'gravel', 'dirt' }, { Slope(0, k.rock, 8), Breakup(k, 2, k.patch), Rule('blur', { radius = 2 }) }),
-            Role('grass', 'Grass pockets', { 'grass' }, {
-                Rule('noise', { kind = 1, seed = k.seed + 9, size = k.patch, octaves = 3, from = 0.55, to = 0.65 }), Slope(0, 14, 6), Rule('blur', { radius = 1.5 }) }),
-            Role('cliff', 'Cliff', { 'cliff' }, Cliff(k)),
-        } end },
-}
-
-State = { preset = 1, layers = {}, types = true, selected = 1 }
-
-local function Stats()
-    local lo, hi = 0, 100
-    if Fields.IsAvailable() and ed_terrain_info() then
-        lo, hi = Fields.Run(function(S)
-            local mn, mx = Fields.Stats(S:Height(4))
-            return mn, mx
-        end)
+Builders.sand = function(k, st, cx)
+    if cx.base == 'sand' then return {} end
+    if st.hasWater then
+        if k.beach <= 0 then return false end
+        return { Rule('water', { mode = 3, offset = 0.5, width = k.beach, soft = 2 }), Slope(0, 24, 6), Rule('blur', { radius = 1.2 }) }
     end
-    return { hmin = lo, hmax = hi }
+    return { Below(st, HeightAt(st, 0.06), (st.hmax - st.hmin) * 0.03), Slope(0, 20, 6), Rule('blur', { radius = 1.2 }) }
 end
 
---- The roles of the current preset (rules built from the current knobs).
-function Roles()
-    local p = Presets[State.preset]
-    return p.roles(Knobs, Stats())
+Builders.rock = function(k, st, cx)
+    if cx.base == 'rock' then return {} end
+    return { Slope(k.rock, 90, 6), Breakup(k, 11, k.patch * 0.6), Slope(k.cliff, 90, 4, 'or'), Rule('blur', { radius = 1.5 }) }
 end
+
+Builders.darkrock = function(k, st, cx)
+    if cx.base == 'darkrock' then return {} end
+    if k.dark <= 0.01 then return false end
+    return { Rule('curvature', { radius = 5, gain = 30, lo = 0, hi = 0.36 + 0.2 * k.dark, soft = 0.04 }), Below(st, HeightAt(st, 0.25), (st.hmax - st.hmin) * 0.05, 'or'),
+             Slope(k.rock * 0.8, 90, 8), Breakup(k, 31, k.patch * 0.5), Rule('blur', { radius = 1.2 }) }
+end
+
+Builders.highrock = function(k, st, cx)
+    if cx.base == 'highrock' then return {} end
+    return { Slope(k.rock * 0.6, 90, 8), Rule('curvature', { radius = 6, gain = 30, lo = 0.56, hi = 1, soft = 0.05 }, 'or'), Above(st, HeightAt(st, k.high), (st.hmax - st.hmin) * 0.06),
+             Breakup(k, 41, k.patch * 0.7), Rule('blur', { radius = 1.5 }) }
+end
+
+Builders.snow = function(k, st, cx)
+    if cx.base == 'snow' then return {} end
+    if k.snow <= 0.004 then return false end
+    return { Above(st, SnowLine(k, st), (st.hmax - st.hmin) * 0.05), Slope(0, k.cliff - 4, 8), Breakup(k, 21, k.patch * 0.7), Rule('blur', { radius = 1.5 }) }
+end
+
+-- ---- the layers of the map and their roles ---------------------------------------------------------------------------------------------------------------------
 
 --- The highest painted layer the shader of the map draws with a mask: 8 for TTerrainXP and for TTerrain (writing layers 5-8 switches it to TTerrainXP, as it always did), 7 for the numbered
 --- shaders, 4 for TTerrainGlow. Without a terrain: 8.
@@ -143,7 +328,7 @@ function Cap()
     return Strata.PaintCap()
 end
 
---- The layers the roles really get: a role on a layer the shader cannot paint takes the highest free layer it can, or shares the top layer when none is free (Apply merges the masks).
+--- The layers an explicit list really gets: a role on a layer the shader cannot paint takes the highest free layer it can, or shares the top layer when none is free.
 function FitLayers(layers)
     local cap = Cap()
     local fit, used = {}, {}
@@ -164,157 +349,296 @@ function FitLayers(layers)
     return fit
 end
 
---- What the panel says about the shader: a line (which shader, mask range, painted layers) and the warnings (roles that had to move, a shader nobody described).
+--- Which layer holds which role. Detected from the textures (State.layers = nil), or taken from the explicit list State.layers (parallel to Order, -1 = skip). Returns
+--- { cap, base (role of layer 0), has (role -> true), byRole (role -> layers, lowest first), missing (roles without a layer), unknown (layers whose texture is not recognised or not used),
+---   beyond (layers with a texture the shader does not paint), moved (explicit list: role, wish, layer), info (roledetect.Layers) }.
+function Plan()
+    local cap = Cap()
+    local plan = { cap = cap, base = nil, has = {}, byRole = {}, missing = {}, unknown = {}, beyond = {}, moved = {}, info = Detect.Layers(8), manual = false }
+    local taken = {}
+    local function Add(layer, role)
+        if taken[layer] then return end
+        taken[layer] = true
+        plan.byRole[role] = plan.byRole[role] or {}
+        table.insert(plan.byRole[role], layer)
+        plan.has[role] = true
+        if layer == 0 then plan.base = role end
+    end
+    if State.layers then
+        plan.manual = true
+        local fit = FitLayers(State.layers)
+        for i, id in Order do
+            local wish = State.layers[i]
+            if wish and wish >= 0 and fit[i] and fit[i] >= 0 then
+                if fit[i] ~= wish then table.insert(plan.moved, { role = id, wish = wish, layer = fit[i] }) end
+                Add(fit[i], id)
+            end
+        end
+    else
+        for l = 0, 8 do
+            local e = plan.info[l]
+            if e then
+                if l > cap then table.insert(plan.beyond, l)
+                elseif e.role then Add(l, e.role)
+                else table.insert(plan.unknown, l) end
+            end
+        end
+    end
+    for _, list in plan.byRole do table.sort(list) end
+    for _, id in Order do
+        if not plan.has[id] then table.insert(plan.missing, id) end
+    end
+    return plan
+end
+
+--- What the role rules need to know about the layers: the role of the base layer and the roles present.
+function Context(plan)
+    return { base = plan.base, has = plan.has }
+end
+
+--- The roles of the current style with the current settings, for the plan of the map (or the context cx): { id, label, keywords, rules, base, off }.
+function Roles(cx)
+    cx = cx or Context(Plan())
+    local p = Presets[State.preset]
+    local st = Stats()
+    local list = {}
+    for i, id in Order do
+        local info = RoleInfo[id]
+        local rules = Builders[id](Knobs, st, cx)
+        local isBase = cx.base == id
+        list[i] = { id = id, label = info.label, keywords = info.keywords, rules = rules or {}, base = isBase,
+                    off = (not isBase) and (rules == false or (p.off and p.off[id]) or false) or false }
+    end
+    return list
+end
+
+--- What the panel says about the shader and the layers: the shader line and the warnings (plain sentences).
 function Notes(roles)
     local name = rawget(_G, 'ed_stratum_shader') and ed_stratum_shader() or '?'
     local p = rawget(_G, 'ed_stratum_shader') and Strata.Profile() or {}
     local cap = Cap()
     local line = 'Shader ' .. tostring(name) .. ': masks in the ' .. (p.range or 'half') .. ' range, ' .. cap .. ' painted layers'
     local warnings = {}
-    if p.supported == false and p.reason then
-        table.insert(warnings, 'No notes about this shader: masks are written in the half range')
+    if p.supported == false and p.reason then table.insert(warnings, 'No notes about this shader: masks are written in the half range') end
+    local plan = Plan()
+    local function L(id) return string.lower(Detect.Label(id)) end
+    if plan.manual then table.insert(warnings, 'Kinds of ground are on fixed layers (not detected from the textures)') end
+    for _, m in plan.moved do
+        table.insert(warnings, Detect.Label(m.role) .. ': layer ' .. m.wish .. ' is not painted here, moved to layer ' .. m.layer)
     end
-    local want = State.layers or {}
-    local fit = FitLayers(want)
-    for i, role in roles do
-        local w = want[i] or 0
-        if w > cap then
-            local shared = false
-            for j = 1, table.getn(roles) do
-                if j ~= i and fit[j] == fit[i] then shared = true end
-            end
-            table.insert(warnings, role.label .. ': layer ' .. w .. ' is not painted here, ' .. (shared and ('merged into layer ' .. fit[i]) or ('moved to layer ' .. fit[i])))
+    local anyRole = false
+    for _ in plan.has do anyRole = true end
+    if not anyRole then
+        table.insert(warnings, 'No layer has a texture the recipe can use: press Assign textures, or set the kind of ground of each layer in the table')
+    else
+        if plan.base then
+            table.insert(warnings, 'Base layer is ' .. L(plan.base) .. ': it shows where nothing else is painted' .. ((plan.base ~= 'grass' and plan.has.grass) and '; grass covers the open ground' or ''))
+        end
+        local names = {}
+        for _, id in plan.missing do
+            local off = Presets[State.preset].off and Presets[State.preset].off[id]
+            if not off then table.insert(names, L(id)) end
+        end
+        if table.getn(names) > 0 then table.insert(warnings, 'No texture for: ' .. table.concat(names, ', ') .. ' (skipped; Assign textures fills empty layers)') end
+    end
+    for _, l in plan.beyond do table.insert(warnings, 'Layer ' .. l .. ' is not painted with this shader: left alone') end
+    for _, l in plan.unknown do
+        local e = plan.info[l]
+        table.insert(warnings, 'Layer ' .. l .. ' (' .. (e and e.short or '?') .. '): ' .. ((e and e.override == 'none') and 'not used' or 'kind of ground unknown, left alone'))
+    end
+    for id, list in plan.byRole do
+        if table.getn(list) > 1 then
+            local nums = {}
+            for _, l in list do table.insert(nums, tostring(l)) end
+            table.insert(warnings, L(id) .. ' on layers ' .. table.concat(nums, ', ') .. ': the lowest gets the ground, the others patches')
         end
     end
     return line, warnings
 end
 
---- Role i goes to layer i (the first role is the base layer, 0).
+--- An explicit list for State.layers (parallel to Order): the layout of the texture sets (texsets.lua: layer 1 grass, 2 rock, 3 sand, 4 dirt, 5 wet, 6 high rock, 7 dark rock, 8 snow);
+--- a role whose layer the shader does not paint is skipped (-1), the last ones first.
 function AutoLayers(roles)
+    local TS = import('/lua/editor/texsets.lua')
+    local cap = Cap()
     local layers = {}
-    local cap = Cap()
-    for i = 1, table.getn(roles) do layers[i] = math.min(cap, i - 1) end
+    for i, role in roles do
+        local idx = TS.RoleLayer(role.id) or 0
+        layers[i] = (idx >= 1 and idx <= cap) and idx or -1
+    end
     return layers
 end
 
-local function Lower(path) return string.lower(string.gsub(path or '', '^.*/', '')) end
-
---- Layer numbers by the textures the layers hold: a role takes the first unused layer whose texture name contains one of its keywords; roles without a match take the next free layer
---- (the base role stays on 0).
+--- An explicit list from the detection: the lowest layer of each role (0 = the base layer), -1 where no layer holds the role.
 function MatchTextures(roles)
-    local layers, used = {}, { [0] = true }
-    layers[1] = 0
-    local names = {}
-    local cap = Cap()
-    for l = 1, cap do
-        local albedo = ed_stratum_layer(l)
-        names[l] = albedo and Lower(albedo) or ''
-    end
-    for i = 2, table.getn(roles) do
-        for l = 1, cap do
-            if not used[l] and names[l] ~= '' then
-                for _, key in roles[i].keywords do
-                    if string.find(names[l], key, 1, true) then
-                        layers[i] = l
-                        used[l] = true
-                        break
-                    end
-                end
-            end
-            if layers[i] then break end
-        end
-    end
-    for i = 2, table.getn(roles) do
-        if not layers[i] then
-            for l = 1, cap do
-                if not used[l] then
-                    layers[i] = l
-                    used[l] = true
-                    break
-                end
-            end
-        end
-        layers[i] = layers[i] or 0
+    local plan = Plan()
+    local layers = {}
+    for i, role in roles do
+        local list = plan.byRole[role.id]
+        layers[i] = list and list[1] or -1
     end
     return layers
 end
 
---- Shows role i's mask on the map at preview resolution. Returns the field, or nil and a message.
+--- Gives empty layers (no texture) the textures of the roles the map lacks, from the current texture set; layers that have a texture are not touched. Returns the number of layers set and a
+--- sentence (what was done, or why nothing was).
+function AssignMissing()
+    if not rawget(_G, 'ed_stratum_layer') then return 0, 'the map has no texture layers' end
+    local TS = import('/lua/editor/texsets.lua')
+    local plan = Plan()
+    local cap = Cap()
+    local empty = {}
+    for l = 0, cap do
+        if not Detect.Albedo(l) then table.insert(empty, l) end
+    end
+    if table.getn(empty) == 0 then return 0, 'no empty layer' end
+    local off = Presets[State.preset].off or {}
+    local done, names = 0, {}
+    local next = 1
+    for _, role in TS.Roles do
+        if not plan.has[role] and not off[role] and empty[next] then
+            local layer = empty[next]
+            -- the Base layer takes grass only; a layer another role would need is not used for it
+            if layer == 0 and role ~= 'grass' then
+                next = next + 1
+                layer = empty[next]
+            end
+            if layer then
+                local ok = TS.ApplyRole(layer, role)
+                if ok then
+                    done = done + 1
+                    table.insert(names, Detect.Label(role) .. ' on layer ' .. layer)
+                    next = next + 1
+                end
+            end
+        end
+    end
+    if done == 0 then return 0, 'nothing to assign (every kind of ground has a texture, or the texture set has none for it)' end
+    return done, 'assigned: ' .. table.concat(names, ', ')
+end
+
+--- Shows the selection of role i (an index into Roles()) on the map at preview resolution. Returns the field, or nil and a message.
 function PreviewRole(i)
     local roles = Roles()
     local role = roles[i]
-    if not role then return nil, 'no such role' end
-    if table.getn(role.rules) == 0 then
-        return nil, role.label .. ' has no mask: it is what the other roles leave free'
-    end
+    if not role then return nil, 'no such kind of ground' end
+    if role.base then return nil, role.label .. ' is the base layer: it has no mask, it is what the other kinds leave free' end
+    if role.off or table.getn(role.rules) == 0 then return nil, role.label .. ' is switched off in this style' end
     return MaskGen.PreviewDef({ rules = role.rules })
 end
 
---- Writes all roles: the paint masks of their layers and (State.types) the terrain-type grid. ONE undo step. Returns a summary { { label, share }, ... } or nil, message.
+-- ---- applying -----------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- 1 / x as a monotone curve through (1 - 1 / y, y): the opacity of a layer is its weight divided by what the layers above leave free
+local RECIP = {}
+for _, y in { 1, 1.1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 100 } do
+    table.insert(RECIP, 1 - 1 / y)
+    table.insert(RECIP, y)
+end
+RECIP_POINTS = RECIP
+
+--- The patch field of variant n of a role: noise covering about 45% of the map.
+local function PatchField(c, k, st, id, n)
+    local size = k.patch * 1.4
+    local seed = k.seed + 91 + n * 17
+    for i, rid in Order do
+        if rid == id then seed = seed + i * 7 end
+    end
+    local q = NoiseAt(2, seed, size, 3, 0.55)
+    local m, err = MaskGen.Evaluate(c, { rules = { Rule('noise', { kind = 2, seed = seed, size = size, octaves = 3, from = q - 0.04, to = q + 0.04 }) } })
+    if not m then error(err or 'patch noise failed') end
+    return m
+end
+
+--- The visible weight of every layer of the plan, as fields: { [layer] = field }. See the header (priority cascade, then variants split a role's region).
+local function Weights(S, c, plan, roles, k, st)
+    local byId = {}
+    for _, r in roles do byId[r.id] = r end
+    local groups, sel = {}, {}
+    for _, id in Order do
+        local list, role = plan.byRole[id], byId[id]
+        if list and role and not role.off and (role.base or table.getn(role.rules) > 0) then
+            groups[id] = list
+            if not role.base then
+                local m, err = MaskGen.Evaluate(c, { rules = role.rules })
+                if not m then error(role.label .. ': ' .. tostring(err)) end
+                sel[id] = m
+            end
+        end
+    end
+    local rem = S:Op('const', { like = c.H, value = 1 })
+    local region = {}
+    for _, id in Priority do
+        if groups[id] and sel[id] then
+            region[id] = S:Op('mul', { a = sel[id], b = rem })
+            rem = S:Op('mul', { a = rem, b = S:Op('invert', { a = sel[id], lo = 0, hi = 1 }) })
+        end
+    end
+    if plan.base and groups[plan.base] then region[plan.base] = rem end
+    local target = {}
+    for id, g in groups do
+        local reg = region[id]
+        if reg then
+            local left = reg
+            for gi = 2, table.getn(g) do
+                local t = S:Op('mul', { a = left, b = PatchField(c, k, st, id, gi - 1) })
+                left = S:Op('sub', { a = left, b = t })
+                target[g[gi]] = t
+            end
+            target[g[1]] = left
+        end
+    end
+    return target, groups
+end
+
+--- Writes all roles: the paint masks of their layers and (State.types) the terrain-type grid. ONE undo step. Returns a summary { { label, share, layer }, ... } (the shares add up to 1)
+--- and the number of cells changed, or nil, message.
 function Apply()
     if not Fields.IsAvailable() or not ed_stratum_info() then return nil, 'the map has no paint masks' end
-    local roles = Roles()
-    local layerOf = State.layers
-    if not layerOf or table.getn(layerOf) ~= table.getn(roles) then
-        layerOf = AutoLayers(roles)
-        State.layers = layerOf
-    end
-    layerOf = FitLayers(layerOf)          -- roles on layers the shader cannot paint move to free ones (State.layers keeps the wish)
+    local plan = Plan()
+    local anyRole = false
+    for _ in plan.has do anyRole = true end
+    if not anyRole then return nil, 'no layer has a texture the recipe can use (press Assign textures, or choose the kind of ground of each layer)' end
+    local roles = Roles(Context(plan))
     local cap = Cap()
     local TT = import('/lua/editor/terraintype.lua')
     return Fields.Run(function(S)
         local c = MaskGen.NewContext(S, { step = 1 })
-        -- the mask of every layer a role writes
-        local p, owner = {}, {}
-        for i, role in roles do
-            local layer = layerOf[i]
-            if table.getn(role.rules) > 0 and layer >= 1 then
-                local m, err = MaskGen.Evaluate(c, { rules = role.rules })
-                if not m then return nil, role.label .. ': ' .. tostring(err) end
-                if p[layer] then
-                    p[layer] = S:Op('max', { a = p[layer], b = m })
-                else
-                    p[layer] = m
-                    owner[layer] = i
-                end
-            end
-        end
-        -- masks first (history entries are collected, not pushed)
-        local parts = {}
-        local cells = 0
-        for layer = 1, cap do
-            if p[layer] then
-                local entry, n = MaskGen.WriteLayer(c, p[layer], layer, { mode = 1, strength = 1, takeAway = false }, true)
+        local ok, target, groups = pcall(Weights, S, c, plan, roles, Knobs, Stats())
+        if not ok then return nil, tostring(target) end
+        local parts, cells = {}, 0
+        local free = S:Op('const', { like = c.H, value = 1 })
+        local vis = {}
+        for layer = cap, 1, -1 do
+            local t = target[layer]
+            if t then
+                local cum = S:Op('invert', { a = free, lo = 0, hi = 1 })
+                local rec = S:Op('remap', { a = cum, points = RECIP_POINTS, smooth = 1 })
+                local m = S:Op('clamp', { a = S:Op('mul', { a = t, b = rec }), lo = 0, hi = 1 })
+                local entry, n = MaskGen.WriteLayer(c, m, layer, { mode = 1, strength = 1, takeAway = false }, true)
                 if entry then
                     table.insert(parts, entry)
                     cells = cells + n
                 end
+                vis[layer] = S:Op('mul', { a = m, b = free })
+                free = S:Op('mul', { a = free, b = S:Op('invert', { a = m, lo = 0, hi = 1 }) })
+            elseif Detect.Albedo(layer) then
+                -- a layer outside the recipe keeps its mask and still covers what lies under it
+                local e = S:Op('resample', { a = S:Stratum(layer), like = c.H })
+                vis[layer] = S:Op('mul', { a = e, b = free })
+                free = S:Op('mul', { a = free, b = S:Op('invert', { a = e, lo = 0, hi = 1 }) })
             end
         end
-        -- shares: what each layer shows after the layers above took theirs
-        local rest = S:Op('const', { like = c.H, value = 1 })
-        local share = {}
-        local covered = {}
-        for layer = cap, 1, -1 do
-            local m = p[layer]
-            if not m then
-                local albedo = ed_stratum_layer(layer)
-                if albedo and albedo ~= '' and not string.find(albedo, 'clear_albedo', 1, true) then m = S:Op('resample', { a = S:Stratum(layer), like = c.H }) end      -- layers outside the recipe still count
-            end
-            if m then
-                share[layer] = S:Op('mul', { a = m, b = rest })
-                rest = S:Op('mul', { a = rest, b = S:Op('invert', { a = m, lo = 0, hi = 1 }) })
-            end
-        end
+        vis[0] = free
         -- terrain types by the layer seen most
         if State.types and rawget(_G, 'ed_tt_info') and ed_tt_info() then
-            local best = rest
+            local best = vis[0]
             local codes = S:Op('const', { like = c.H, value = TT.TypeOfLayer(0) })
             for layer = 1, cap do
-                if share[layer] then
-                    local win = S:Op('threshold', { a = S:Op('sub', { a = share[layer], b = best }), value = 0 })
+                if vis[layer] then
+                    local win = S:Op('threshold', { a = S:Op('sub', { a = vis[layer], b = best }), value = 0 })
                     codes = S:Op('blend', { a = codes, b = S:Op('const', { like = c.H, value = TT.TypeOfLayer(layer) }), mask = win })
-                    best = S:Op('max', { a = best, b = share[layer] })
+                    best = S:Op('max', { a = best, b = vis[layer] })
                 end
             end
             local entry, n = Fields.CommitTypes(codes, { noPush = true, label = 'recipe terrain types' })
@@ -330,15 +654,61 @@ function Apply()
             redo = function() for i = 1, table.getn(parts) do parts[i].redo() end end,
             release = function() for _, e in parts do e.release() end end,
         })
-        local summary = {}
-        for i, role in roles do
-            local layer = layerOf[i]
-            local s = (layer >= 1) and share[layer] or (i == 1 and rest or nil)
-            if s and (layer >= 1 or i == 1) then
-                local _, _, mean = Fields.Stats(s)
-                table.insert(summary, { label = role.label, share = mean, layer = layer })
+        -- the shares: what each kind shows, the layers of the recipe, the rest
+        local summary, listed = {}, {}
+        local function Mean(layer)
+            if not vis[layer] then return 0 end
+            local _, _, mean = Fields.Stats(vis[layer])
+            return mean
+        end
+        for _, id in Order do
+            local g = groups[id]
+            if g then
+                local share = 0
+                for _, l in g do
+                    share = share + Mean(l)
+                    listed[l] = true
+                end
+                table.insert(summary, { label = RoleInfo[id].label, share = share, layer = g[1], layers = g })
             end
         end
+        local other = 0
+        for l = 1, cap do
+            if vis[l] and not listed[l] then other = other + Mean(l) end
+        end
+        if not listed[0] then table.insert(summary, { label = 'Base layer (left as it is)', share = Mean(0), layer = 0 }) end
+        if other > 0.0005 then table.insert(summary, { label = 'Layers outside the recipe', share = other, layer = -1 }) end
         return summary, cells
     end)
+end
+
+--- How much of the map each layer covers, from the masks now on the map: { mask = { [layer] = mean opacity }, seen = { [layer] = share that shows after the layers above took theirs, [0] = base } }.
+--- Layers 1 .. Cap() that have a texture only. nil without masks.
+function Coverage()
+    if not Fields.IsAvailable() or not ed_stratum_info() then return nil end
+    local cap = Cap()
+    local ok, res = pcall(Fields.Run, function(S)
+        local free
+        local mask, seen = {}, {}
+        for layer = cap, 1, -1 do
+            if Detect.Albedo(layer) then
+                local m = S:Stratum(layer)
+                free = free or S:Op('const', { like = m, value = 1 })
+                local _, _, mean = Fields.Stats(m)
+                mask[layer] = mean
+                local _, _, sm = Fields.Stats(S:Op('mul', { a = m, b = free }))
+                seen[layer] = sm
+                free = S:Op('mul', { a = free, b = S:Op('invert', { a = m, lo = 0, hi = 1 }) })
+            end
+        end
+        if free then
+            local _, _, fm = Fields.Stats(free)
+            seen[0] = fm
+        else
+            seen[0] = 1
+        end
+        return { mask = mask, seen = seen }
+    end)
+    if ok then return res end
+    return nil
 end

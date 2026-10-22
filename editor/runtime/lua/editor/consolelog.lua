@@ -12,7 +12,8 @@
 --   Count() / Get(i) / Version() / Clear()      the ring (index 1 is the oldest); Version changes on every Add, repeat and Clear
 --   Filter(levels, needle)            the entries to show: `levels` = { error = true, ... } (a level set to false is hidden, a missing one is shown), `needle` a plain,
 --                                     case-insensitive substring of the text ('' = all). Returns a new array of the entries (not copies).
---   RowText(e) / Line(e) / Lines(list) / TimeText(seconds)      "[mm:ss.t] text (x3)" for a list row, the same with a level tag for the detail and the clipboard, many lines joined
+--   RowText(e) / Line(e) / Lines(list) / TimeText(seconds)      "[mm:ss.t] text (x3)" for a list row, the same with a level tag for the detail and the clipboard, many lines joined; RowText is always
+--                                     one line (every control character of an entry is a space)
 --   BreakWords(text, n)               inserts spaces into words longer than n characters, so that a wrapping text control can break a long path
 --   ParseCommand(text) -> kind, code  'ui' | 'sim' and the Lua source; `sim <code>` is for the sim, `=expr` becomes `return expr`;  nil for an empty line
 --   Execute(text, hooks)              runs a command line: echoes it, runs it (UI state: loadstring + pcall, a bare expression such as 1 + 2 prints its value; sim: the engine
@@ -69,6 +70,9 @@ end
 -- ---- recording ------------------------------------------------------------------------------------------------------------------------------------------------
 
 local function AddLine(level, text, source, at)
+    -- an entry is ONE line: any control character left (Add already splits at newlines and turns tabs into spaces) becomes a space; a text control draws the lines of a many-line text on
+    -- top of each other
+    if string.find(text, '%c') then text = string.gsub(text, '%c', ' ') end
     if string.len(text) > MAX_TEXT then text = string.sub(text, 1, MAX_TEXT - 3) .. '...' end
     local newest = S.entries[S.last]
     if newest and newest.level == level and newest.text == text and newest.source == source then

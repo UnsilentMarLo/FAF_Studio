@@ -200,6 +200,44 @@ function Run(verbose)
     History.Undo()
     check('undo gives the layers back', (ed_stratum_layer(18)) == keep[18][1] and (ed_stratum_layer(8)) == keep[8][1])
 
+    -- ---- a shader that does not read the map-wide textures: Build skips them with a warning and builds the rest ------------------------------------
+    do
+        ed_stratum_shader('TTerrainXP')
+        local un = MT.Unsupported('normal')
+        check('Unsupported names the shader and the remedy in one sentence', un ~= nil and string.find(un.text, 'Map normal map not applied: TTerrainXP does not use one.', 1, true) ~= nil
+            and string.find(un.text, 'Terrain000', 1, true) ~= nil and string.find(un.text, 'Use it on the map', 1, true) ~= nil and not string.find(un.text, '%c'), un and un.text)
+        check('and nothing for a shader that reads the texture', MT.Unsupported('normal', 'Terrain000') == nil and MT.Unsupported('light', 'Terrain301') == nil and MT.Unsupported('light', 'TTerrainXP') ~= nil)
+        local oh = Graph.Add('out_height', 0, 0)
+        Graph.Connect(hgt.id, 'out', oh.id, 'a')
+        local depthA = History.Depth()
+        local r3, msg3, trace3 = GRun.Build()
+        check('Build with outputs the shader does not read still succeeds', r3 ~= nil and msg3 == nil, tostring(msg3))
+        check('no map texture is made, the heights are built as one undo step', r3 and (r3.maptextures or 0) == 0 and r3.changed > 0 and History.Depth() == depthA + 1, r3 and (tostring(r3.maptextures) .. ' ' .. r3.changed .. ' ' .. (History.Depth() - depthA)))
+        check('each skipped output is a warning with the sentence, not a failure', r3 and r3.warnings and table.getn(r3.warnings) == 2 and r3.warnings[1].code == 'shader'
+            and string.find(r3.warnings[1].text, 'Map normal map not applied', 1, true) ~= nil and string.find(r3.warnings[2].text, 'Map lighting not applied', 1, true) ~= nil)
+        check('the layers are untouched', (ed_stratum_layer(18)) == keep[18][1] and (ed_stratum_layer(8)) == keep[8][1])
+        History.Undo()
+        -- Use it on the map off: the file is written although the shader does not read it
+        Graph.SetParam(onm.id, 'assign', false)
+        Graph.SetParam(ol.id, 'assign', false)
+        local depthB = History.Depth()
+        local r4, msg4 = GRun.Build()
+        check('with Use it on the map off the files are written even though the shader does not read them', r4 ~= nil and r4.maptextures == 2 and not r4.warnings, tostring(msg4) .. ' ' .. tostring(r4 and r4.maptextures))
+        check('and the layers still hold what they held', (ed_stratum_layer(18)) == keep[18][1] and (ed_stratum_layer(8)) == keep[8][1])
+        if r4 and r4.mapNote and ed_file_delete then
+            for file in string.gfind(r4.mapNote, 'written to ([^%s;%)]+)') do pcall(ed_file_delete, file) end
+        end
+        while History.Depth() > depthB do History.Undo() end
+        Graph.SetParam(onm.id, 'assign', true)
+        Graph.SetParam(ol.id, 'assign', true)
+        Graph.Remove({ oh.id })
+        -- a real failure is a plain message (no traceback, no file(line) prefix), and the unexpected-error path returns the traceback separately
+        local raw = 'x\\y\\graphrun.lua(835): ...graphrun.lua(767): map normal map: boom\nstack traceback:\n\tgraphrun.lua:767: in function f\nstack traceback:\n\tfields.lua:122: in function g'
+        check('CleanError keeps the message only', Fields.CleanError(raw) == 'map normal map: boom', Fields.CleanError(raw))
+        check('ErrorTrace keeps the first traceback once', Fields.ErrorTrace(raw) == 'stack traceback:\n\tgraphrun.lua:767: in function f', tostring(Fields.ErrorTrace(raw)))
+        ed_stratum_shader('Terrain000')
+    end
+
     -- ---- put everything back -----------------------------------------------------------------------------------------------------------------
     for _, i in { 8, 9, 18, 19 } do
         if keep[i][1] and keep[i][1] ~= '' then ed_stratum_set_layer(i, keep[i][1], keep[i][2]) end

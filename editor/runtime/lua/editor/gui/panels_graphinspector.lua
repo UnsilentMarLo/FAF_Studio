@@ -83,6 +83,11 @@ Panels.Register{
                 local n = Graph.NodeById(sel[1])
                 if n then
                     key = key .. '|' .. n.type .. (n.off and 'off' or '')
+                    -- the note of a map texture output depends on the map's shader and on Use it on the map
+                    local d = Nodes.Defs[n.type]
+                    if d and d.mapTexture then
+                        key = key .. '|' .. (rawget(_G, 'ed_stratum_shader') and tostring(ed_stratum_shader()) or '') .. (n.params.assign == false and 'f' or 'a')
+                    end
                     for _, w in Graph.Current.wires do
                         if w[3] == n.id then key = key .. '|' .. w[4] .. '<' .. w[1] end
                     end
@@ -117,18 +122,38 @@ Panels.Register{
             local lines = W.Paragraph(group, def.desc or '', pad, y, w - 2 * pad, { color = c.textDim, size = 'small' }, Skin.S(14))
             self.lines = lines
             y = y + table.getn(lines) * Skin.S(14) + Skin.S(6)
-            -- an output that fills a map-wide shader texture says what the map's shader does with it (maptextures.lua)
+            -- an output that fills a map-wide shader texture says what the map's shader does with it (maptextures.lua), in the warning colour BEFORE a build when the shader does not read it and
+            -- Use it on the map is on (Build then skips the texture), with a button that opens the shader browser
             if def.mapTexture then
                 local okMT, MT = pcall(import, '/lua/editor/maptextures.lua')
                 if okMT and MT then
                     local cur = MT.Current(def.mapTexture)
-                    local text = cur.why
+                    local un = MT.Unsupported(def.mapTexture)
+                    local assign = node.params.assign ~= false
+                    local text, col = cur.why, c.warn
                     if cur.slot then
                         text = (cur.shader ~= '' and cur.shader or 'The shader') .. ' reads it from the ' .. cur.slot.where .. ' (' .. cur.slot.layout .. ').'
+                        col = c.accent
+                    elseif un and assign then
+                        text = un.text
+                    elseif un then
+                        text = (cur.shader ~= '' and cur.shader or 'The shader') .. ' does not use it. Use it on the map is off, so Build only writes the file.'
+                        col = c.textDim
                     end
-                    local more = W.Paragraph(group, text or '', pad, y, w - 2 * pad, { color = cur.slot and c.accent or c.warn, size = 'small' }, Skin.S(14))
+                    local more = W.Paragraph(group, text or '', pad, y, w - 2 * pad, { color = col, size = 'small' }, Skin.S(14))
                     for _, l in more do table.insert(self.lines, l) end
                     y = y + table.getn(more) * Skin.S(14) + Skin.S(6)
+                    if un and assign then
+                        local sw = Btn('Switch shader...', 130, function()
+                            import('/lua/editor/gui/shaderbrowser.lua').Open(function(id)
+                                Say('terrain shader: ' .. id)
+                                Pn.key = false
+                                Pn:Refresh()
+                            end)
+                        end, { tip = 'Open the shader browser to choose a terrain shader that reads this map-wide texture (Terrain000 or a later one).' })
+                        W.Place(sw, group, pad, y, Skin.S(130), Skin.S(22))
+                        y = y + Skin.S(28)
+                    end
                 end
             end
             -- name, bypass

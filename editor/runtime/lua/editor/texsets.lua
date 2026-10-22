@@ -13,6 +13,7 @@
 --   ApplyRole(layer, role)  gives one painted layer the texture of a role (keeps its mask) at its Optimal tile size; -> true | nil, message
 --   ApplyIfNew()            the first thing a new map gets: the default set, when its painted layers have no texture (called by Map.Load)
 --   RoleChoices()           ids and labels for a choice parameter: 'keep' (leave the layer's texture) and every role
+--   RoleLayer(role)         the painted layer a role has in the layout above (1 grass ... 8 snow), nil for an unknown role (recipes.lua AutoLayers)
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
@@ -178,6 +179,14 @@ function ApplyIfNew()
         return n
     end
     return 0
+end
+
+--- The painted layer a role has in the standard layout (the order of Roles): grass 1, rock 2, sand 3, dirt 4, wet 5, high rock 6, dark rock 7, snow 8.
+function RoleLayer(role)
+    for i, r in Roles do
+        if r == role then return i end
+    end
+    return nil
 end
 
 --- ids, labels for a choice parameter: keep + every role.

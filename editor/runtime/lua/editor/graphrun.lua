@@ -753,32 +753,44 @@ end
 
 function DropBuildCache() DropBuild(BuildRun) end
 
---- Writes the map-wide textures of the output nodes Output: map normal map and Output: map lighting (maptextures.lua; each is an undo entry that Build merges with the rest). Raises with a
---- message when one cannot be made. Adds result.maptextures (how many) and result.mapNote (a sentence for the status line). A module function, not a local: Build is near the upvalue limit.
+--- Writes the map-wide textures of the output nodes Output: map normal map and Output: map lighting (maptextures.lua; each is an undo entry that Build merges with the rest). Adds
+--- result.maptextures (how many were made or written), result.mapNote (a sentence for the status line) and result.warnings ({ { text, code } }).
+--- A texture the map's shader does not read is SKIPPED with a warning (code 'shader') while its node's Use it on the map is on: the other outputs are built normally. With Use it on the map off
+--- only the file is written, which any shader allows. Returns nil, or the message of a real failure (the caller stops the build and reports it, no traceback). A module function, not a local:
+--- Build is near the upvalue limit.
 function BuildMapTextures(run, graph, result)
     local MT = import('/lua/editor/maptextures.lua')
     local notes = {}
+    local function Make(kind, noun, node, pieces)
+        local opts = { size = V(run, node, 'size'), assign = V(run, node, 'assign') }
+        if opts.assign then
+            local un = MT.Unsupported(kind)
+            if un then
+                result.warnings = result.warnings or {}
+                table.insert(result.warnings, { text = un.text, code = 'shader', kind = kind, node = node.id })
+                return nil
+            end
+        end
+        local res, msg = MT.FromGraph(kind, pieces, opts)
+        if not res then return noun .. ': ' .. tostring(msg) end
+        result.maptextures = (result.maptextures or 0) + 1
+        if msg then table.insert(notes, msg) end
+        return nil
+    end
+    local fail = nil
     for _, node in OutputNodes(graph, 'mapnormal') do
         local col = run:Value(node.id, 'view')
-        if col then
-            local res, msg = MT.FromGraph('normal', { nx = col.r, nz = col.g }, { size = V(run, node, 'size'), assign = V(run, node, 'assign') })
-            if not res then error('map normal map: ' .. tostring(msg)) end
-            result.maptextures = (result.maptextures or 0) + 1
-            if msg then table.insert(notes, msg) end
-        end
+        if col and not fail then fail = Make('normal', 'map normal map', node, { nx = col.r, nz = col.g }) end
     end
     for _, node in OutputNodes(graph, 'maplight') do
         local shadow = run:Value(node.id, 'view')
-        if shadow then
-            local res, msg = MT.FromGraph('light', { shadow = shadow, ao = run:Value(node.id, 'occlusion') }, { size = V(run, node, 'size'), assign = V(run, node, 'assign') })
-            if not res then error('map lighting: ' .. tostring(msg)) end
-            result.maptextures = (result.maptextures or 0) + 1
-            if msg then table.insert(notes, msg) end
-        end
+        if shadow and not fail then fail = Make('light', 'map lighting', node, { shadow = shadow, ao = run:Value(node.id, 'occlusion') }) end
     end
+    if fail then return fail end
     if result.maptextures then
         result.mapNote = string.format(', %d map texture%s', result.maptextures, result.maptextures == 1 and '' or 's') .. (notes[1] and (' (' .. table.concat(notes, '; ') .. ')') or '')
     end
+    return nil
 end
 
 --- Runs the graph at full resolution and writes the outputs: heights, texture layers, terrain types and scattered props as ONE undo step.
@@ -803,7 +815,7 @@ function Build()
     local ok, report = pcall(run.Evaluate, run)
     if not ok then
         DropBuild(run)
-        return nil, Strip(report)
+        return nil, Strip(report), Fields.ErrorTrace(report)
     end
     for id, msg in report.errors do
         local n = Graph.NodeById(id)
@@ -829,72 +841,73 @@ function Build()
     local result = { changed = 0, layers = 0, types = 0, props = 0 }
     local depthBefore = History.Depth()
     local pushed = 0
-    local okBuild, err = pcall(function()
-        Fields.Run(function(S)
-            local base = EnsureBase()
-            -- heights
-            local final = FinalHeight(run, S, base)
-            if final then
-                local changed = Fields.Apply{ height = final, masks = {}, label = 'Terrain graph' }
-                result.changed = changed or 0
+    local failure = nil         -- a failure the build reports on purpose (a plain message, no traceback)
+    -- Fields.Try, not Run: a failure comes back here without being raised once more (every raise puts another traceback into the message)
+    local okBuild, err = Fields.Try(function(S)
+        local base = EnsureBase()
+        -- heights
+        local final = FinalHeight(run, S, base)
+        if final then
+            local changed = Fields.Apply{ height = final, masks = {}, label = 'Terrain graph' }
+            result.changed = changed or 0
+        end
+        -- texture layers
+        local MaskGen = import('/lua/editor/maskgen.lua')
+        local c = MaskGen.NewContext(S, { step = 1 })
+        for _, node in OutputNodes(graph, 'layer') do
+            local m = run:Value(node.id, 'view')
+            if m then
+                local mode = ({ replace = 1, add = 2, subtract = 3 })[V(run, node, 'mode')] or 1
+                local layer = math.floor(V(run, node, 'layer') + 0.5)
+                local entry, n = MaskGen.WriteLayer(c, m, layer, { mode = mode, strength = V(run, node, 'strength'), takeAway = V(run, node, 'takeAway') }, false)
+                if entry then result.layers = result.layers + 1 end
+                -- the layer's texture by kind (grass, rock, sand ...) from the map's texture set, so the mask shows as something
+                local role = V(run, node, 'texture')
+                if role and role ~= 'keep' then pcall(function() import('/lua/editor/texsets.lua').ApplyRole(layer, role) end) end
             end
-            -- texture layers
-            local MaskGen = import('/lua/editor/maskgen.lua')
-            local c = MaskGen.NewContext(S, { step = 1 })
-            for _, node in OutputNodes(graph, 'layer') do
+        end
+        -- terrain types
+        if rawget(_G, 'ed_tt_info') and ed_tt_info() then
+            for _, node in OutputNodes(graph, 'types') do
                 local m = run:Value(node.id, 'view')
                 if m then
-                    local mode = ({ replace = 1, add = 2, subtract = 3 })[V(run, node, 'mode')] or 1
-                    local layer = math.floor(V(run, node, 'layer') + 0.5)
-                    local entry, n = MaskGen.WriteLayer(c, m, layer, { mode = mode, strength = V(run, node, 'strength'), takeAway = V(run, node, 'takeAway') }, false)
-                    if entry then result.layers = result.layers + 1 end
-                    -- the layer's texture by kind (grass, rock, sand ...) from the map's texture set, so the mask shows as something
-                    local role = V(run, node, 'texture')
-                    if role and role ~= 'keep' then pcall(function() import('/lua/editor/texsets.lua').ApplyRole(layer, role) end) end
+                    local entry, n = MaskGen.WriteTypes(c, m, math.floor(V(run, node, 'code') + 0.5), V(run, node, 'threshold'), false)
+                    if entry then result.types = result.types + 1 end
                 end
             end
-            -- terrain types
-            if rawget(_G, 'ed_tt_info') and ed_tt_info() then
-                for _, node in OutputNodes(graph, 'types') do
-                    local m = run:Value(node.id, 'view')
-                    if m then
-                        local entry, n = MaskGen.WriteTypes(c, m, math.floor(V(run, node, 'code') + 0.5), V(run, node, 'threshold'), false)
-                        if entry then result.types = result.types + 1 end
-                    end
+        end
+        -- colour images (stage T7)
+        for _, node in OutputNodes(graph, 'colormap') do
+            local col = run:Value(node.id, 'view')
+            if col then
+                local ok, werr = GraphColor.Write(col, V(run, node, 'path'), V(run, node, 'size'))
+                if ok then result.colormaps = (result.colormaps or 0) + 1 else failure = 'colour image: ' .. tostring(werr) return end
+            end
+        end
+        -- map-wide shader textures: the normal map and the lighting texture (maptextures.lua)
+        local mapFail = BuildMapTextures(run, graph, result)
+        if mapFail then failure = mapFail return end
+        -- props
+        local Scatter = import('/lua/editor/scatter.lua')
+        for _, node in OutputNodes(graph, 'scatter') do
+            local density = run:Value(node.id, 'view')
+            local entries = node.params.entries or {}
+            if table.getn(entries) > 0 then
+                local kind = V(run, node, 'kind')
+                local settings = {
+                    mode = kind, decalSize = 10, withNormals = true, seed = run.seed or graph.seed,
+                    count = V(run, node, 'count'), minDist = V(run, node, 'minDist'), fill = V(run, node, 'fill'), slopeMin = 0, slopeMax = V(run, node, 'slopeMax'),
+                    heightMin = -100, heightMax = 600, scaleMin = V(run, node, 'scaleMin'), scaleMax = V(run, node, 'scaleMax'), randomHeading = true, avoidExisting = true,
+                    margin = V(run, node, 'margin'), underWater = V(run, node, 'underWater'),
+                }
+                settings.seed = math.mod((run.seed or graph.seed) * 1009 + node.id * 101 + math.floor(V(run, node, 'seed')), 1000003)
+                local plan, rep = Scatter.Plan{ settings = settings, entries = entries, density = density }
+                if plan then
+                    local n = Scatter.Place(plan, 'terrain graph props', kind)
+                    result.props = result.props + (n or 0)
                 end
             end
-            -- colour images (stage T7)
-            for _, node in OutputNodes(graph, 'colormap') do
-                local col = run:Value(node.id, 'view')
-                if col then
-                    local ok, werr = GraphColor.Write(col, V(run, node, 'path'), V(run, node, 'size'))
-                    if ok then result.colormaps = (result.colormaps or 0) + 1 else error('colour image: ' .. tostring(werr)) end
-                end
-            end
-            -- map-wide shader textures: the normal map and the lighting texture (maptextures.lua)
-            BuildMapTextures(run, graph, result)
-            -- props
-            local Scatter = import('/lua/editor/scatter.lua')
-            for _, node in OutputNodes(graph, 'scatter') do
-                local density = run:Value(node.id, 'view')
-                local entries = node.params.entries or {}
-                if table.getn(entries) > 0 then
-                    local kind = V(run, node, 'kind')
-                    local settings = {
-                        mode = kind, decalSize = 10, withNormals = true, seed = run.seed or graph.seed,
-                        count = V(run, node, 'count'), minDist = V(run, node, 'minDist'), fill = V(run, node, 'fill'), slopeMin = 0, slopeMax = V(run, node, 'slopeMax'),
-                        heightMin = -100, heightMax = 600, scaleMin = V(run, node, 'scaleMin'), scaleMax = V(run, node, 'scaleMax'), randomHeading = true, avoidExisting = true,
-                        margin = V(run, node, 'margin'), underWater = V(run, node, 'underWater'),
-                    }
-                    settings.seed = math.mod((run.seed or graph.seed) * 1009 + node.id * 101 + math.floor(V(run, node, 'seed')), 1000003)
-                    local plan, rep = Scatter.Plan{ settings = settings, entries = entries, density = density }
-                    if plan then
-                        local n = Scatter.Place(plan, 'terrain graph props', kind)
-                        result.props = result.props + (n or 0)
-                    end
-                end
-            end
-        end)
+        end
     end)
     local depthAfter = History.Depth()
     pushed = depthAfter - depthBefore
@@ -910,7 +923,8 @@ function Build()
     KeepBuildRun(run)
     result.cached = run.report and run.report.cached or 0
     Invalidate()
-    if not okBuild then return nil, Strip(err) end
+    if not okBuild then return nil, Strip(err), Fields.ErrorTrace(err) end
+    if failure then return nil, failure end
     return result
 end
 

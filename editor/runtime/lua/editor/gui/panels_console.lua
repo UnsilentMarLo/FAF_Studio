@@ -1,8 +1,8 @@
 -- The Console panel: everything the editor prints (LOG, WARN, SPEW, print), the status line messages and the results of the command line, newest at the bottom.
 -- The data and all the logic (ring, filter, commands) are in consolelog.lua; this file is only the view.
 --
---   - one row per entry, coloured by level (errors red, warnings yellow, status messages in the accent colour, the rest normal), the text cut to the width;
---     the entry you select is shown in full, wrapped, in the box under the list
+--   - one row per entry, coloured by level (errors red, warnings yellow, status messages in the accent colour, the rest normal), always ONE line cut to the width (a tooltip has the
+--     full text); the entry you select is shown in full, wrapped, in the box under the list
 --   - toolbar: Errors / Warnings / Status / Info switch a level on or off, a filter field (case-insensitive part of the text), Clear, Copy (the shown lines) and Scroll lock
 --   - command line at the bottom: Enter runs the text as Lua in the UI state ("= expr" or a bare expression prints its value); "sim <code>" runs it in the sim (the SimLua console
 --     command); Up and Down walk through the last 50 commands
@@ -72,7 +72,8 @@ Panels.Register{
             bind = function(row, index)
                 local e = P.rows[index]
                 if not e then return end
-                W.FitCached(row.text, Console.RowText(e), math.max(Skin.S(30), row.bg.Width() - Skin.S(12)))
+                -- always one line, cut to the width (nothing at all when not even "..." fits: a text wider than its row would be drawn over the next panel); the same label is reused for every bind
+                W.FitCached(row.text, Console.RowText(e), math.max(0, row.bg.Width() - Skin.S(12)))
                 row.text:SetColor(LevelColor(e.level))
                 local ty = math.floor((row.bg.Height() - row.text.Height()) / 2)
                 if row.ty ~= ty then
@@ -80,6 +81,13 @@ Panels.Register{
                     row.text.Left:Set(function() return row.bg.Left() + Skin.S(6) end)
                     row.text.Top:Set(function() return row.bg.Top() + ty end)
                 end
+            end,
+            rowTip = function(index)
+                local e = P.rows[index]
+                if not e then return nil end
+                local text = Console.Line(e)
+                if string.len(text) > 700 then text = string.sub(text, 1, 700) .. '...' end
+                return text
             end,
             onSelect = function(index)
                 local e = P.rows[index]
