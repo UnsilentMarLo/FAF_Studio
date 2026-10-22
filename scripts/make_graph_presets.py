@@ -13,9 +13,9 @@ OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 
 # erosion presets of erosion.lua (the values that differ from the solver defaults; the shipped graph nodes use the same numbers, see TERRAIN_GEN_DESIGN.md)
 DROPLET_MOUNTAIN = dict(density=3, lifetime=60, inertia=0.3, capacity=8, erode=0.45, deposit=0.15, gravity=5, thermal=0.4, thermal_steps=3, talus=0.9, vary=0.55, protect=0.7, drop_vary=0.6, max_change=25)
-HYDRAULIC_HILLS = dict(deposition=0.08, thermal=0.3, talus=0.6)
-HYDRAULIC_ISLAND = dict(erosion=0.06, deposition=0.08, thermal=0.3, talus=0.6, vary=0.3, rain_vary=0.4, protect=0.3)
-HYDRAULIC_DESERT = dict(iterations=120, rain=0.002, evaporation=0.05, capacity=0.5, deposition=0.2, thermal=0.7, thermal_every=1, talus=0.35, vary=0.3, rain_vary=0.7, protect=0.3)
+HYDRAULIC_HILLS = dict(iterations=100, rain=0.006, deposition=0.08, thermal=0.25, talus=0.9)
+DROPLET_ISLAND = dict(density=2, lifetime=50, radius=4, drop_vary=0.8, thermal=0.3, thermal_steps=2, talus=0.8, vary=0.3, rain_vary=0.4, protect=0.3, max_change=12)
+DROPLET_DESERT = dict(density=0.6, lifetime=60, capacity=6, erode=0.4, deposit=0.2, thermal=0.6, thermal_steps=6, talus=0.7, vary=0.3, rain_vary=0.8, protect=0.3, drop_vary=0.8)
 STREAM_CANYON = dict(iterations=14, k=1.5, max_cut=0.7, diffusion=0.05, widen=2, talus=1.2, area_min=40, jitter=0.3, protect=0.6, vary=0.5)
 STREAM_BADLANDS = dict(iterations=20, k=0.8, diffusion=0.15, widen=2, area_min=60, talus=0.7, jitter=0.5, vary=0.6, vary_scale=40, protect=0.4)
 DROPLET_CRATER = dict(lifetime=50, erode=0.2, thermal=0.5, thermal_steps=3, talus=0.8, protect=0.8, vary=0.3)
@@ -95,13 +95,13 @@ def mountains():
 
 
 def island():
-    g = G('island', 'Island (radial falloff, hills, beach)', 'A noisy island: noise times a radial falloff, hydraulic erosion, a sand beach on the shore band.', seed=2)
+    g = G('island', 'Island (radial falloff, hills, beach)', 'A noisy island: noise times a radial falloff, droplet erosion (valleys running down to the coast), a sand beach on the shore band.', seed=2)
     g.n('p', 'perlin', 0, 0, scale=150, octaves=5)
     g.n('rad', 'radial', 0, 1, invert=True)
     g.n('ss', 'smoothstep', 1, 1, edge0=0.12, edge1=0.7)
     g.n('m', 'mul', 2, 0)
     g.n('h', 'range', 3, 0, lo=8, hi=78)
-    g.n('e', 'erode_hydraulic', 4, 0, **HYDRAULIC_ISLAND)
+    g.n('e', 'erode_droplet', 4, 0, **DROPLET_ISLAND)
     g.n('o', 'out_height', 5, 0)
     g.n('sh', 'shore', 5, 1, width=4, soft=3)
     g.n('l', 'out_layer', 6, 1, layer=2)
@@ -149,14 +149,14 @@ def hills():
 
 
 def desert():
-    g = G('desert', 'Desert (mesas, dunes, sand)', 'Terraced mesas with wind-worn edges; sand on the flat ground, rock on the steep.', seed=6)
+    g = G('desert', 'Desert (mesas, dunes, sand)', 'Terraced mesas cut by dry washes and fans (sparse droplet erosion); sand on the flat ground, rock on the steep.', seed=6)
     g.n('p', 'perlin', 0, 0, scale=170, octaves=4)
     g.n('t', 'terrace', 1, 0, steps=5, sharpness=0.8)
     g.n('bl', 'blur', 2, 0, radius=3)
     g.n('d', 'simplex', 0, 1, scale=45, octaves=3)
     g.n('ad', 'blend', 3, 0, mode='add', opacity=0.08)
     g.n('h', 'range', 4, 0, lo=26, hi=70)
-    g.n('e', 'erode_hydraulic', 5, 0, **HYDRAULIC_DESERT)
+    g.n('e', 'erode_droplet', 5, 0, **DROPLET_DESERT)
     g.n('o', 'out_height', 6, 0)
     g.n('mp', 'mask_preset', 6, 1, preset='cliffs')
     g.n('l', 'out_layer', 7, 1, layer=3)

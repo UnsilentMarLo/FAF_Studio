@@ -1,10 +1,10 @@
 -- Sample graphs of the terrain graph editor (written by scripts/make_graph_presets.py).
 List = {
     { id = 'mountains', name = 'Mountains (ridges, droplet erosion, cliffs and snow)', note = 'Ridged noise bent by a warp, scaled to heights, eroded by droplets; cliffs on the steep ground, snow on the high ground.' },
-    { id = 'island', name = 'Island (radial falloff, hills, beach)', note = 'A noisy island: noise times a radial falloff, hydraulic erosion, a sand beach on the shore band.' },
+    { id = 'island', name = 'Island (radial falloff, hills, beach)', note = 'A noisy island: noise times a radial falloff, droplet erosion (valleys running down to the coast), a sand beach on the shore band.' },
     { id = 'canyon', name = 'Canyon (stream power river gorges)', note = 'A plateau cut by a drainage network of deep river valleys; rock on the walls.' },
     { id = 'hills', name = 'Rolling hills (two noises, hydraulic erosion)', note = 'Soft hills from simplex and billow noise blended together, then eroded by water. Dirt patches on the flat ground.' },
-    { id = 'desert', name = 'Desert (mesas, dunes, sand)', note = 'Terraced mesas with wind-worn edges; sand on the flat ground, rock on the steep.' },
+    { id = 'desert', name = 'Desert (mesas, dunes, sand)', note = 'Terraced mesas cut by dry washes and fans (sparse droplet erosion); sand on the flat ground, rock on the steep.' },
     { id = 'river_valley', name = 'River valley (a river path through hills)', note = 'Gentle hills with a river carved along a wobbling path: a flat bed under the water level, banks, sand along the river.' },
     { id = 'symmetric', name = 'Symmetric hills (four-fold mirror)', note = 'Hills mirrored across both axes, exact copies: a fair, symmetric map by construction. Change the mode to rotate for a two-player map.' },
     { id = 'archipelago', name = 'Archipelago (many islands)', note = 'Cell noise cut into islands, rough coasts from fine noise, sand on the shores.' },
@@ -25,7 +25,7 @@ List = {
     { id = 'lib_canyon_river', name = 'Canyon with a river', note = 'A terraced plateau cut by stream-power gorges and a river along a path: U-shaped canyon, rock layers (stratify) on the walls, sand on the river bed, a pad on each rim.', library = true },
     { id = 'lib_highlands', name = 'Highlands: massifs and valley floors', note = 'Mountain preset scaled to heights, sediment settles in the valley floors (flat building ground), rock layers on the steep faces, thermal talus, snow on the tops. The pad node flattens a base in a valley.', library = true },
     { id = 'lib_desert_dunes', name = 'Desert: dunes and mesas', note = 'Dune fields (asymmetric ridges with a meandering crest) between mesas, shaped by wind erosion, dry mud cracks on the flats; sand where the wind put it, rock on the faces.', library = true },
-    { id = 'lib_tropics', name = 'Tropical island', note = 'A ragged island of soft hills, hydraulic erosion cuts the valleys, wetness makes the lush ground, a sand beach on the shore, dark undergrowth in the cavities. The base pad sits on the highest ground of its area.', library = true },
+    { id = 'lib_tropics', name = 'Tropical island', note = 'A ragged island of soft hills, droplet erosion cuts the valleys, wetness makes the lush ground, a sand beach on the shore, dark undergrowth in the cavities. The base pad sits on the highest ground of its area.', library = true },
     { id = 'lib_alpine', name = 'Alpine: glaciers and snow', note = 'Ridged mountains, a glacier grinds U-shaped valleys above the equilibrium line, snow lies above the snow line and slumps off the steep faces, bare rock where it is steep or convex.', library = true },
     { id = 'lib_badlands', name = 'Badlands: layered rock', note = 'Stepped mesas, strongly layered cliffs (stratify), rock and soil split (soil slides into the hollows), dry cracks on the soil, cavity-darkened gullies.', library = true },
     { id = 'lib_moon', name = 'Moon: craters', note = 'Two sizes of impact craters on gentle terrain, settled and slope limited so the rims are climbable; cavity mask for the dark crater floors.', library = true },

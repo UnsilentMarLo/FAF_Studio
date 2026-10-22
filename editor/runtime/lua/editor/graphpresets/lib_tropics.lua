@@ -1,4 +1,4 @@
--- A ragged island of soft hills, hydraulic erosion cuts the valleys, wetness makes the lush ground, a sand beach on the shore, dark undergrowth in the cavities. The base pad sits on the highest ground of its area.
+-- A ragged island of soft hills, droplet erosion cuts the valleys, wetness makes the lush ground, a sand beach on the shore, dark undergrowth in the cavities. The base pad sits on the highest ground of its area.
 Graph = {
     ['name'] = 'Tropical island',
     ['nextId'] = 18,
@@ -24,16 +24,19 @@ Graph = {
         {
             ['id'] = 7,
             ['params'] = {
-                ['deposition'] = 0.08,
-                ['erosion'] = 0.09,
-                ['iterations'] = 140,
+                ['density'] = 2,
+                ['drop_vary'] = 0.8,
+                ['lifetime'] = 50,
+                ['max_change'] = 12,
                 ['protect'] = 0.3,
+                ['radius'] = 4,
                 ['rain_vary'] = 0.6,
-                ['talus'] = 0.6,
+                ['talus'] = 0.8,
                 ['thermal'] = 0.3,
+                ['thermal_steps'] = 2,
                 ['vary'] = 0.5,
             },
-            ['type'] = 'erode_hydraulic',
+            ['type'] = 'erode_droplet',
             ['x'] = 896,
             ['y'] = 0,
         },

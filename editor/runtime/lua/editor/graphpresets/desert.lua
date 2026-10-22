@@ -1,4 +1,4 @@
--- Terraced mesas with wind-worn edges; sand on the flat ground, rock on the steep.
+-- Terraced mesas cut by dry washes and fans (sparse droplet erosion); sand on the flat ground, rock on the steep.
 Graph = {
     ['name'] = 'Desert (mesas, dunes, sand)',
     ['nextId'] = 11,
@@ -36,19 +36,20 @@ Graph = {
         {
             ['id'] = 7,
             ['params'] = {
-                ['capacity'] = 0.5,
-                ['deposition'] = 0.2,
-                ['evaporation'] = 0.05,
-                ['iterations'] = 120,
+                ['capacity'] = 6,
+                ['density'] = 0.6,
+                ['deposit'] = 0.2,
+                ['drop_vary'] = 0.8,
+                ['erode'] = 0.4,
+                ['lifetime'] = 60,
                 ['protect'] = 0.3,
-                ['rain'] = 0.002,
-                ['rain_vary'] = 0.7,
-                ['talus'] = 0.35,
-                ['thermal'] = 0.7,
-                ['thermal_every'] = 1,
+                ['rain_vary'] = 0.8,
+                ['talus'] = 0.7,
+                ['thermal'] = 0.6,
+                ['thermal_steps'] = 6,
                 ['vary'] = 0.3,
             },
-            ['type'] = 'erode_hydraulic',
+            ['type'] = 'erode_droplet',
             ['x'] = 1120,
             ['y'] = 0,
         },

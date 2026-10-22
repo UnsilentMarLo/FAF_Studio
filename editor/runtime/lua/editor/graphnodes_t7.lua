@@ -251,8 +251,8 @@ function Install(Kit, Covers)
     Def('erode_rocksoil', { label = 'Rock and soil', cat = 'erosion', kw = 'rock soil weathering regolith slide split rockiness bedrock', inputs = { In('a', 'height'), In('b', 'mask', true) },
         outputs = { Out('out', 'height'), Out('soil', 'height'), Out('rock', 'mask'), Out('moved', 'mask') },
         desc = 'Two layers: rock weathers into soil, the soil slides off steep ground (never more than there is), the rock holds steeper faces. Outputs the soil thickness and a rock exposure mask. Wire a soil thickness into b to start from your own.',
-        params = { N('iterations', 'Iterations', 1, 400, 1, '%d', 60), N('soil', 'Start soil thickness (units)', 0, 20, 0.1, '%.1f', 0.6), N('weather', 'Weathering per step', 0, 0.2, 0.002, '%.3f', 0.01),
-                   N('depth0', 'Weathering slows at soil depth (units)', 0.1, 10, 0.1, '%.1f', 1), N('soil_talus', 'Soil talus (rise / run)', 0.05, 1.5, 0.05, '%.2f', 0.35), N('rock_talus', 'Rock talus (0 = rock holds)', 0, 4, 0.05, '%.2f', 1.2),
+        params = { N('iterations', 'Iterations', 1, 400, 1, '%d', 60), N('soil', 'Start soil thickness (units)', 0, 20, 0.1, '%.1f', 0.4), N('weather', 'Weathering per step', 0, 0.2, 0.002, '%.3f', 0.01),
+                   N('depth0', 'Weathering slows at soil depth (units)', 0.1, 10, 0.1, '%.1f', 1), N('soil_talus', 'Soil talus (rise / run)', 0.05, 1.5, 0.05, '%.2f', 0.7), N('rock_talus', 'Rock talus (0 = rock holds)', 0, 4, 0.05, '%.2f', 3),
                    N('rock_vis', 'Rock shows below soil depth (units)', 0.05, 5, 0.05, '%.2f', 0.4), N('rate', 'Rate', 0.05, 1, 0.05, '%.2f', 0.5) },
         eval = function(E, v, ins)
             return Multi(E, 'erode_rocksoil', { a = ins.a, b = ins.b, iterations = Iters(E, v.iterations), soil = v.soil, weather = v.weather, depth0 = v.depth0, soil_talus = v.soil_talus,

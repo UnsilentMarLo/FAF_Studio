@@ -13,11 +13,16 @@
 --   Masks(result)                   -> { wear = f, deposit = f, flow = f } normalised to 0..1
 --
 -- Settings every solver shares (see Shared() below): Hardness variation + feature size (hard and soft ground), Rain variation, Protect ridges, Keep height range, Largest change,
--- Keep volume, and per solver Downhill acceleration + Droplet variation (droplets), Flow jitter (stream), Seed (all). A key a node or a saved graph does not have simply takes the
--- `default` below (there is no separate value for old graphs: the editor is not in production, graphs saved with older defaults change their result). The defaults were tuned on purpose:
---   hydraulic   iterations 150 (was 200), rain 0.004 (0.006), dissolving 0.08 (0.12), settling 0.05 (0.06): a default run changes the ground moderately instead of filling the valleys and
---               smoothing the hills (the old defaults lowered the relief by a quarter on the test terrain)
---   droplet     2 droplets per cell (1), life 40 (30), 1 filter pass (2), downhill acceleration 1 (0: with the old rule droplets slowed down on slopes and dug almost nothing)
+-- Keep volume, and per solver Downhill acceleration + Droplet variation + Feedback rounds (droplets), Flow jitter + Valley width growth (stream), Seed (all). A key a node or a saved graph does not
+-- have simply takes the `default` below (there is no separate value for old graphs: the editor is not in production, graphs saved with older defaults change their result). The defaults were
+-- tuned on rendered test terrains (rolling hills with cliffs, a rough mountain field; hillshade, slope and drainage pictures), not by eye on the numbers:
+--   droplet     32 feedback rounds (was 4): every round the steering surface is refreshed, so the droplets of a round see the valleys the earlier ones dug and join them. With 4 rounds every drop
+--               carved a lone groove (a smear of worms on the plains, soft cliffs, no branching); with 32 the gullies capture their neighbours, branch downhill and leave sharp ridges between
+--               them. 2 droplets per cell, life 40, 1 filter pass, downhill acceleration 1
+--   hydraulic   iterations 60 (was 150), rain 0.004, dissolving 0.08, settling 0.05: the grid solver moves material slowly and smooths: after 150 steps it had flattened the 16 - 64 unit
+--               relief of a droplet result by a third; 60 steps keep it and still crisp up the gullies. It is the finishing step (soft deposits, rounded basins), not the carver
+--   stream      erodibility 0.05 (was 0.5) with 20 steps: one step removes the share F / (1 + F) of the drop to the lowest neighbour, F = k * catchment ^ m, so rivers of different size cut at
+--               different speed (before, any k above 0.5 gave exactly the same result: every channel sat at the cap), valleys widen with the catchment (Valley width growth)
 --   all         hardness variation 0.4, rain variation 0.5, protect ridges 0.5, keep height range on
 -- The map edge: the solvers no longer pin the outer ring (edge = open in the native ops); the old behaviour left a wall of untouched ground at the map border (EdErosion.h).
 --
@@ -51,7 +56,7 @@ Solvers = {
     hydraulic = {
         op = 'erode_hydraulic', label = 'Hydraulic (grid)',
         params = {
-            P('iterations', 'Iterations', 10, 2000, 10, '%d', 150),
+            P('iterations', 'Iterations', 10, 2000, 10, '%d', 60),
             P('rain', 'Rain per step (units)', 0.0005, 0.05, 0.0005, '%.4f', 0.004),
             P('evaporation', 'Evaporation', 0.002, 0.15, 0.002, '%.3f', 0.02),
             P('gain', 'Water speed (pipe gain)', 0.01, 0.25, 0.01, '%.2f', 0.08),
@@ -91,18 +96,21 @@ Solvers = {
             P('seed', 'Seed', 0, 9999, 1, '%d', 1),
             P('accel', 'Downhill acceleration', 0, 1, 0.05, '%.2f', 1, 'How much a drop speeds up going downhill. 1 = like a real drop (fast on steep ground, so it digs there); 0 = the old rule, which slowed drops down on slopes so they dug almost nothing.'),
             P('drop_vary', 'Droplet variation', 0, 1, 0.05, '%.2f', 0.5, 'Every drop gets its own size, lifetime, inertia and load, so the gullies are no longer evenly spaced copies of each other. 0 = identical drops.'),
+            P('rounds', 'Feedback rounds', 1, 64, 1, '%d', 32, 'The droplets are released in this many rounds; between rounds the water surface is recomputed, so later drops follow the valleys earlier ones dug (gullies join and branch). Few rounds = every drop digs a lone groove; more rounds cost time.'),
         },
     },
     stream = {
         op = 'erode_stream', label = 'Stream power (rivers)',
         params = {
-            P('iterations', 'Iterations', 1, 60, 1, '%d', 10),
-            P('k', 'Erodibility', 0.01, 4, 0.01, '%.2f', 0.5),
+            P('iterations', 'Iterations', 1, 60, 1, '%d', 20),
+            P('k', 'Erodibility', 0.01, 4, 0.01, '%.2f', 0.05, 'Rivers cut faster the bigger their catchment: one step removes the share k * catchment^m / (1 + k * catchment^m) of the drop to the lowest neighbour (at most Cut per step). Low = only big rivers cut, high = every channel cuts at the limit.'),
             P('m', 'Drainage exponent', 0.1, 1, 0.05, '%.2f', 0.5),
             P('area_min', 'Smallest river (catchment cells)', 1, 600, 1, '%d', 40),
             P('spread', 'Flow spreading (low = wide)', 0.3, 4, 0.1, '%.1f', 1),
             P('max_cut', 'Cut per step (share)', 0.05, 1, 0.05, '%.2f', 0.5),
             P('widen', 'Channel widening', 0, 6, 1, '%d', 1),
+            P('width_vary', 'Valley width growth', 0, 1, 0.05, '%.2f', 1, 'Bigger rivers get wider valleys (up to 4 more smoothing steps for a catchment of 10000 cells); small streams stay narrow gullies. 0 = every channel as wide as set above.'),
+            P('route_every', 'Recompute rivers every n steps', 1, 8, 1, '%d', 3, 'The drainage network is rebuilt this often; in between the cutting follows the last one. 3 is nearly identical to 1 at a third of the time.'),
             P('diffusion', 'Hillslope diffusion', 0, 1, 0.05, '%.2f', 0.2),
             P('talus', 'Talus (rise / run)', 0.1, 2, 0.05, '%.2f', 0.7),
             P('uplift', 'Uplift per step (units)', 0, 2, 0.05, '%.2f', 0),
@@ -120,14 +128,15 @@ Presets = {
     -- Values not listed are the solver's defaults (accel 1, drop_vary 0.5, vary 0.4, rain_vary 0.5, protect 0.5, keep_range 1, jitter 0.4). Each preset names the settings that give it its look.
     -- Mountain: tall ridges kept (protect), hard and soft rock side by side, every drop different; max_change stops the faster droplets (accel 1) from cutting the peaks down.
     { id = 'mountain', label = 'Mountain', solver = 'droplet', values = { density = 3, lifetime = 60, inertia = 0.3, capacity = 8, erode = 0.45, deposit = 0.15, gravity = 5, thermal = 0.4, thermal_steps = 3, talus = 0.9, vary = 0.55, protect = 0.7, drop_vary = 0.6, max_change = 25 } },
-    -- Hills: soft, rounded; the defaults of the hydraulic solver with a little thermal slumping.
-    { id = 'hills', label = 'Hills', solver = 'hydraulic', values = { deposition = 0.08, thermal = 0.3, talus = 0.6 } },
+    -- Hills: soft, rounded; the grid solver finishes smooth hills with gentle gullies at the steep ground (100 steps, a little thermal slumping that keeps cliffs steeper than talus 0.9).
+    { id = 'hills', label = 'Hills', solver = 'hydraulic', values = { iterations = 100, rain = 0.006, deposition = 0.08, thermal = 0.25, talus = 0.9 } },
     -- Canyon: straight, deep gorges (low jitter) in a plateau whose rim stays (protect), rock layers of different hardness.
     { id = 'canyon', label = 'Canyon', solver = 'stream', values = { iterations = 14, k = 1.5, max_cut = 0.7, diffusion = 0.05, widen = 2, talus = 1.2, area_min = 40, jitter = 0.3, protect = 0.6, vary = 0.5 } },
     -- Alpine: sharp, strongly protected crests and long steep flanks with scree (thermal), the most varied of the droplet presets.
     { id = 'alpine', label = 'Alpine', solver = 'droplet', values = { density = 2.5, lifetime = 80, inertia = 0.2, capacity = 6, erode = 0.4, deposit = 0.05, gravity = 6, thermal = 0.6, thermal_steps = 6, talus = 0.7, vary = 0.6, protect = 0.8, drop_vary = 0.7, max_change = 30 } },
-    -- Desert: dry, rare and patchy rain (flash floods), the ground mostly shaped by slides (thermal every step) and wind-worn mesa rims.
-    { id = 'desert', label = 'Desert', solver = 'hydraulic', values = { iterations = 120, rain = 0.002, evaporation = 0.05, capacity = 0.5, deposition = 0.2, thermal = 0.7, thermal_every = 1, talus = 0.35, vary = 0.3, rain_vary = 0.7, protect = 0.3 } },
+    -- Desert: dry, rare and patchy rain (flash floods): few drops (0.6 per cell) with very different sizes cut sparse washes and fans into the mesa flanks, slides (talus 0.7) lay scree aprons, the rims stay steep.
+    -- (Before: the hydraulic solver with thermal slides every step at talus 0.35, which turned every cliff into a soft ramp.)
+    { id = 'desert', label = 'Desert', solver = 'droplet', values = { density = 0.6, lifetime = 60, capacity = 6, erode = 0.4, deposit = 0.2, thermal = 0.6, thermal_steps = 6, talus = 0.7, vary = 0.3, rain_vary = 0.8, protect = 0.3, drop_vary = 0.8 } },
     -- River valley: wandering rivers (more jitter) with wide soft banks.
     { id = 'river', label = 'River valley', solver = 'stream', values = { iterations = 20, k = 0.5, m = 0.5, diffusion = 0.3, widen = 2, area_min = 60, talus = 0.5, jitter = 0.5, vary = 0.3, protect = 0.3 } },
 }
