@@ -1,0 +1,1520 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 13:54:30 +0000
+Subject: [PATCH] editor overlay performance: slope view rates 64x64 tiles once
+ (sliding window maxima, block levels, dirty by height sink, time budget),
+ draws at most 160 blocks per side with same-colour runs merged; node grids
+ share projections by window, project lazily and only for cells that draw,
+ skip empty cells and merge flat runs, ed_overlay_nodes_rect / ed_overlay_perf
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdOverlay.cpp b/src/sdk/moho/editor/EdOverlay.cpp
+index 9c34241..42c24e5 100644
+--- a/src/sdk/moho/editor/EdOverlay.cpp
++++ b/src/sdk/moho/editor/EdOverlay.cpp
+@@ -1,7 +1,11 @@
+ #include "moho/editor/EdOverlay.h"
+ #include "moho/editor/EdOverlayGeom.h"
++#include "moho/editor/EdOverlayNodes.h"
++#include "moho/editor/EdOverlaySlope.h"
+ 
+ #include <algorithm>
++#include <array>
++#include <chrono>
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdlib>
+@@ -82,6 +86,8 @@ namespace
+     std::vector<std::uint8_t> v;
+     std::uint32_t rgb = 0xFFFFFFu;
+     std::uint32_t maxAlpha = 0xC0u;
++    std::vector<moho::editor::overlaynodes::Run> runs;   // the cells that draw anything (EdOverlayNodes.h), rebuilt when the values change
++    bool runsDirty = true;
+   };
+ 
+   std::map<std::string, NodeGrid>& NodeGrids()
+@@ -105,6 +111,10 @@ namespace
+   //   against the footprint's MaxSlope (0.75 for every land, amphibious and hover footprint, lua/footprints.lua).
+   // kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over the skirt
+   //   (window x window cells, window + 1 samples per side), against the blueprint's Physics.MaxGroundVariation (1.1 for most).
++  //
++  // The ratings are kept in a tile cache (EdOverlaySlope.h) until the heights under a tile change (NotifyHeights, called by the document's height sink) or
++  // the rule / window changes; a frame only rates tiles that were never rated or went stale, within a time budget, and draws at most kMaxBlocks blocks
++  // per side whatever the zoom.
+   struct SlopeLayer
+   {
+     bool on = false;
+@@ -116,6 +126,34 @@ namespace
+ 
+   SlopeLayer gSlope;
+ 
++  unsigned gHeightEpoch = 1;                       // moves with every change of the height field (NotifyHeights)
++  moho::editor::overlayslope::Store gSlopeStore;
++  unsigned gSlopeFrame = 0;
++  constexpr int kSlopeMaxBlocks = 160;             // blocks per side drawn at most
++  constexpr double kSlopeBudgetMs = 5.0;           // rating time per frame
++
++  // numbers for ed_overlay_perf (last frame)
++  struct OverlayPerf
++  {
++    double slopeRateMs = 0.0;       // time spent rating tiles
++    double slopeDrawMs = 0.0;       // time to project and draw the slope blocks (without the rating)
++    int slopeTilesRated = 0;
++    int slopePending = 0;           // tiles in view that still wait for their rating
++    int slopeQuads = 0;
++    int slopeLevel = 0;
++    int slopeNodesProjected = 0;
++    double gridsMs = 0.0;
++    int gridQuads = 0;
++    int gridNodesProjected = 0;
++    int gridGroups = 0;
++  };
++  OverlayPerf gPerf;
++
++  double NowMs()
++  {
++    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
++  }
++
+   moho::CHeightField* ViewHeightField()
+   {
+     moho::CWldSession* const session = moho::WLD_GetActiveSession();
+@@ -125,145 +163,94 @@ namespace
+     return session->mWldMap->mTerrainRes->GetHeightField();
+   }
+ 
+-  // The rating of one cell from a sampler h(x, z) returning the height word of a sample.
+-  template <class Sampler>
+-  float SlopeMetric(const int kind, const int n, const int cx, const int cz, Sampler&& h)
++  // What the camera looked like when a projection was made: the rows of its viewport matrix and the size of the view. A cached projection is good while this is equal.
++  struct CamStamp
+   {
+-    if (kind == 0) {
+-      int maxDelta = 0;
+-      for (int z = cz; z <= cz + n; ++z) {
+-        for (int x = cx; x < cx + n; ++x) {
+-          maxDelta = std::max(maxDelta, std::abs(h(x + 1, z) - h(x, z)));
+-        }
+-      }
+-      for (int x = cx; x <= cx + n; ++x) {
+-        for (int z = cz; z < cz + n; ++z) {
+-          maxDelta = std::max(maxDelta, std::abs(h(x, z + 1) - h(x, z)));
+-        }
+-      }
+-      return static_cast<float>(maxDelta) / 128.0f;
+-    }
+-    int lo = 1 << 30;
+-    int hi = -(1 << 30);
+-    for (int z = cz; z <= cz + n; ++z) {
+-      for (int x = cx; x <= cx + n; ++x) {
+-        const int v = h(x, z);
+-        lo = std::min(lo, v);
+-        hi = std::max(hi, v);
+-      }
++    float m[18] = {};
++    bool operator==(const CamStamp& o) const { return std::memcmp(m, o.m, sizeof(m)) == 0; }
++    bool operator!=(const CamStamp& o) const { return !(*this == o); }
++  };
++
++  CamStamp MakeStamp(const moho::GeomCamera3& camera, const float vw, const float vh)
++  {
++    CamStamp s;
++    for (int r = 0; r < 4; ++r) {
++      s.m[r * 4 + 0] = camera.viewport.r[r].x;
++      s.m[r * 4 + 1] = camera.viewport.r[r].y;
++      s.m[r * 4 + 2] = camera.viewport.r[r].z;
++      s.m[r * 4 + 3] = camera.viewport.r[r].w;
+     }
+-    return static_cast<float>(hi - lo) / 128.0f;
++    s.m[16] = vw;
++    s.m[17] = vh;
++    return s;
+   }
+ 
+-  // Ratings of a whole region, computed with the same rules in separable passes (cost ~ cells x window), then reduced to blocks of
+-  // `stride` x `stride` cells (the steepest cell of a block wins, so a thin cliff never disappears when zoomed far out).
+-  struct SlopeCache
++  // Screen positions of a grid of ground points (x0 + i * step, z0 + j * step), projected when first asked for and kept while the camera, the heights and the grid
++  // stay the same: a static view costs no projection at all, and only the nodes that a drawn cell needs are ever projected.
++  struct ProjGrid
+   {
++    int x0 = 0, z0 = 0, nw = 0, nh = 0, step = 1;
++    float lift = 0.0f;
++    unsigned heightEpoch = 0;
++    CamStamp stamp;
+     bool valid = false;
+-    int kind = -1, x0 = 0, z0 = 0, x1 = 0, z1 = 0, window = 0;
+-    unsigned builtAt = 0;
+-    int stride = 1, bw = 0, bh = 0;
+-    std::vector<float> block;   // bw x bh, row major
+-  };
+-
+-  SlopeCache gSlopeCache;
+-  unsigned gSlopeFrame = 0;
++    std::vector<float> sx, sy;
++    std::vector<std::uint8_t> state;   // 0 not projected yet, 1 on screen side, 2 behind the camera
++    unsigned usedFrame = 0;
+ 
+-  void RebuildSlopeCache(moho::CHeightField& field, const SlopeLayer& L, const int x0, const int z0, const int x1, const int z1)
+-  {
+-    SlopeCache& c = gSlopeCache;
+-    const int n = L.window;
+-    const int cw = x1 - x0;
+-    const int ch = z1 - z0;
+-    const int sw = cw + n + 1;
+-    const int sh = ch + n + 1;
+-    std::vector<int> hs(static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh));
+-    for (int j = 0; j < sh; ++j) {
+-      for (int i = 0; i < sw; ++i) {
+-        hs[static_cast<std::size_t>(j) * sw + i] = static_cast<int>(field.GetHeightAt(x0 + i, z0 + j));
++    void Prepare(const int px0, const int pz0, const int pnw, const int pnh, const int pstep, const float plift, const CamStamp& cs)
++    {
++      if (valid && x0 == px0 && z0 == pz0 && nw == pnw && nh == pnh && step == pstep && lift == plift && heightEpoch == gHeightEpoch && stamp == cs) {
++        return;
+       }
++      x0 = px0; z0 = pz0; nw = pnw; nh = pnh; step = pstep; lift = plift;
++      heightEpoch = gHeightEpoch;
++      stamp = cs;
++      valid = true;
++      const std::size_t n = static_cast<std::size_t>(nw) * static_cast<std::size_t>(nh);
++      sx.resize(n);
++      sy.resize(n);
++      state.assign(n, 0);
+     }
+-    auto H = [&](const int i, const int j) { return hs[static_cast<std::size_t>(j) * sw + i]; };
+-
+-    std::vector<float> val(static_cast<std::size_t>(cw) * ch, 0.0f);
+-    if (L.kind == 0) {
+-      // neighbouring-sample deltas inside the window: rows z in [j, j+n] of horizontal deltas over x in [i, i+n-1], and the same for columns
+-      std::vector<int> a(static_cast<std::size_t>(cw) * sh, 0);        // a[z][i] = max over x in [i, i+n-1] of |h(x+1,z) - h(x,z)|
+-      for (int z = 0; z < sh; ++z) {
+-        for (int i = 0; i < cw; ++i) {
+-          int m = 0;
+-          for (int x = i; x < i + n; ++x) m = std::max(m, std::abs(H(x + 1, z) - H(x, z)));
+-          a[static_cast<std::size_t>(z) * cw + i] = m;
+-        }
+-      }
+-      std::vector<int> b(static_cast<std::size_t>(sw) * ch, 0);        // b[j][x] = max over z in [j, j+n-1] of |h(x,z+1) - h(x,z)|
+-      for (int j = 0; j < ch; ++j) {
+-        for (int x = 0; x < sw; ++x) {
+-          int m = 0;
+-          for (int z = j; z < j + n; ++z) m = std::max(m, std::abs(H(x, z + 1) - H(x, z)));
+-          b[static_cast<std::size_t>(j) * sw + x] = m;
+-        }
+-      }
+-      for (int j = 0; j < ch; ++j) {
+-        for (int i = 0; i < cw; ++i) {
+-          int m = 0;
+-          for (int z = j; z <= j + n; ++z) m = std::max(m, a[static_cast<std::size_t>(z) * cw + i]);
+-          for (int x = i; x <= i + n; ++x) m = std::max(m, b[static_cast<std::size_t>(j) * sw + x]);
+-          val[static_cast<std::size_t>(j) * cw + i] = static_cast<float>(m) / 128.0f;
+-        }
+-      }
+-    } else {
+-      std::vector<int> rmax(static_cast<std::size_t>(cw) * sh), rmin(static_cast<std::size_t>(cw) * sh);
+-      for (int z = 0; z < sh; ++z) {
+-        for (int i = 0; i < cw; ++i) {
+-          int hi = -(1 << 30), lo = 1 << 30;
+-          for (int x = i; x <= i + n; ++x) {
+-            hi = std::max(hi, H(x, z));
+-            lo = std::min(lo, H(x, z));
+-          }
+-          rmax[static_cast<std::size_t>(z) * cw + i] = hi;
+-          rmin[static_cast<std::size_t>(z) * cw + i] = lo;
+-        }
+-      }
+-      for (int j = 0; j < ch; ++j) {
+-        for (int i = 0; i < cw; ++i) {
+-          int hi = -(1 << 30), lo = 1 << 30;
+-          for (int z = j; z <= j + n; ++z) {
+-            hi = std::max(hi, rmax[static_cast<std::size_t>(z) * cw + i]);
+-            lo = std::min(lo, rmin[static_cast<std::size_t>(z) * cw + i]);
+-          }
+-          val[static_cast<std::size_t>(j) * cw + i] = static_cast<float>(hi - lo) / 128.0f;
++
++    // Node (i, j): true when it is in front of the camera; its screen position in (x, y).
++    bool Get(moho::CHeightField& field, moho::GeomCamera3& camera, const float vw, const float vh, const int i, const int j, float& x, float& y, int& projected)
++    {
++      const std::size_t k = static_cast<std::size_t>(j) * static_cast<std::size_t>(nw) + static_cast<std::size_t>(i);
++      if (state[k] == 0) {
++        const int wx = std::max(0, std::min(field.Width() - 1, x0 + i * step));
++        const int wz = std::max(0, std::min(field.Height() - 1, z0 + j * step));
++        const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field.GetHeightAt(wx, wz)) / 128.0f + lift, static_cast<float>(wz)};
++        if (camera.viewport.ProjectViewportDepthRow1(p) >= 1.0f) {
++          const Wm3::Vector2f sp = camera.Project(p, 0.0f, vw, vh, 0.0f);
++          sx[k] = sp.x;
++          sy[k] = sp.y;
++          state[k] = 1;
++        } else {
++          state[k] = 2;
+         }
++        ++projected;
+       }
++      x = sx[k];
++      y = sy[k];
++      return state[k] == 1;
+     }
++  };
+ 
+-    c.stride = std::max(1, (std::max(cw, ch) + 189) / 190);
+-    c.bw = (cw + c.stride - 1) / c.stride;
+-    c.bh = (ch + c.stride - 1) / c.stride;
+-    c.block.assign(static_cast<std::size_t>(c.bw) * c.bh, 0.0f);
+-    for (int j = 0; j < ch; ++j) {
+-      for (int i = 0; i < cw; ++i) {
+-        float& blockValue = c.block[static_cast<std::size_t>(j / c.stride) * c.bw + (i / c.stride)];
+-        blockValue = std::max(blockValue, val[static_cast<std::size_t>(j) * cw + i]);
+-      }
+-    }
+-    c.kind = L.kind;
+-    c.x0 = x0; c.z0 = z0; c.x1 = x1; c.z1 = z1;
+-    c.window = n;
+-    c.builtAt = gSlopeFrame;
+-    c.valid = true;
+-  }
++  ProjGrid gSlopeProj;
++  std::map<std::array<int, 5>, ProjGrid> gGridProj;   // by window (x0, z0, nw, nh, step): shared by every grid that has it
+ 
+-  // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through
+-  std::uint32_t SlopeColor(const float value, const float limit)
++  // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through. `step` is a ColorStep
++  // (EdOverlaySlope.h): 0 flat, 1 .. kSteps up to the limit, kSteps + 1 beyond.
++  std::uint32_t SlopeColor(const int step)
+   {
+-    const float t = value / limit;
+-    if (t > 1.0f) {
++    if (step > moho::editor::overlayslope::kSteps) {
+       return 0xB8C018D8u;
+     }
+-    if (t < 0.04f) {
++    if (step <= 0) {
+       return 0u;
+     }
++    const float t = static_cast<float>(step) / static_cast<float>(moho::editor::overlayslope::kSteps);
+     float r, g, b;
+     if (t < 0.5f) {
+       const float f = t / 0.5f;
+@@ -498,9 +485,9 @@ namespace
+     const int cx = static_cast<int>(std::floor(lua_tonumber(L, 2)));
+     const int cz = static_cast<int>(std::floor(lua_tonumber(L, 3)));
+     const int n = std::max(1, std::min(16, static_cast<int>(lua_tonumber(L, 4))));
+-    const float v = SlopeMetric((std::strcmp(kind, "build") == 0) ? 1 : 0, n, cx, cz,
+-                                [field](int x, int z) { return static_cast<int>(field->GetHeightAt(x, z)); });
+-    lua_pushnumber(L, static_cast<lua_Number>(v));
++    const int v = moho::editor::overlayslope::CellRating((std::strcmp(kind, "build") == 0) ? 1 : 0, n, cx, cz,
++                                                         [field](int x, int z) { return static_cast<int>(field->GetHeightAt(x, z)); });
++    lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(v) / 128.0f));
+     return 1;
+   }
+ 
+@@ -535,11 +522,85 @@ namespace
+     }
+     if (lua_type(L, 8) == LUA_TNUMBER) g.maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, lua_tonumber(L, 8))));
+     if (lua_type(L, 9) == LUA_TNUMBER) g.step = std::max(1, std::min(64, static_cast<int>(lua_tonumber(L, 9))));
++    // the same grid again (a caller that sends its layers every time): keep what is there, with its cell runs and projections
++    const auto existing = NodeGrids().find(lua_tostring(L, 1));
++    if (existing != NodeGrids().end()) {
++      const NodeGrid& e = existing->second;
++      if (e.x0 == g.x0 && e.z0 == g.z0 && e.nw == g.nw && e.nh == g.nh && e.step == g.step && e.rgb == g.rgb && e.maxAlpha == g.maxAlpha && e.v == g.v) {
++        lua_pushboolean(L, 1);
++        return 1;
++      }
++    }
+     NodeGrids()[lua_tostring(L, 1)] = std::move(g);
+     lua_pushboolean(L, 1);
+     return 1;
+   }
+ 
++  // ed_overlay_nodes_rect(id, i0, j0, w, h, values): replaces the nodes [i0, i0 + w) x [j0, j0 + h) of a grid that is already there with `values` (w * h numbers
++  // 0..255, row major): the cheap way to send a change of a few nodes instead of the whole grid. nil, message when there is no such grid or the rectangle is outside it.
++  int __cdecl cfunc_EdOverlayNodesRect(lua_State* const L)
++  {
++    if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 6) != LUA_TTABLE) {
++      lua_pushnil(L);
++      lua_pushstring(L, "ed_overlay_nodes_rect(id, i0, j0, w, h, values)");
++      return 2;
++    }
++    const auto it = NodeGrids().find(lua_tostring(L, 1));
++    if (it == NodeGrids().end()) {
++      lua_pushnil(L);
++      lua_pushstring(L, "ed_overlay_nodes_rect: no such grid");
++      return 2;
++    }
++    NodeGrid& g = it->second;
++    const int i0 = static_cast<int>(lua_tonumber(L, 2));
++    const int j0 = static_cast<int>(lua_tonumber(L, 3));
++    const int w = static_cast<int>(lua_tonumber(L, 4));
++    const int h = static_cast<int>(lua_tonumber(L, 5));
++    if (i0 < 0 || j0 < 0 || w < 1 || h < 1 || i0 + w > g.nw || j0 + h > g.nh) {
++      lua_pushnil(L);
++      lua_pushstring(L, "ed_overlay_nodes_rect: rectangle outside the grid");
++      return 2;
++    }
++    bool changed = false;
++    int k = 1;
++    for (int j = 0; j < h; ++j) {
++      for (int i = 0; i < w; ++i, ++k) {
++        lua_rawgeti(L, 6, k);
++        const double value = lua_tonumber(L, -1);
++        lua_settop(L, -2);
++        const std::uint8_t b = static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, value)));
++        std::uint8_t& dst = g.v[static_cast<std::size_t>(j0 + j) * static_cast<std::size_t>(g.nw) + static_cast<std::size_t>(i0 + i)];
++        if (dst != b) {
++          dst = b;
++          changed = true;
++        }
++      }
++    }
++    if (changed) {
++      g.runsDirty = true;
++    }
++    lua_pushboolean(L, 1);
++    return 1;
++  }
++
++  // ed_overlay_perf() -> slopeRateMs, slopeDrawMs, slopeTilesRated, slopePending, slopeQuads, slopeBlockLevel, slopeNodesProjected, gridsMs, gridQuads,
++  //   gridNodesProjected, gridGroups   (what the last frame spent on the slope view and the node grids)
++  int __cdecl cfunc_EdOverlayPerf(lua_State* const L)
++  {
++    lua_pushnumber(L, gPerf.slopeRateMs);
++    lua_pushnumber(L, gPerf.slopeDrawMs);
++    lua_pushnumber(L, gPerf.slopeTilesRated);
++    lua_pushnumber(L, gPerf.slopePending);
++    lua_pushnumber(L, gPerf.slopeQuads);
++    lua_pushnumber(L, gPerf.slopeLevel);
++    lua_pushnumber(L, gPerf.slopeNodesProjected);
++    lua_pushnumber(L, gPerf.gridsMs);
++    lua_pushnumber(L, gPerf.gridQuads);
++    lua_pushnumber(L, gPerf.gridNodesProjected);
++    lua_pushnumber(L, gPerf.gridGroups);
++    return 11;
++  }
++
+   int __cdecl cfunc_EdOverlayRemove(lua_State* const L)
+   {
+     if (const char* const id = lua_tostring(L, 1)) {
+@@ -600,6 +661,10 @@ namespace
+                                     "ed_slope_at(kind, x, z, window) -> rating of the cell, in the engine's units");
+       (void)new moho::CScrLuaBinder(set, "ed_overlay_nodes", &cfunc_EdOverlayNodes, nullptr, "<global>",
+                                     "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]]) -> true | nil, message");
++      (void)new moho::CScrLuaBinder(set, "ed_overlay_nodes_rect", &cfunc_EdOverlayNodesRect, nullptr, "<global>",
++                                    "ed_overlay_nodes_rect(id, i0, j0, w, h, values) -> true | nil, message");
++      (void)new moho::CScrLuaBinder(set, "ed_overlay_perf", &cfunc_EdOverlayPerf, nullptr, "<global>",
++                                    "ed_overlay_perf() -> slopeRateMs, slopeDrawMs, slopeTilesRated, slopePending, slopeQuads, slopeBlockLevel, slopeNodesProjected, gridsMs, gridQuads, gridNodesProjected, gridGroups");
+       (void)new moho::CScrLuaBinder(set, "ed_overlay_decal", &cfunc_EdOverlayDecal, nullptr, "<global>",
+                                     "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw]) -> true | nil, message");
+       (void)new moho::CScrLuaBinder(set, "ed_overlay_icon", &cfunc_EdOverlayIcon, nullptr, "<global>",
+@@ -618,6 +683,18 @@ namespace moho
+ {
+   namespace edoverlay
+   {
++    void NotifyHeights(const int x0, const int z0, const int x1, const int z1)
++    {
++      ++gHeightEpoch;
++      gSlopeStore.Invalidate(x0, z0, x1, z1);
++    }
++
++    void NotifyHeightsAll()
++    {
++      ++gHeightEpoch;
++      gSlopeStore.InvalidateAll();
++    }
++
+     void Render(GeomCamera3* const camera, CD3DPrimBatcher* const batcher)
+     {
+       if ((Lines().empty() && Icons().empty() && Decals().empty() && NodeGrids().empty() && !gSlope.on) || camera == nullptr || batcher == nullptr) {
+@@ -735,116 +812,211 @@ namespace moho
+       }
+ 
+       // slope gradient over the ground (under every line and icon)
++      gPerf.slopeRateMs = 0.0;
++      gPerf.slopeDrawMs = 0.0;
++      gPerf.slopeTilesRated = 0;
++      gPerf.slopePending = 0;
++      gPerf.slopeQuads = 0;
++      gPerf.slopeNodesProjected = 0;
++      gPerf.gridsMs = 0.0;
++      gPerf.gridQuads = 0;
++      gPerf.gridNodesProjected = 0;
++      gPerf.gridGroups = 0;
++      const CamStamp stamp = MakeStamp(*camera, vw, vh);
++      {
++        // a new map (another height field): every projection and rating is stale
++        static const void* lastField = nullptr;
++        static int lastW = 0, lastH = 0;
++        moho::CHeightField* const f = ViewHeightField();
++        const int fw = (f != nullptr) ? f->Width() : 0;
++        const int fh = (f != nullptr) ? f->Height() : 0;
++        if (f != lastField || fw != lastW || fh != lastH) {
++          lastField = f;
++          lastW = fw;
++          lastH = fh;
++          ++gHeightEpoch;
++          gSlopeStore.Reset(fw, fh);
++        }
++      }
+       if (gSlope.on) {
+         ++gSlopeFrame;
+         if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
++          namespace sl = moho::editor::overlayslope;
+           const int mapW = field->Width();
+           const int mapH = field->Height();
+           const int x0 = std::max(0, gSlope.x0);
+           const int z0 = std::max(0, gSlope.z0);
+-          const int x1 = std::min(mapW - 1, std::min(gSlope.x1, x0 + 1100));
+-          const int z1 = std::min(mapH - 1, std::min(gSlope.z1, z0 + 1100));
++          const int x1 = std::min(mapW - 1, gSlope.x1);
++          const int z1 = std::min(mapH - 1, gSlope.z1);
+           if (x1 > x0 && z1 > z0) {
+-            SlopeCache& c = gSlopeCache;
+-            // re-rate when something changed, and now and then so terrain edits show
+-            if (!c.valid || c.kind != gSlope.kind || c.x0 != x0 || c.z0 != z0 || c.x1 != x1 || c.z1 != z1 || c.window != gSlope.window ||
+-                gSlopeFrame - c.builtAt > 20u) {
+-              RebuildSlopeCache(*field, gSlope, x0, z0, x1, z1);
++            if (gSlopeStore.Width() != mapW || gSlopeStore.Height() != mapH) {
++              gSlopeStore.Reset(mapW, mapH);
+             }
++            gSlopeStore.SetKey(gSlope.kind, gSlope.window);
++
++            // the block size: a power of two of cells, so that at most kSlopeMaxBlocks blocks per side are drawn; blocks are aligned to multiples of their size, so
++            // they do not shift while the camera pans
++            const int level = sl::LevelForView(std::max(x1 - x0, z1 - z0), kSlopeMaxBlocks);
++            const int stride = 1 << level;
++            const int bx0 = x0 >> level;
++            const int bz0 = z0 >> level;
++            const int bw = ((x1 + stride - 1) >> level) - bx0;
++            const int bh = ((z1 + stride - 1) >> level) - bz0;
+ 
+-            const int stride = c.stride;
+-            struct Node { float x, y; bool ok; };
+-            std::vector<Node> nodes(static_cast<std::size_t>(c.bw + 1) * static_cast<std::size_t>(c.bh + 1));
+-            for (int j = 0; j <= c.bh; ++j) {
+-              for (int i = 0; i <= c.bw; ++i) {
+-                const int wx = std::min(x1, x0 + i * stride);
+-                const int wz = std::min(z1, z0 + j * stride);
+-                const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field->GetHeightAt(wx, wz)) / 128.0f + 0.12f, static_cast<float>(wz)};
+-                Node& nd = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i];
+-                nd.ok = camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f;
+-                if (nd.ok) {
+-                  const Wm3::Vector2f sp = camera->Project(p, 0.0f, vw, vh, 0.0f);
+-                  nd.x = sp.x;
+-                  nd.y = sp.y;
++            // rate the tiles of the view that were never rated or went stale (the dirty ones first, then the ones nearest the middle of the view), within a time budget
++            const double tRate = NowMs();
++            {
++              const int tx0 = (bx0 << level) / sl::kTile;
++              const int tz0 = (bz0 << level) / sl::kTile;
++              const int tx1 = std::min(gSlopeStore.TilesX() - 1, ((bx0 + bw) << level) / sl::kTile);
++              const int tz1 = std::min(gSlopeStore.TilesZ() - 1, ((bz0 + bh) << level) / sl::kTile);
++              struct Todo { double key; int tx, tz; };
++              std::vector<Todo> todo;
++              const double mx = 0.5 * (x0 + x1) / sl::kTile;
++              const double mz = 0.5 * (z0 + z1) / sl::kTile;
++              for (int tz = tz0; tz <= tz1; ++tz) {
++                for (int tx = tx0; tx <= tx1; ++tx) {
++                  gSlopeStore.Touch(tx, tz, gSlopeFrame);
++                  if (gSlopeStore.NeedsRating(tx, tz)) {
++                    const sl::Tile* const t = gSlopeStore.Find(tx, tz);
++                    const bool stale = t != nullptr && !t->data.empty();
++                    const double dx = tx + 0.5 - mx, dz = tz + 0.5 - mz;
++                    todo.push_back(Todo{(stale ? -1.0e9 : 0.0) + dx * dx + dz * dz, tx, tz});
++                  }
+                 }
+               }
++              std::sort(todo.begin(), todo.end(), [](const Todo& a, const Todo& b) { return a.key < b.key; });
++              const auto sampler = [field](const int x, const int z) { return static_cast<int>(field->GetHeightAt(x, z)); };
++              std::size_t done = 0;
++              for (; done < todo.size(); ++done) {
++                gSlopeStore.Rate(todo[done].tx, todo[done].tz, sampler, gSlopeFrame);
++                ++gPerf.slopeTilesRated;
++                if (NowMs() - tRate > kSlopeBudgetMs) {
++                  ++done;
++                  break;
++                }
++              }
++              gPerf.slopePending = static_cast<int>(todo.size() - done);
++              if (gSlopeStore.Built() > 2600u) {
++                gSlopeStore.Trim(gSlopeFrame, 300u);   // an explored 80 km map keeps the tiles near the camera, not all 4096
++              }
++            }
++            const double tDraw = NowMs();
++            gPerf.slopeRateMs = tDraw - tRate;
++            gPerf.slopeLevel = level;
++
++            std::vector<std::uint8_t> steps(static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh));
++            for (int j = 0; j < bh; ++j) {
++              for (int i = 0; i < bw; ++i) {
++                const float value = static_cast<float>(gSlopeStore.Block(level, bx0 + i, bz0 + j)) / 128.0f;
++                steps[static_cast<std::size_t>(j) * bw + i] = static_cast<std::uint8_t>(sl::ColorStep(value, gSlope.limit));
++              }
+             }
+ 
++            gSlopeProj.Prepare(bx0 << level, bz0 << level, bw + 1, bh + 1, stride, 0.12f, stamp);
+             batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+             using V = CD3DPrimBatcher::Vertex;
+-            for (int j = 0; j < c.bh; ++j) {
+-              for (int i = 0; i < c.bw; ++i) {
+-                const std::uint32_t color = SlopeColor(c.block[static_cast<std::size_t>(j) * c.bw + i], gSlope.limit);
+-                if ((color >> 24) == 0u) {
++            constexpr int kMaxRunBlocks = 8;
++            for (int j = 0; j < bh; ++j) {
++              int i = 0;
++              while (i < bw) {
++                const int st = steps[static_cast<std::size_t>(j) * bw + i];
++                float ax, ay, bxs, bys, cx, cy, dx, dy;
++                if (st == 0 || !gSlopeProj.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.slopeNodesProjected) ||
++                    !gSlopeProj.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.slopeNodesProjected)) {
++                  ++i;
+                   continue;
+                 }
+-                const Node& a = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i];
+-                const Node& b = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i + 1];
+-                const Node& cc = nodes[static_cast<std::size_t>(j + 1) * (c.bw + 1) + i + 1];
+-                const Node& d = nodes[static_cast<std::size_t>(j + 1) * (c.bw + 1) + i];
+-                if (!(a.ok && b.ok && cc.ok && d.ok)) {
+-                  continue;
++                // a run of neighbouring blocks with the same colour is one quad
++                int len = 1;
++                bool ok = gSlopeProj.Get(*field, *camera, vw, vh, i + 1, j, bxs, bys, gPerf.slopeNodesProjected) &&
++                          gSlopeProj.Get(*field, *camera, vw, vh, i + 1, j + 1, cx, cy, gPerf.slopeNodesProjected);
++                while (ok && len < kMaxRunBlocks && i + len < bw && steps[static_cast<std::size_t>(j) * bw + i + len] == st) {
++                  float nbx, nby, ncx, ncy;
++                  if (!gSlopeProj.Get(*field, *camera, vw, vh, i + len + 1, j, nbx, nby, gPerf.slopeNodesProjected) ||
++                      !gSlopeProj.Get(*field, *camera, vw, vh, i + len + 1, j + 1, ncx, ncy, gPerf.slopeNodesProjected)) {
++                    break;
++                  }
++                  bxs = nbx; bys = nby; cx = ncx; cy = ncy;
++                  ++len;
+                 }
+-                const float minX = std::min(std::min(a.x, b.x), std::min(cc.x, d.x));
+-                const float maxX = std::max(std::max(a.x, b.x), std::max(cc.x, d.x));
+-                const float minY = std::min(std::min(a.y, b.y), std::min(cc.y, d.y));
+-                const float maxY = std::max(std::max(a.y, b.y), std::max(cc.y, d.y));
+-                if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
+-                  continue;
++                if (ok) {
++                  const float minX = std::min(std::min(ax, bxs), std::min(cx, dx));
++                  const float maxX = std::max(std::max(ax, bxs), std::max(cx, dx));
++                  const float minY = std::min(std::min(ay, bys), std::min(cy, dy));
++                  const float maxY = std::max(std::max(ay, bys), std::max(cy, dy));
++                  if (!(maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh)) {
++                    const std::uint32_t color = SlopeColor(st);
++                    batcher->DrawQuad(V{ax, ay, 0.0f, color, 0.0f, 0.0f}, V{bxs, bys, 0.0f, color, 1.0f, 0.0f}, V{cx, cy, 0.0f, color, 1.0f, 1.0f},
++                                      V{dx, dy, 0.0f, color, 0.0f, 1.0f});
++                    ++gPerf.slopeQuads;
++                  }
+                 }
+-                batcher->DrawQuad(V{a.x, a.y, 0.0f, color, 0.0f, 0.0f}, V{b.x, b.y, 0.0f, color, 1.0f, 0.0f},
+-                                  V{cc.x, cc.y, 0.0f, color, 1.0f, 1.0f}, V{d.x, d.y, 0.0f, color, 0.0f, 1.0f});
++                i += len;
+               }
+             }
+             batcher->Flush();
++            gPerf.slopeDrawMs = NowMs() - tDraw;
+           }
+         }
+       }
+ 
+-      // value grids (brush weights) draped over the ground
+-      if (!NodeGrids().empty()) {
+-        if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
+-          batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+-          using V = CD3DPrimBatcher::Vertex;
+-          for (const auto& entry : NodeGrids()) {
+-            const NodeGrid& g = entry.second;
+-            struct GNode { float x, y; bool ok; std::uint32_t color; };
+-            std::vector<GNode> nd(static_cast<std::size_t>(g.nw) * static_cast<std::size_t>(g.nh));
+-            for (int j = 0; j < g.nh; ++j) {
+-              for (int i = 0; i < g.nw; ++i) {
+-                const int wx = std::max(0, std::min(field->Width() - 1, g.x0 + i * g.step));
+-                const int wz = std::max(0, std::min(field->Height() - 1, g.z0 + j * g.step));
+-                GNode& n = nd[static_cast<std::size_t>(j) * g.nw + i];
+-                const std::uint32_t alpha = (static_cast<std::uint32_t>(g.v[static_cast<std::size_t>(j) * g.nw + i]) * g.maxAlpha) / 255u;
+-                n.color = (alpha << 24) | g.rgb;
+-                const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field->GetHeightAt(wx, wz)) / 128.0f + 0.14f, static_cast<float>(wz)};
+-                n.ok = camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f;
+-                if (n.ok) {
+-                  const Wm3::Vector2f sp = camera->Project(p, 0.0f, vw, vh, 0.0f);
+-                  n.x = sp.x;
+-                  n.y = sp.y;
+-                }
+-              }
++      // value grids (brush weights, terrain type layers) draped over the ground
++      static unsigned gridFrame = 0;
++      if (NodeGrids().empty()) {
++        gGridProj.clear();
++      } else if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
++        ++gridFrame;
++        const double tGrids = NowMs();
++        batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
++        using V = CD3DPrimBatcher::Vertex;
++        for (auto& entry : NodeGrids()) {
++          NodeGrid& g = entry.second;
++          if (g.runsDirty) {
++            moho::editor::overlaynodes::CollectRuns(g.v.data(), g.nw, g.nh, g.maxAlpha, g.runs);
++            g.runsDirty = false;
++          }
++          if (g.runs.empty()) {
++            continue;
++          }
++          // grids with the same window share their projected nodes
++          ProjGrid& pg = gGridProj[std::array<int, 5>{g.x0, g.z0, g.nw, g.nh, g.step}];
++          pg.Prepare(g.x0, g.z0, g.nw, g.nh, g.step, 0.14f, stamp);
++          pg.usedFrame = gridFrame;
++          const auto colorAt = [&g](const int i, const int j) {
++            return (moho::editor::overlaynodes::NodeAlpha(g.v[static_cast<std::size_t>(j) * g.nw + i], g.maxAlpha) << 24) | g.rgb;
++          };
++          for (const moho::editor::overlaynodes::Run& run : g.runs) {
++            const int i = run.i, j = run.j, len = run.len;
++            float ax, ay, bx, by, cx, cy, dx, dy;
++            if (!pg.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.gridNodesProjected) ||
++                !pg.Get(*field, *camera, vw, vh, i + len, j, bx, by, gPerf.gridNodesProjected) ||
++                !pg.Get(*field, *camera, vw, vh, i + len, j + 1, cx, cy, gPerf.gridNodesProjected) ||
++                !pg.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.gridNodesProjected)) {
++              continue;
+             }
+-            for (int j = 0; j + 1 < g.nh; ++j) {
+-              for (int i = 0; i + 1 < g.nw; ++i) {
+-                const GNode& a = nd[static_cast<std::size_t>(j) * g.nw + i];
+-                const GNode& b = nd[static_cast<std::size_t>(j) * g.nw + i + 1];
+-                const GNode& c = nd[static_cast<std::size_t>(j + 1) * g.nw + i + 1];
+-                const GNode& d = nd[static_cast<std::size_t>(j + 1) * g.nw + i];
+-                if (!(a.ok && b.ok && c.ok && d.ok)) {
+-                  continue;
+-                }
+-                if (((a.color | b.color | c.color | d.color) >> 24) == 0u) {
+-                  continue;
+-                }
+-                batcher->DrawQuad(V{a.x, a.y, 0.0f, a.color, 0.0f, 0.0f}, V{b.x, b.y, 0.0f, b.color, 1.0f, 0.0f},
+-                                  V{c.x, c.y, 0.0f, c.color, 1.0f, 1.0f}, V{d.x, d.y, 0.0f, d.color, 0.0f, 1.0f});
+-              }
++            const float minX = std::min(std::min(ax, bx), std::min(cx, dx));
++            const float maxX = std::max(std::max(ax, bx), std::max(cx, dx));
++            const float minY = std::min(std::min(ay, by), std::min(cy, dy));
++            const float maxY = std::max(std::max(ay, by), std::max(cy, dy));
++            if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
++              continue;
+             }
++            const std::uint32_t ca = colorAt(i, j), cb = colorAt(i + len, j), cc = colorAt(i + len, j + 1), cd = colorAt(i, j + 1);
++            batcher->DrawQuad(V{ax, ay, 0.0f, ca, 0.0f, 0.0f}, V{bx, by, 0.0f, cb, 1.0f, 0.0f}, V{cx, cy, 0.0f, cc, 1.0f, 1.0f}, V{dx, dy, 0.0f, cd, 0.0f, 1.0f});
++            ++gPerf.gridQuads;
++          }
++        }
++        batcher->Flush();
++        for (auto it = gGridProj.begin(); it != gGridProj.end();) {
++          if (it->second.usedFrame != gridFrame) {
++            it = gGridProj.erase(it);
++          } else {
++            ++it;
+           }
+-          batcher->Flush();
+         }
++        gPerf.gridGroups = static_cast<int>(gGridProj.size());
++        gPerf.gridsMs = NowMs() - tGrids;
+       }
+ 
+       // dark halos first, then every line on top of all of them
+diff --git a/src/sdk/moho/editor/EdOverlay.h b/src/sdk/moho/editor/EdOverlay.h
+index dc10d8e..136714a 100644
+--- a/src/sdk/moho/editor/EdOverlay.h
++++ b/src/sdk/moho/editor/EdOverlay.h
+@@ -16,5 +16,11 @@ namespace moho
+   namespace edoverlay
+   {
+     void Render(GeomCamera3* camera, CD3DPrimBatcher* batcher);
++
++    /** The height samples [x0, x1] x [z0, z1] were written (the document's height sink): the slope view re-rates what looks at them, projected overlay grids move with the ground. */
++    void NotifyHeights(int x0, int z0, int x1, int z1);
++
++    /** Every height may have changed (a document was attached anew). */
++    void NotifyHeightsAll();
+   } // namespace edoverlay
+ } // namespace moho
+diff --git a/src/sdk/moho/editor/EdOverlayNodes.h b/src/sdk/moho/editor/EdOverlayNodes.h
+new file mode 100644
+index 0000000..d42a0b0
+--- /dev/null
++++ b/src/sdk/moho/editor/EdOverlayNodes.h
+@@ -0,0 +1,58 @@
++// EDITOR: which cells of a node grid (EdOverlay.cpp, ed_overlay_nodes: brush weights, terrain type layers) need drawing, engine independent so it can be
++// tested on its own (moho/editor/tests/EdOverlayNodesTest.cpp).
++//
++// A grid node (i, j) carries a value 0..255 whose alpha is value * maxAlpha / 255; the cell between four nodes is drawn with the four alphas blended. A cell whose four
++// alphas are all zero draws nothing and is left out. A horizontal run of cells whose corners all carry the same alpha looks the same as one wide quad, so such runs
++// (at most kMaxRun cells) are drawn as one: a big solid area costs a few quads per row, not one per cell.
++#pragma once
++
++#include <algorithm>
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++namespace moho::editor::overlaynodes
++{
++  constexpr int kMaxRun = 8;
++
++  struct Run
++  {
++    std::uint16_t i, j;   // first cell (its top left node)
++    std::uint16_t len;    // cells in the run, 1 .. kMaxRun
++    std::uint32_t alpha;  // the common alpha when len > 1 (and all four corners are equal), else unused
++  };
++
++  [[nodiscard]] inline std::uint32_t NodeAlpha(const std::uint8_t value, const std::uint32_t maxAlpha)
++  {
++    return (static_cast<std::uint32_t>(value) * maxAlpha) / 255u;
++  }
++
++  /** The runs of drawn cells of an nw x nh grid of node values (row major). */
++  inline void CollectRuns(const std::uint8_t* const v, const int nw, const int nh, const std::uint32_t maxAlpha, std::vector<Run>& out)
++  {
++    out.clear();
++    if (nw < 2 || nh < 2 || maxAlpha == 0u) {
++      return;
++    }
++    const auto at = [&](const int i, const int j) { return NodeAlpha(v[static_cast<std::size_t>(j) * nw + i], maxAlpha); };
++    for (int j = 0; j + 1 < nh; ++j) {
++      int i = 0;
++      while (i + 1 < nw) {
++        const std::uint32_t a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
++        if ((a | b | c | d) == 0u) {
++          ++i;
++          continue;
++        }
++        const bool flat = a == b && b == c && c == d;
++        int len = 1;
++        if (flat) {
++          while (len < kMaxRun && i + len + 1 < nw && at(i + len, j) == a && at(i + len + 1, j) == a && at(i + len, j + 1) == a && at(i + len + 1, j + 1) == a) {
++            ++len;
++          }
++        }
++        out.push_back(Run{static_cast<std::uint16_t>(i), static_cast<std::uint16_t>(j), static_cast<std::uint16_t>(len), flat ? a : 0u});
++        i += len;
++      }
++    }
++  }
++} // namespace moho::editor::overlaynodes
+diff --git a/src/sdk/moho/editor/EdOverlaySlope.h b/src/sdk/moho/editor/EdOverlaySlope.h
+new file mode 100644
+index 0000000..2ada3b4
+--- /dev/null
++++ b/src/sdk/moho/editor/EdOverlaySlope.h
+@@ -0,0 +1,363 @@
++// EDITOR: the ratings behind the slope view (EdOverlay.cpp, ed_overlay_slope), engine independent so they can be tested on their own
++// (moho/editor/tests/EdOverlaySlopeTest.cpp).
++//
++//   kind 0 "path": the rule a mobile footprint of `n` x `n` cells is checked with (STIMap::OccupancyCapsOfFootprintAt / OCCUPY_MobileCheck): the largest
++//          height difference between neighbouring samples inside the window (x in [cx, cx + n], z in [cz, cz + n]), in height words (128 per world unit).
++//   kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over the same window.
++//
++// The ratings live in a cache of 64 x 64 cell tiles kept until the heights under a tile change (Invalidate) or the rule changes (SetKey): nothing is
++// rated twice, a brush stroke re-rates only the tiles it touched, and a tile is rated in O(cells) with sliding window maxima (not O(cells * window^2)).
++// Every tile also keeps its ratings reduced to blocks of 2, 4, ... 64 cells (the steepest cell of a block wins, so a thin cliff never disappears when the
++// view is wide), so drawing a view costs what is on screen and not what is in the area.
++//
++// Heights are given by a callback `int h(int x, int z)` (the height word of a sample; positions outside the field must answer with the edge sample).
++#pragma once
++
++#include <algorithm>
++#include <cstddef>
++#include <cstdint>
++#include <cstdlib>
++#include <memory>
++#include <vector>
++
++namespace moho::editor::overlayslope
++{
++  constexpr int kTile = 64;      // cells per tile side
++  constexpr int kLevels = 7;     // block sizes 1, 2, 4 ... 64 cells
++  constexpr int kMaxWindow = 16;
++
++  /** The rating of one cell computed straight from the rule (slow; the reference for the tests and the readout under the pointer). */
++  template <class Sampler>
++  [[nodiscard]] inline int CellRating(const int kind, const int n, const int cx, const int cz, Sampler&& h)
++  {
++    if (kind == 0) {
++      int maxDelta = 0;
++      for (int z = cz; z <= cz + n; ++z) {
++        for (int x = cx; x < cx + n; ++x) {
++          maxDelta = std::max(maxDelta, std::abs(h(x + 1, z) - h(x, z)));
++        }
++      }
++      for (int x = cx; x <= cx + n; ++x) {
++        for (int z = cz; z < cz + n; ++z) {
++          maxDelta = std::max(maxDelta, std::abs(h(x, z + 1) - h(x, z)));
++        }
++      }
++      return maxDelta;
++    }
++    int lo = 1 << 30;
++    int hi = -(1 << 30);
++    for (int z = cz; z <= cz + n; ++z) {
++      for (int x = cx; x <= cx + n; ++x) {
++        const int v = h(x, z);
++        lo = std::min(lo, v);
++        hi = std::max(hi, v);
++      }
++    }
++    return hi - lo;
++  }
++
++  /**
++   * Sliding window extreme in O(count) (van Herk / Gil-Werman): out[i * outStride] = max (or min) of in[(i .. i + w - 1) * inStride] for the first
++   * `outCount` (at most count - w + 1) positions i. `scratch` is two arrays of `count` ints.
++   */
++  template <bool Max>
++  inline void SlidingExtreme(const int* const in, const int inStride, const int count, const int w, int* const out, const int outStride, int* const scratch,
++                             const int outCount)
++  {
++    if (w < 1 || count < w) {
++      return;
++    }
++    const int produced = std::min(outCount, count - w + 1);
++    const auto pick = [](const int a, const int b) { return Max ? std::max(a, b) : std::min(a, b); };
++    if (w == 1) {
++      for (int i = 0; i < produced; ++i) {
++        out[i * outStride] = in[i * inStride];
++      }
++      return;
++    }
++    int* const g = scratch;           // running extreme from the start of the block
++    int* const hh = scratch + count;  // running extreme back from the end of the block
++    for (int i = 0; i < count; ++i) {
++      const int v = in[i * inStride];
++      g[i] = (i % w == 0) ? v : pick(g[i - 1], v);
++    }
++    for (int i = count - 1; i >= 0; --i) {
++      const int v = in[i * inStride];
++      hh[i] = (i == count - 1 || (i + 1) % w == 0) ? v : pick(hh[i + 1], v);
++    }
++    for (int i = 0; i < produced; ++i) {
++      out[i * outStride] = pick(hh[i], g[i + w - 1]);
++    }
++  }
++
++  /**
++   * The ratings of the kTile x kTile cells whose first cell is (cx0, cz0), written to `out` (row major, x fastest), with the separable sliding window passes:
++   * cost ~ cells * a few operations whatever the window. Needs the samples [cx0, cx0 + kTile + n] x [cz0, cz0 + kTile + n].
++   */
++  template <class Sampler>
++  inline void RateTile(const int kind, const int n, const int cx0, const int cz0, Sampler&& h, std::uint16_t* const out)
++  {
++    const int sw = kTile + n + 1;
++    std::vector<int> H(static_cast<std::size_t>(sw) * sw);
++    for (int j = 0; j < sw; ++j) {
++      for (int i = 0; i < sw; ++i) {
++        H[static_cast<std::size_t>(j) * sw + i] = h(cx0 + i, cz0 + j);
++      }
++    }
++    std::vector<int> scratch(static_cast<std::size_t>(sw) * 2);
++    std::vector<int> t1(static_cast<std::size_t>(sw) * sw), t2(static_cast<std::size_t>(sw) * sw);
++    std::vector<int> r1(static_cast<std::size_t>(kTile) * kTile), r2(static_cast<std::size_t>(kTile) * kTile);
++    const auto clampWord = [](const int v) { return static_cast<std::uint16_t>(std::min(65535, std::max(0, v))); };
++    if (kind == 0) {
++      // A[z][i] = max over x in [i, i + n - 1] of |h(x + 1, z) - h(x, z)|, then max over z in [j, j + n] (window n + 1)
++      for (int z = 0; z < sw; ++z) {
++        for (int x = 0; x + 1 < sw; ++x) {
++          t1[static_cast<std::size_t>(z) * sw + x] = std::abs(H[static_cast<std::size_t>(z) * sw + x + 1] - H[static_cast<std::size_t>(z) * sw + x]);
++        }
++        SlidingExtreme<true>(&t1[static_cast<std::size_t>(z) * sw], 1, sw - 1, n, &t2[static_cast<std::size_t>(z) * sw], 1, scratch.data(), kTile);
++      }
++      for (int i = 0; i < kTile; ++i) {
++        SlidingExtreme<true>(&t2[i], sw, sw, n + 1, &r1[i], kTile, scratch.data(), kTile);
++      }
++      // B[j][x] = max over z in [j, j + n - 1] of |h(x, z + 1) - h(x, z)|, then max over x in [i, i + n]
++      for (int z = 0; z + 1 < sw; ++z) {
++        for (int x = 0; x < sw; ++x) {
++          t1[static_cast<std::size_t>(z) * sw + x] = std::abs(H[static_cast<std::size_t>(z + 1) * sw + x] - H[static_cast<std::size_t>(z) * sw + x]);
++        }
++      }
++      for (int x = 0; x < sw; ++x) {
++        SlidingExtreme<true>(&t1[x], sw, sw - 1, n, &t2[x], sw, scratch.data(), kTile);
++      }
++      for (int j = 0; j < kTile; ++j) {
++        SlidingExtreme<true>(&t2[static_cast<std::size_t>(j) * sw], 1, sw, n + 1, &r2[static_cast<std::size_t>(j) * kTile], 1, scratch.data(), kTile);
++      }
++      for (std::size_t k = 0; k < r1.size(); ++k) {
++        out[k] = clampWord(std::max(r1[k], r2[k]));
++      }
++    } else {
++      // hi / lo over x in [i, i + n] per row, then over z in [j, j + n]
++      std::vector<int> lo2(static_cast<std::size_t>(sw) * sw);
++      for (int z = 0; z < sw; ++z) {
++        SlidingExtreme<true>(&H[static_cast<std::size_t>(z) * sw], 1, sw, n + 1, &t2[static_cast<std::size_t>(z) * sw], 1, scratch.data(), kTile);
++        SlidingExtreme<false>(&H[static_cast<std::size_t>(z) * sw], 1, sw, n + 1, &lo2[static_cast<std::size_t>(z) * sw], 1, scratch.data(), kTile);
++      }
++      for (int i = 0; i < kTile; ++i) {
++        SlidingExtreme<true>(&t2[i], sw, sw, n + 1, &r1[i], kTile, scratch.data(), kTile);
++        SlidingExtreme<false>(&lo2[i], sw, sw, n + 1, &r2[i], kTile, scratch.data(), kTile);
++      }
++      for (std::size_t k = 0; k < r1.size(); ++k) {
++        out[k] = clampWord(r1[k] - r2[k]);
++      }
++    }
++  }
++
++  /** Offset of block level `level` (cells per block 1 << level) in a tile's data: level 0 first (64 x 64), then 32 x 32 ... down to 1 x 1. */
++  [[nodiscard]] constexpr std::size_t LevelOffset(const int level)
++  {
++    std::size_t off = 0;
++    for (int l = 0; l < level; ++l) {
++      const std::size_t side = static_cast<std::size_t>(kTile >> l);
++      off += side * side;
++    }
++    return off;
++  }
++
++  constexpr std::size_t kTileWords = LevelOffset(kLevels);
++
++  /** Fills the levels above 0 of a tile's data with the maximum of the four blocks below. */
++  inline void BuildLevels(std::uint16_t* const data)
++  {
++    for (int l = 1; l < kLevels; ++l) {
++      const int side = kTile >> l;
++      const std::uint16_t* const src = data + LevelOffset(l - 1);
++      std::uint16_t* const dst = data + LevelOffset(l);
++      const int srcSide = side * 2;
++      for (int j = 0; j < side; ++j) {
++        for (int i = 0; i < side; ++i) {
++          const std::uint16_t* const p = src + static_cast<std::size_t>(j * 2) * srcSide + i * 2;
++          dst[static_cast<std::size_t>(j) * side + i] = std::max(std::max(p[0], p[1]), std::max(p[srcSide], p[srcSide + 1]));
++        }
++      }
++    }
++  }
++
++  struct Tile
++  {
++    std::vector<std::uint16_t> data;   // empty until rated; kTileWords words
++    bool dirty = true;                 // heights changed since it was rated (the old ratings stay drawn until it is rated again)
++    unsigned usedAt = 0;
++  };
++
++  /** The tiles of one map for one rule. */
++  class Store
++  {
++  public:
++    /** A new map size or an unusable store: forget everything. */
++    void Reset(const int width, const int height)
++    {
++      tilesX_ = (width + kTile - 1) / kTile;
++      tilesZ_ = (height + kTile - 1) / kTile;
++      width_ = width;
++      height_ = height;
++      tiles_.clear();
++      tiles_.resize(static_cast<std::size_t>(std::max(0, tilesX_)) * static_cast<std::size_t>(std::max(0, tilesZ_)));
++      built_ = 0;
++      kind_ = -1;
++    }
++
++    [[nodiscard]] int Width() const noexcept { return width_; }
++    [[nodiscard]] int Height() const noexcept { return height_; }
++    [[nodiscard]] int TilesX() const noexcept { return tilesX_; }
++    [[nodiscard]] int TilesZ() const noexcept { return tilesZ_; }
++    [[nodiscard]] int Kind() const noexcept { return kind_; }
++    [[nodiscard]] int Window() const noexcept { return window_; }
++    [[nodiscard]] std::size_t Built() const noexcept { return built_; }
++
++    /** Another rule or window: every rating is wrong, drop them. Returns true when something was dropped. */
++    bool SetKey(const int kind, const int window)
++    {
++      if (kind == kind_ && window == window_) {
++        return false;
++      }
++      for (auto& t : tiles_) {
++        t.reset();
++      }
++      built_ = 0;
++      kind_ = kind;
++      window_ = window;
++      return true;
++    }
++
++    /** The samples [x0, x1] x [z0, z1] changed: the cells that look at them (up to kMaxWindow + 1 cells before them) must be rated again. */
++    void Invalidate(const int x0, const int z0, const int x1, const int z1)
++    {
++      if (tiles_.empty()) {
++        return;
++      }
++      const int tx0 = std::max(0, (x0 - kMaxWindow - 1) / kTile);   // (a negative quotient truncates towards zero: still tile 0 or less)
++      const int tz0 = std::max(0, (z0 - kMaxWindow - 1) / kTile);
++      const int tx1 = std::min(tilesX_ - 1, std::max(0, x1) / kTile);
++      const int tz1 = std::min(tilesZ_ - 1, std::max(0, z1) / kTile);
++      for (int tz = tz0; tz <= tz1; ++tz) {
++        for (int tx = tx0; tx <= tx1; ++tx) {
++          if (std::unique_ptr<Tile>& t = tiles_[static_cast<std::size_t>(tz) * tilesX_ + tx]; t) {
++            t->dirty = true;
++          }
++        }
++      }
++    }
++
++    void InvalidateAll()
++    {
++      for (auto& t : tiles_) {
++        if (t) {
++          t->dirty = true;
++        }
++      }
++    }
++
++    /** The tile, or null when it was never asked for. */
++    [[nodiscard]] Tile* Find(const int tx, const int tz) const
++    {
++      if (tx < 0 || tz < 0 || tx >= tilesX_ || tz >= tilesZ_) {
++        return nullptr;
++      }
++      return tiles_[static_cast<std::size_t>(tz) * tilesX_ + tx].get();
++    }
++
++    /** True when the tile has no ratings yet or its heights changed. */
++    [[nodiscard]] bool NeedsRating(const int tx, const int tz) const
++    {
++      const Tile* const t = Find(tx, tz);
++      return t == nullptr || t->data.empty() || t->dirty;
++    }
++
++    /** Rates one tile now. */
++    template <class Sampler>
++    void Rate(const int tx, const int tz, Sampler&& h, const unsigned frame)
++    {
++      if (tx < 0 || tz < 0 || tx >= tilesX_ || tz >= tilesZ_) {
++        return;
++      }
++      std::unique_ptr<Tile>& slot = tiles_[static_cast<std::size_t>(tz) * tilesX_ + tx];
++      if (!slot) {
++        slot = std::make_unique<Tile>();
++      }
++      Tile& t = *slot;
++      if (t.data.empty()) {
++        t.data.assign(kTileWords, 0);
++        ++built_;
++      }
++      RateTile(kind_, window_, tx * kTile, tz * kTile, h, t.data.data());
++      BuildLevels(t.data.data());
++      t.dirty = false;
++      t.usedAt = frame;
++    }
++
++    /** The rating (height words) of block (bx, bz) of `level` (the block covers cells bx << level ...); 0 where no tile is rated yet. */
++    [[nodiscard]] int Block(const int level, const int bx, const int bz) const
++    {
++      const int cx = bx << level;
++      const int cz = bz << level;
++      const Tile* const t = Find(cx / kTile, cz / kTile);
++      if (t == nullptr || t->data.empty()) {
++        return 0;
++      }
++      const int side = kTile >> level;
++      const int lx = (cx % kTile) >> level;
++      const int lz = (cz % kTile) >> level;
++      return t->data[LevelOffset(level) + static_cast<std::size_t>(lz) * side + lx];
++    }
++
++    /** Frees the ratings of tiles that were not used for `age` frames (keeps the memory of a map explored at length bounded). */
++    void Trim(const unsigned frame, const unsigned age)
++    {
++      for (auto& t : tiles_) {
++        if (t && frame - t->usedAt > age) {
++          t.reset();
++          if (built_ > 0) {
++            --built_;
++          }
++        }
++      }
++    }
++
++    void Touch(const int tx, const int tz, const unsigned frame)
++    {
++      if (Tile* const t = Find(tx, tz); t != nullptr) {
++        t->usedAt = frame;
++      }
++    }
++
++  private:
++    int width_ = 0, height_ = 0, tilesX_ = 0, tilesZ_ = 0;
++    int kind_ = -1, window_ = 0;
++    std::size_t built_ = 0;
++    std::vector<std::unique_ptr<Tile>> tiles_;
++  };
++
++  /** The block size for a view `cells` wide when at most `maxBlocks` blocks per side are wanted: the smallest power of two (as a level) that fits. */
++  [[nodiscard]] inline int LevelForView(const int cells, const int maxBlocks)
++  {
++    int level = 0;
++    while (level < kLevels - 1 && (cells + (1 << level) - 1) / (1 << level) > maxBlocks) {
++      ++level;
++    }
++    return level;
++  }
++
++  /**
++   * Colour step of a rating `value` against `limit` (both in the same unit): 0 = flat (not drawn), 1 .. kSteps = green to red up to the limit, kSteps + 1 = beyond
++   * the limit. Neighbouring blocks with the same step get the same colour, so a run of them is drawn as one quad.
++   */
++  constexpr int kSteps = 24;
++  [[nodiscard]] inline int ColorStep(const float value, const float limit)
++  {
++    const float t = value / limit;
++    if (t > 1.0f) {
++      return kSteps + 1;
++    }
++    const int step = static_cast<int>(t * static_cast<float>(kSteps));
++    return std::min(kSteps, std::max(0, step));
++  }
++} // namespace moho::editor::overlayslope
+diff --git a/src/sdk/moho/editor/EditorDocument.cpp b/src/sdk/moho/editor/EditorDocument.cpp
+index 23f7fe9..b2234fc 100644
+--- a/src/sdk/moho/editor/EditorDocument.cpp
++++ b/src/sdk/moho/editor/EditorDocument.cpp
+@@ -1,5 +1,6 @@
+ // Engine side of the editor's MapDocument, see EditorDocument.h.
+ #include "moho/editor/EditorDocument.h"
++#include "moho/editor/EdOverlay.h"
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -61,6 +62,7 @@ namespace moho::editor
+     // The projection: view field, shading, mesh refresh now; sim field later through the queue.
+     void ProjectHeights(const CellRect& rect, const std::uint16_t* const words)
+     {
++      moho::edoverlay::NotifyHeights(rect.x0, rect.z0, rect.x1, rect.z1);   // the slope view re-rates what looks at these samples
+       if (IWldTerrainRes* const res = ActiveTerrain(); res != nullptr) {
+         if (CHeightField* const view = res->GetHeightField(); view != nullptr) {
+           const gpg::Rect2i r = ToRect2i(rect);
+@@ -120,6 +122,7 @@ namespace moho::editor
+       gQueueSize.store(0, std::memory_order_release);
+     }
+     gDocument.Reset(width, height, std::move(words), &ProjectHeights);
++    moho::edoverlay::NotifyHeightsAll();
+     gAttachedTerrain = res;
+     gViewField = view;
+     return true;
+diff --git a/src/sdk/moho/editor/tests/EdOverlayNodesTest.cpp b/src/sdk/moho/editor/tests/EdOverlayNodesTest.cpp
+new file mode 100644
+index 0000000..68ddcda
+--- /dev/null
++++ b/src/sdk/moho/editor/tests/EdOverlayNodesTest.cpp
+@@ -0,0 +1,79 @@
++// Stand-alone test of the node grid cell runs (EdOverlayNodes.h; no engine needed).
++//   g++ -std=c++20 -O2 -I src/sdk src/sdk/moho/editor/tests/EdOverlayNodesTest.cpp -o EdOverlayNodesTest
++//   MSVC: cl /std:c++20 /EHsc /O2 /I src/sdk EdOverlayNodesTest.cpp
++#include <cstdio>
++#include <vector>
++
++#include "moho/editor/EdOverlayNodes.h"
++
++namespace on = moho::editor::overlaynodes;
++
++static int gFailures = 0;
++static int gChecks = 0;
++#define CHECK(cond, ...)                               \
++  do {                                                 \
++    ++gChecks;                                         \
++    if (!(cond)) {                                     \
++      ++gFailures;                                     \
++      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
++      std::printf(__VA_ARGS__);                        \
++      std::printf("\n");                               \
++    }                                                  \
++  } while (0)
++
++int main()
++{
++  std::vector<on::Run> runs;
++  {
++    const std::vector<std::uint8_t> zero(6 * 5, 0);
++    on::CollectRuns(zero.data(), 6, 5, 120, runs);
++    CHECK(runs.empty(), "an empty grid draws nothing");
++  }
++  {
++    std::vector<std::uint8_t> v(6 * 5, 255);
++    on::CollectRuns(v.data(), 6, 5, 120, runs);
++    // 5 x 4 cells, 4 rows of 5 cells: one run of 5 per row
++    CHECK(runs.size() == 4, "a solid 6 x 5 grid is four runs (%zu)", runs.size());
++    bool ok = true;
++    int cells = 0;
++    for (const auto& r : runs) {
++      ok = ok && r.len == 5 && r.alpha == 120u;
++      cells += r.len;
++    }
++    CHECK(ok && cells == 20, "runs cover all 20 cells");
++  }
++  {
++    std::vector<std::uint8_t> v(20 * 2, 255);   // 19 cells in one row: runs of at most 8
++    on::CollectRuns(v.data(), 20, 2, 255, runs);
++    CHECK(runs.size() == 3 && runs[0].len == 8 && runs[1].len == 8 && runs[2].len == 3, "long rows are cut (%zu runs)", runs.size());
++  }
++  {
++    // one node set: the four cells around it are drawn (their corners differ), the rest is not
++    std::vector<std::uint8_t> v(5 * 5, 0);
++    v[2 * 5 + 2] = 255;
++    on::CollectRuns(v.data(), 5, 5, 200, runs);
++    CHECK(runs.size() == 4, "a single node touches four cells (%zu)", runs.size());
++    bool ok = true;
++    for (const auto& r : runs) ok = ok && r.len == 1 && r.i >= 1 && r.i <= 2 && r.j >= 1 && r.j <= 2;
++    CHECK(ok, "and those are the cells around it");
++  }
++  {
++    // an alpha that rounds to zero draws nothing
++    std::vector<std::uint8_t> v(4 * 4, 1);
++    on::CollectRuns(v.data(), 4, 4, 100, runs);   // 1 * 100 / 255 = 0
++    CHECK(runs.empty(), "alpha 0 after scaling is skipped");
++    on::CollectRuns(v.data(), 4, 4, 0, runs);
++    CHECK(runs.empty(), "max alpha 0 draws nothing");
++  }
++  {
++    // a fade (different corner alphas) is never merged
++    std::vector<std::uint8_t> v(4 * 2);
++    for (int i = 0; i < 4; ++i) { v[i] = static_cast<std::uint8_t>(i * 60); v[4 + i] = static_cast<std::uint8_t>(i * 60); }
++    on::CollectRuns(v.data(), 4, 2, 255, runs);
++    bool ok = !runs.empty();
++    for (const auto& r : runs) ok = ok && r.len == 1;
++    CHECK(ok, "a gradient keeps its cells");
++  }
++  std::printf("EdOverlayNodesTest: %d checks, %d failures\n", gChecks, gFailures);
++  return gFailures == 0 ? 0 : 1;
++}
+diff --git a/src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp b/src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp
+new file mode 100644
+index 0000000..cfc1f69
+--- /dev/null
++++ b/src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp
+@@ -0,0 +1,235 @@
++// Stand-alone test of the slope view's ratings and cache (EdOverlaySlope.h; no engine needed).
++//   g++ -std=c++20 -O2 -I src/sdk src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp -o EdOverlaySlopeTest
++//   MSVC: cl /std:c++20 /EHsc /O2 /I src/sdk EdOverlaySlopeTest.cpp
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++
++#include "moho/editor/EdOverlaySlope.h"
++
++namespace os = moho::editor::overlayslope;
++
++static int gFailures = 0;
++static int gChecks = 0;
++#define CHECK(cond, ...)                               \
++  do {                                                 \
++    ++gChecks;                                         \
++    if (!(cond)) {                                     \
++      ++gFailures;                                     \
++      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
++      std::printf(__VA_ARGS__);                        \
++      std::printf("\n");                               \
++    }                                                  \
++  } while (0)
++
++namespace
++{
++  struct Field
++  {
++    int w, d;
++    std::vector<int> v;
++    Field(const int width, const int depth, unsigned seed) : w(width), d(depth), v(static_cast<std::size_t>(width) * depth)
++    {
++      for (auto& x : v) {
++        seed = seed * 1664525u + 1013904223u;
++        x = static_cast<int>((seed >> 8) % 3000u) + 2000;
++        if ((seed >> 4) % 11u == 0u) x += 9000;   // some cliffs
++      }
++    }
++    int At(int x, int z) const
++    {
++      x = std::min(std::max(x, 0), w - 1);
++      z = std::min(std::max(z, 0), d - 1);
++      return v[static_cast<std::size_t>(z) * w + x];
++    }
++  };
++}
++
++int main()
++{
++  // ---- sliding extremes against brute force ----
++  {
++    unsigned seed = 7;
++    for (int trial = 0; trial < 200; ++trial) {
++      seed = seed * 1664525u + 1013904223u;
++      const int count = 1 + static_cast<int>((seed >> 8) % 90u);
++      const int w = 1 + static_cast<int>((seed >> 16) % 20u);
++      std::vector<int> in(count), out(count, -12345), scratch(count * 2);
++      for (auto& x : in) {
++        seed = seed * 1664525u + 1013904223u;
++        x = static_cast<int>((seed >> 9) % 1000u);
++      }
++      os::SlidingExtreme<true>(in.data(), 1, count, w, out.data(), 1, scratch.data(), count);
++      std::vector<int> lo(count, -12345);
++      os::SlidingExtreme<false>(in.data(), 1, count, w, lo.data(), 1, scratch.data(), count);
++      bool ok = true;
++      for (int i = 0; i + w <= count; ++i) {
++        int mx = -1, mn = 1 << 30;
++        for (int k = i; k < i + w; ++k) {
++          mx = std::max(mx, in[k]);
++          mn = std::min(mn, in[k]);
++        }
++        ok = ok && out[i] == mx && lo[i] == mn;
++      }
++      CHECK(ok, "sliding extreme count %d window %d", count, w);
++      // strided input and output, limited output count
++      if (count >= w) {
++        std::vector<int> strided(count * 3, 0), res(count * 2, -777);
++        for (int i = 0; i < count; ++i) strided[i * 3] = in[i];
++        const int want = std::max(1, (count - w + 1) / 2);
++        os::SlidingExtreme<true>(strided.data(), 3, count, w, res.data(), 2, scratch.data(), want);
++        bool ok2 = true;
++        for (int i = 0; i < want; ++i) {
++          int mx = -1;
++          for (int k = i; k < i + w; ++k) mx = std::max(mx, in[k]);
++          ok2 = ok2 && res[i * 2] == mx;
++        }
++        ok2 = ok2 && res[want * 2] == -777;   // nothing written past the requested count
++        CHECK(ok2, "strided sliding extreme count %d window %d", count, w);
++      }
++    }
++  }
++
++  // ---- tile ratings against the rule, every window, both kinds ----
++  {
++    const Field f(300, 220, 1);
++    const auto h = [&f](const int x, const int z) { return f.At(x, z); };
++    for (int kind = 0; kind < 2; ++kind) {
++      for (int n : {1, 2, 3, 5, 8, 16}) {
++        for (const int origin : {0, 64, 192}) {
++          std::vector<std::uint16_t> out(os::kTile * os::kTile);
++          os::RateTile(kind, n, origin, 64, h, out.data());
++          int bad = 0;
++          for (int j = 0; j < os::kTile; ++j) {
++            for (int i = 0; i < os::kTile; ++i) {
++              const int want = std::min(65535, os::CellRating(kind, n, origin + i, 64 + j, h));
++              if (out[static_cast<std::size_t>(j) * os::kTile + i] != want) ++bad;
++            }
++          }
++          CHECK(bad == 0, "tile kind %d window %d origin %d: %d cells differ from the rule", kind, n, origin, bad);
++        }
++      }
++    }
++  }
++
++  // ---- levels: a block holds the maximum of its cells ----
++  {
++    std::vector<std::uint16_t> data(os::kTileWords, 0);
++    unsigned seed = 3;
++    for (int k = 0; k < os::kTile * os::kTile; ++k) {
++      seed = seed * 1664525u + 1013904223u;
++      data[k] = static_cast<std::uint16_t>((seed >> 12) % 1000u);
++    }
++    os::BuildLevels(data.data());
++    bool ok = true;
++    for (int l = 1; l < os::kLevels; ++l) {
++      const int side = os::kTile >> l;
++      for (int j = 0; j < side; ++j) {
++        for (int i = 0; i < side; ++i) {
++          int mx = 0;
++          for (int dz = 0; dz < (1 << l); ++dz)
++            for (int dx = 0; dx < (1 << l); ++dx) mx = std::max<int>(mx, data[static_cast<std::size_t>((j << l) + dz) * os::kTile + (i << l) + dx]);
++          ok = ok && data[os::LevelOffset(l) + static_cast<std::size_t>(j) * side + i] == mx;
++        }
++      }
++    }
++    CHECK(ok, "levels are maxima of the cells below");
++    CHECK(os::kTileWords == 64u * 64u + 32u * 32u + 16u * 16u + 8u * 8u + 4u * 4u + 2u * 2u + 1u, "tile size %zu", os::kTileWords);
++  }
++
++  // ---- store: lazy rating, blocks, invalidation, key change ----
++  {
++    Field f(200, 150, 5);
++    const auto h = [&f](const int x, const int z) { return f.At(x, z); };
++    os::Store s;
++    s.Reset(f.w, f.d);
++    CHECK(s.TilesX() == 4 && s.TilesZ() == 3, "tiles %d x %d", s.TilesX(), s.TilesZ());
++    CHECK(s.SetKey(0, 2), "first key");
++    CHECK(!s.SetKey(0, 2), "same key keeps the tiles");
++    CHECK(s.NeedsRating(1, 1), "unrated tile needs rating");
++    CHECK(s.Block(0, 70, 70) == 0, "unrated tile reads 0");
++    s.Rate(1, 1, h, 1);
++    CHECK(!s.NeedsRating(1, 1), "rated tile is up to date");
++    CHECK(s.Built() == 1, "one tile built");
++    CHECK(s.Block(0, 70, 70) == std::min(65535, os::CellRating(0, 2, 70, 70, h)), "block level 0 equals the rule");
++    int mx = 0;
++    for (int z = 64; z < 64 + 8; ++z)
++      for (int x = 64; x < 64 + 8; ++x) mx = std::max(mx, os::CellRating(0, 2, x, z, h));
++    CHECK(s.Block(3, 8, 8) == mx, "block level 3 is the maximum of its 8 x 8 cells (%d vs %d)", s.Block(3, 8, 8), mx);
++
++    // a height edit far from the tile leaves it; an edit near its left / top edge (cells before it look at the edited sample) dirties it
++    s.Invalidate(150, 140, 160, 149);
++    CHECK(!s.NeedsRating(1, 1), "edit elsewhere keeps the tile");
++    s.Invalidate(60, 100, 63, 100);   // sample x = 63 is looked at by cells 47 .. 63 of tile 0, not tile 1 ... but 64 - 17 = 47 reaches back
++    CHECK(!s.NeedsRating(1, 1), "edit left of the margin keeps the tile");
++    s.Invalidate(80, 80, 81, 81);
++    CHECK(s.NeedsRating(1, 1), "edit inside dirties it");
++    const int before = s.Block(0, 70, 70);
++    f.v[static_cast<std::size_t>(70) * f.w + 71] += 5000;
++    s.Rate(1, 1, h, 2);
++    CHECK(s.Block(0, 70, 70) != before || before == std::min(65535, os::CellRating(0, 2, 70, 70, h)), "re-rated after the edit");
++    CHECK(s.Block(0, 70, 70) == std::min(65535, os::CellRating(0, 2, 70, 70, h)), "re-rated tile equals the rule");
++
++    // an edit just right of the tile's start: the cells before it (in the previous tile) must be re-rated: sample 64 + 3 changes cells 64 + 3 - n ... in tile 1,
++    // sample 64 + 0 changes cells 64 - n .. 64: tile 0 too
++    s.Rate(0, 1, h, 3);
++    s.Invalidate(64, 70, 64, 70);
++    CHECK(s.NeedsRating(0, 1), "an edit on the first column dirties the tile before it");
++
++    CHECK(s.SetKey(1, 2), "another kind drops the ratings");
++    CHECK(s.NeedsRating(1, 1) && s.Built() == 0, "dropped");
++    s.Reset(100, 100);
++    CHECK(s.TilesX() == 2 && s.Built() == 0, "reset");
++  }
++
++  // ---- trim ----
++  {
++    Field f(130, 130, 9);
++    const auto h = [&f](const int x, const int z) { return f.At(x, z); };
++    os::Store s;
++    s.Reset(f.w, f.d);
++    s.SetKey(1, 1);
++    s.Rate(0, 0, h, 1);
++    s.Rate(1, 1, h, 100);
++    s.Trim(120, 50);
++    CHECK(s.NeedsRating(0, 0) && !s.NeedsRating(1, 1), "trim frees old tiles only");
++  }
++
++  // ---- levels and colour steps ----
++  {
++    CHECK(os::LevelForView(100, 160) == 0, "small view full resolution");
++    CHECK(os::LevelForView(4096, 160) == 5, "an 80 km view uses blocks of 32 (%d)", os::LevelForView(4096, 160));
++    CHECK((4096 + 31) / 32 <= 160, "and fits");
++    CHECK(os::LevelForView(320, 160) == 1, "320 cells -> blocks of 2");
++    CHECK(os::ColorStep(0.0f, 0.75f) == 0 && os::ColorStep(0.02f, 0.75f) == 0, "flat is not drawn");
++    CHECK(os::ColorStep(0.75f, 0.75f) == os::kSteps, "at the limit is the last step");
++    CHECK(os::ColorStep(0.76f, 0.75f) == os::kSteps + 1, "beyond the limit");
++    CHECK(os::ColorStep(0.375f, 0.75f) == os::kSteps / 2, "half way");
++  }
++
++  // ---- speed of a full 4096 x 4096 map (information, not a pass / fail) ----
++  {
++    const int W = 4096;
++    std::vector<std::uint16_t> map(static_cast<std::size_t>(W) * W);
++    unsigned seed = 11;
++    for (auto& x : map) {
++      seed = seed * 1664525u + 1013904223u;
++      x = static_cast<std::uint16_t>(3000 + ((seed >> 14) % 400u));
++    }
++    const auto h = [&map, W](const int x, const int z) {
++      return static_cast<int>(map[static_cast<std::size_t>(std::min(std::max(z, 0), W - 1)) * W + std::min(std::max(x, 0), W - 1)]);
++    };
++    os::Store s;
++    s.Reset(W, W);
++    s.SetKey(0, 3);
++    const auto t0 = std::chrono::steady_clock::now();
++    for (int tz = 0; tz < s.TilesZ(); ++tz)
++      for (int tx = 0; tx < s.TilesX(); ++tx) s.Rate(tx, tz, h, 1);
++    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
++    std::printf("rating all %zu tiles of a 4096 x 4096 map (window 3): %.0f ms (%.2f ms per tile)\n", s.Built(), ms, ms / static_cast<double>(s.Built()));
++  }
++
++  std::printf("EdOverlaySlopeTest: %d checks, %d failures\n", gChecks, gFailures);
++  return gFailures == 0 ? 0 : 1;
++}

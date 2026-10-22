@@ -5,6 +5,7 @@
 --   click the albedo    pick another albedo texture (the matching normal map follows when there is one next to it)
 --   click the normal    pick the normal map alone
 --   Shader              the terrain shader of the map (shaderbrowser.lua)
+--   Convert layers...   the shader browser asking for the shader to convert the layers to (paint masks, layer 8, Upper layer: stratumconv.lua, convertdialog.lua)
 --   Tile size           world units one texture tile covers; Enter applies
 --   right click a row   the same as menu entries ('context.list')
 
@@ -18,6 +19,7 @@ local UI = import('/lua/editor/ui.lua')
 local Strata = import('/lua/editor/strata.lua')
 local History = import('/lua/editor/history.lua')
 local Terrain = import('/lua/editor/terrain.lua')
+local Shaders = import('/lua/editor/shaders.lua')
 
 live = {}
 picker = false     -- the open texture picker { group }
@@ -185,6 +187,17 @@ Panels.Register{
         end
         P.size = SizeSlider('albedo', 'Albedo tile size (world units)')
         P.nsize = SizeSlider('normal', 'Normal tile size (world units)')
+        -- Optimal: both tile sizes from the texture's pixel width (texscale.lua), one undo step; the line beside it shows the texel density of the present albedo size
+        P.optimal = W.Button(group, 'Optimal', 0, 0, Skin.S(70), Skin.S(24), function()
+            local l = Selected()
+            if not l then return end
+            if l.albedo == '' or l.albedo == Strata.CLEAR then Say('This layer has no texture yet') return end
+            local TexScale = import('/lua/editor/texscale.lua')
+            local opt = TexScale.Optimal(l.albedo)
+            Edit('optimal tile size of', function(sel) Strata.SetSizes(sel.index, opt, opt) end)
+            Say(string.format('tile size %g for %s', opt, l.file))
+        end)
+        P.density = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
 
         local function Entry(entry)
             if entry then
@@ -232,6 +245,31 @@ Panels.Register{
             end)
         end)
 
+        P.convert = W.Button(group, 'Convert layers...', 0, 0, Skin.S(220), Skin.S(24), function()
+            import('/lua/editor/gui/shaderbrowser.lua').Open(function(id)
+                Say('terrain shader: ' .. id)
+                P:Refresh()
+            end, { convert = true })
+        end, { tip = 'Change the shader and adapt the layers to it in one undo step: paint masks re-encoded where the mask range differs, layer 8 and the Upper layer handled. Opens the shader browser; choose the shader and press Convert layers.' })
+
+        -- A plain shader switch only changes the technique: when the new shader reads a mask byte in another range than the masks were written in (shaders.lua Mismatch), a warning
+        -- stands at the top of the panel with a button that opens the Convert layers dialog for the map's shader.
+        P.warnParas = {}
+        P.warnBtn = W.Button(group, 'Convert masks...', 0, 0, Skin.S(150), Skin.S(24), function()
+            local cur = Shaders.Current()
+            if not cur then return end
+            import('/lua/editor/gui/convertdialog.lua').Open(cur, function(report)
+                Say('terrain shader: ' .. cur)
+                P:Refresh()
+            end)
+        end, { tip = 'Open the Convert layers dialog for the shader of the map: the paint masks are re-encoded from the range they were made in to the range this shader reads, so the picture stays the same. One undo step.' })
+        local function WarnText()
+            local mis = Shaders.Mismatch()
+            if not mis then return '' end
+            return 'The paint masks are in the ' .. mis.range .. ' range (made for ' .. tostring(mis.shader) .. '), but ' .. tostring(mis.current) .. ' reads the ' .. mis.now ..
+                   ' range: the paint looks different. Convert the masks to keep the picture.'
+        end
+
         --- Picks a texture for the selected layer.
         function P:Change(kind)
             local l = Selected()
@@ -244,13 +282,16 @@ Panels.Register{
                 end
                 Edit('texture of', function()
                     local albedo, normal = l.albedo, l.normal
+                    local size, nsize = l.size, l.nsize
                     if kind == 'albedo' then
+                        -- a tile size the user tuned stays; an empty layer or a default size takes the Optimal tile of the new texture (texscale.lua)
+                        size, nsize = import('/lua/editor/texscale.lua').Carry(l.albedo, l.size, l.nsize, path)
                         albedo = path
                         normal = ''                 -- SetTexture picks the matching normal map, or the neutral one
                     else
                         normal = path
                     end
-                    Strata.SetTexture(l.index, albedo, normal, l.size, l.nsize)
+                    Strata.SetTexture(l.index, albedo, normal, size, nsize)
                 end)
             end)
         end
@@ -277,6 +318,10 @@ Panels.Register{
                 P.shaderShown = shaderName
                 P.shader:SetText('Shader: ' .. shaderName)
             end
+            if P.laidOut and WarnText() ~= P.warnShown then
+                P:OnResize(P.w, P.h)          -- the warning appeared or went away: the panel lays out again (this ends in a Refresh with the same text)
+                return
+            end
             local l = Selected()
             -- the preview and the size fields only change when the selected layer or its texture does (a field may be mid-edit)
             local key = l and (l.index .. '|' .. l.albedo .. '|' .. l.normal .. '|' .. tostring(l.size) .. '|' .. tostring(l.nsize)) or ''
@@ -299,17 +344,42 @@ Panels.Register{
                 end
                 P.size:Refresh()
                 P.nsize:Refresh()
+                -- texel density of the albedo at its tile size (pixel width / tile size) and the Optimal tile for the texture
+                local dens = ''
+                if l and l.albedo ~= '' and l.albedo ~= Strata.CLEAR then
+                    local TexScale = import('/lua/editor/texscale.lua')
+                    local px = TexScale.Pixels(l.albedo)
+                    if px and l.size and l.size > 0 then
+                        dens = string.format('%.0f texels per unit (%d px), optimal %g', px / l.size, px, TexScale.ForPixels(px))
+                    end
+                end
+                P.densityText = dens
+                W.Fit(P.density, dens, P.densityW or Skin.S(160))
             end
         end
 
         function P:OnResize(w, h)
             P.w, P.h = w, h
+            P.laidOut = true
             local pad = Skin.S(8)
             local rowH = Skin.S(26)
-            local detail = Skin.S(366)
-            local listH = math.max(rowH * 3, math.min(rowH * 10, h - 2 * pad - detail))
-            P.list:SetRect(pad, pad, w - 2 * pad, listH)
-            local y = pad + listH + Skin.S(8)
+            local detail = Skin.S(396)
+            local top = pad
+            for _, l in P.warnParas do l:Destroy() end
+            P.warnParas = {}
+            P.warnShown = WarnText()
+            if P.warnShown ~= '' then
+                local labels, endY = W.Paragraph(group, P.warnShown, pad, top, w - 2 * pad, { color = Skin.color.warn, size = 'small' })
+                P.warnParas = labels
+                W.Place(P.warnBtn, group, pad, endY + Skin.S(4), Skin.S(150), Skin.S(24))
+                W.Center(P.warnBtn.label, P.warnBtn, 0, 0, Skin.S(150), Skin.S(24))
+                top = endY + Skin.S(36)
+            else
+                W.Place(P.warnBtn, group, -4000, 0, Skin.S(150), Skin.S(24))
+            end
+            local listH = math.max(rowH * 3, math.min(rowH * 10, h - top - pad - detail))
+            P.list:SetRect(pad, top, w - 2 * pad, listH)
+            local y = top + listH + Skin.S(8)
             local ps = math.max(Skin.S(56), math.min(Skin.S(120), math.floor((w - 3 * pad) / 2)))
             P.previewW = ps
             W.Place(P.preview, group, pad, y, ps, ps)
@@ -322,6 +392,19 @@ Panels.Register{
             y = y + Skin.S(50)
             P.nsize:Place(pad, y, w - 2 * pad)
             y = y + Skin.S(54)
+            local ow = Skin.S(70)
+            W.Place(P.optimal, group, pad, y, ow, Skin.S(24))
+            W.Center(P.optimal.label, P.optimal, 0, 0, ow, Skin.S(24))
+            if w - 2 * pad - ow - Skin.S(8) >= Skin.S(150) then
+                P.densityW = w - 2 * pad - ow - Skin.S(8)
+                W.Place(P.density, group, pad + ow + Skin.S(8), y + Skin.S(5))
+                y = y + Skin.S(30)
+            else
+                P.densityW = w - 2 * pad
+                W.Place(P.density, group, pad, y + Skin.S(28))
+                y = y + Skin.S(48)
+            end
+            P.shownKey = nil          -- the density line is fitted to its width
             local bx = pad
             for _, b in { P.up, P.down, P.clearMask, P.fillMask } do
                 W.Place(b, group, bx, y, b.Width(), Skin.S(24))
@@ -334,6 +417,9 @@ Panels.Register{
             y = y + Skin.S(30)
             W.Place(P.shader, group, pad, y, sw, Skin.S(24))
             W.Center(P.shader.label, P.shader, 0, 0, sw, Skin.S(24))
+            y = y + Skin.S(30)
+            W.Place(P.convert, group, pad, y, sw, Skin.S(24))
+            W.Center(P.convert.label, P.convert, 0, 0, sw, Skin.S(24))
             P:Refresh()
         end
 

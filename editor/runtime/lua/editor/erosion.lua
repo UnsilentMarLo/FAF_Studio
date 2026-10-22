@@ -12,24 +12,52 @@
 --   Apply(solver, values, opts)     full resolution run + commit: heights and, when chosen, masks to texture layers as ONE history entry
 --   Masks(result)                   -> { wear = f, deposit = f, flow = f } normalised to 0..1
 --
+-- Settings every solver shares (see Shared() below): Hardness variation + feature size (hard and soft ground), Rain variation, Protect ridges, Keep height range, Largest change,
+-- Keep volume, and per solver Downhill acceleration + Droplet variation (droplets), Flow jitter (stream), Seed (all). A key a node or a saved graph does not have simply takes the
+-- `default` below (there is no separate value for old graphs: the editor is not in production, graphs saved with older defaults change their result). The defaults were tuned on purpose:
+--   hydraulic   iterations 150 (was 200), rain 0.004 (0.006), dissolving 0.08 (0.12), settling 0.05 (0.06): a default run changes the ground moderately instead of filling the valleys and
+--               smoothing the hills (the old defaults lowered the relief by a quarter on the test terrain)
+--   droplet     2 droplets per cell (1), life 40 (30), 1 filter pass (2), downhill acceleration 1 (0: with the old rule droplets slowed down on slopes and dug almost nothing)
+--   all         hardness variation 0.4, rain variation 0.5, protect ridges 0.5, keep height range on
+-- The map edge: the solvers no longer pin the outer ring (edge = open in the native ops); the old behaviour left a wall of untouched ground at the map border (EdErosion.h).
+--
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
 local Fields = import('/lua/editor/fields.lua')
 local Terrain = import('/lua/editor/terrain.lua')
 
-local function P(key, label, min, max, step, fmt, default) return { key = key, label = label, min = min, max = max, step = step, fmt = fmt, default = default } end
+--- A solver parameter. `default` is what a new node / the panel starts with, and what a node or graph without the key gets; `tip` is the tooltip.
+local function P(key, label, min, max, step, fmt, default, tip) return { key = key, label = label, min = min, max = max, step = step, fmt = fmt, default = default, tip = tip } end
+
+--- The settings every solver shares (they add variation and keep the terrain's character).
+local function Shared()
+    return {
+        P('vary', 'Hardness variation', 0, 1, 0.05, '%.2f', 0.4, 'Hard and soft ground side by side: the erodibility follows a noise pattern, so the erosion is uneven instead of the same everywhere. 0 = uniform.'),
+        P('vary_scale', 'Hardness feature size (units)', 8, 400, 2, '%d', 60, 'Size of the hard and soft patches, and of the rain variation, in map units.'),
+        P('rain_vary', 'Rain variation', 0, 1, 0.05, '%.2f', 0.5, 'The water differs from place to place (wetter and drier patches), so channels and gullies come in different sizes. 0 = even rain.'),
+        P('protect', 'Protect ridges', 0, 1, 0.05, '%.2f', 0.5, 'Ridges and summits are harder than the slopes: they keep their height and shape while the flanks are carved. 0 = no protection.'),
+        P('keep_range', 'Keep height range (0 / 1)', 0, 1, 1, '%d', 1, '1 = the result is stretched so its lowest and highest ground match the input again (erosion no longer flattens the map overall).'),
+        P('max_change', 'Largest change (units, 0 = off)', 0, 80, 0.5, '%.1f', 0, 'No sample moves further than this from the input height, up or down. 0 = unlimited.'),
+        P('conserve', 'Keep volume', 0, 1, 0.05, '%.2f', 0, 'Puts the share of the removed material that left the map or was carried off back where sediment settles (valleys), so the terrain keeps its mass. 0 = off.'),
+    }
+end
+
+local function Join(a, b)
+    for _, p in b do table.insert(a, p) end
+    return a
+end
 
 Solvers = {
     hydraulic = {
         op = 'erode_hydraulic', label = 'Hydraulic (grid)',
         params = {
-            P('iterations', 'Iterations', 10, 2000, 10, '%d', 200),
-            P('rain', 'Rain per step (units)', 0.0005, 0.05, 0.0005, '%.4f', 0.006),
+            P('iterations', 'Iterations', 10, 2000, 10, '%d', 150),
+            P('rain', 'Rain per step (units)', 0.0005, 0.05, 0.0005, '%.4f', 0.004),
             P('evaporation', 'Evaporation', 0.002, 0.15, 0.002, '%.3f', 0.02),
             P('gain', 'Water speed (pipe gain)', 0.01, 0.25, 0.01, '%.2f', 0.08),
             P('capacity', 'Sediment capacity', 0.05, 4, 0.05, '%.2f', 1),
-            P('erosion', 'Dissolving rate', 0.01, 0.6, 0.01, '%.2f', 0.12),
-            P('deposition', 'Settling rate', 0.01, 0.6, 0.01, '%.2f', 0.06),
+            P('erosion', 'Dissolving rate', 0.01, 0.6, 0.01, '%.2f', 0.08),
+            P('deposition', 'Settling rate', 0.01, 0.6, 0.01, '%.2f', 0.05),
             P('depth_max', 'Full capacity depth (units)', 0.01, 0.5, 0.01, '%.2f', 0.05),
             P('min_slope', 'Minimum slope', 0, 0.2, 0.005, '%.3f', 0.02),
             P('cut_limit', 'Cut limit (0 = off)', 0, 1, 0.05, '%.2f', 0.5),
@@ -38,13 +66,14 @@ Solvers = {
             P('thermal_every', 'Slide every n steps', 1, 10, 1, '%d', 2),
             P('smooth', 'Cell noise filter', 0, 1, 0.05, '%.2f', 1),
             P('smooth_passes', 'Filter passes', 0, 4, 1, '%d', 1),
+            P('seed', 'Seed', 0, 9999, 1, '%d', 1, 'The random seed of the hardness and rain variation.'),
         },
     },
     droplet = {
         op = 'erode_droplet', label = 'Droplets (particles)',
         params = {
-            P('density', 'Droplets per cell', 0.05, 8, 0.05, '%.2f', 1),
-            P('lifetime', 'Droplet life (steps)', 5, 120, 1, '%d', 30),
+            P('density', 'Droplets per cell', 0.05, 8, 0.05, '%.2f', 2),
+            P('lifetime', 'Droplet life (steps)', 5, 120, 1, '%d', 40),
             P('inertia', 'Inertia', 0, 0.5, 0.01, '%.2f', 0.05),
             P('capacity', 'Sediment capacity', 0.5, 16, 0.25, '%.2f', 4),
             P('erode', 'Dissolving rate', 0.02, 1, 0.02, '%.2f', 0.3),
@@ -58,8 +87,10 @@ Solvers = {
             P('thermal_steps', 'Slide steps', 0, 50, 1, '%d', 0),
             P('talus', 'Talus (rise / run)', 0.1, 2, 0.05, '%.2f', 0.8),
             P('smooth', 'Cell noise filter', 0, 1, 0.05, '%.2f', 1),
-            P('smooth_passes', 'Filter passes', 0, 4, 1, '%d', 2),
+            P('smooth_passes', 'Filter passes', 0, 4, 1, '%d', 1),
             P('seed', 'Seed', 0, 9999, 1, '%d', 1),
+            P('accel', 'Downhill acceleration', 0, 1, 0.05, '%.2f', 1, 'How much a drop speeds up going downhill. 1 = like a real drop (fast on steep ground, so it digs there); 0 = the old rule, which slowed drops down on slopes so they dug almost nothing.'),
+            P('drop_vary', 'Droplet variation', 0, 1, 0.05, '%.2f', 0.5, 'Every drop gets its own size, lifetime, inertia and load, so the gullies are no longer evenly spaced copies of each other. 0 = identical drops.'),
         },
     },
     stream = {
@@ -75,20 +106,30 @@ Solvers = {
             P('diffusion', 'Hillslope diffusion', 0, 1, 0.05, '%.2f', 0.2),
             P('talus', 'Talus (rise / run)', 0.1, 2, 0.05, '%.2f', 0.7),
             P('uplift', 'Uplift per step (units)', 0, 2, 0.05, '%.2f', 0),
+            P('seed', 'Seed', 0, 9999, 1, '%d', 1, 'The random seed of the flow jitter and the hardness and rain variation.'),
+            P('jitter', 'Flow jitter', 0, 1.5, 0.05, '%.2f', 0.4, 'The water is routed over the ground plus a little smooth noise: rivers pick their own paths, branch and bend instead of running side by side straight down the slope. 0 = routed on the plain ground.'),
         },
     },
 }
+for _, name in { 'hydraulic', 'droplet', 'stream' } do Join(Solvers[name].params, Shared()) end
 
 SolverOrder = { 'hydraulic', 'droplet', 'stream' }
 
 --- The presets: the solver and the values that differ from its defaults.
 Presets = {
-    { id = 'mountain', label = 'Mountain', solver = 'droplet', values = { density = 4, lifetime = 70, inertia = 0.3, capacity = 8, erode = 0.6, deposit = 0.15, gravity = 6, thermal = 0.4, thermal_steps = 3, talus = 0.9 } },
-    { id = 'hills', label = 'Hills', solver = 'hydraulic', values = { iterations = 150, rain = 0.004, erosion = 0.08, deposition = 0.08, thermal = 0.3, talus = 0.6 } },
-    { id = 'canyon', label = 'Canyon', solver = 'stream', values = { iterations = 14, k = 1.5, max_cut = 0.7, diffusion = 0.05, widen = 2, talus = 1.2, area_min = 40 } },
-    { id = 'alpine', label = 'Alpine', solver = 'droplet', values = { density = 3, lifetime = 80, inertia = 0.2, capacity = 6, erode = 0.5, deposit = 0.05, gravity = 8, thermal = 0.6, thermal_steps = 6, talus = 0.7 } },
-    { id = 'desert', label = 'Desert', solver = 'hydraulic', values = { iterations = 120, rain = 0.002, evaporation = 0.05, capacity = 0.5, deposition = 0.2, thermal = 0.6, talus = 0.35 } },
-    { id = 'river', label = 'River valley', solver = 'stream', values = { iterations = 20, k = 0.5, m = 0.5, diffusion = 0.3, widen = 2, area_min = 60, talus = 0.5 } },
+    -- Values not listed are the solver's defaults (accel 1, drop_vary 0.5, vary 0.4, rain_vary 0.5, protect 0.5, keep_range 1, jitter 0.4). Each preset names the settings that give it its look.
+    -- Mountain: tall ridges kept (protect), hard and soft rock side by side, every drop different; max_change stops the faster droplets (accel 1) from cutting the peaks down.
+    { id = 'mountain', label = 'Mountain', solver = 'droplet', values = { density = 3, lifetime = 60, inertia = 0.3, capacity = 8, erode = 0.45, deposit = 0.15, gravity = 5, thermal = 0.4, thermal_steps = 3, talus = 0.9, vary = 0.55, protect = 0.7, drop_vary = 0.6, max_change = 25 } },
+    -- Hills: soft, rounded; the defaults of the hydraulic solver with a little thermal slumping.
+    { id = 'hills', label = 'Hills', solver = 'hydraulic', values = { deposition = 0.08, thermal = 0.3, talus = 0.6 } },
+    -- Canyon: straight, deep gorges (low jitter) in a plateau whose rim stays (protect), rock layers of different hardness.
+    { id = 'canyon', label = 'Canyon', solver = 'stream', values = { iterations = 14, k = 1.5, max_cut = 0.7, diffusion = 0.05, widen = 2, talus = 1.2, area_min = 40, jitter = 0.3, protect = 0.6, vary = 0.5 } },
+    -- Alpine: sharp, strongly protected crests and long steep flanks with scree (thermal), the most varied of the droplet presets.
+    { id = 'alpine', label = 'Alpine', solver = 'droplet', values = { density = 2.5, lifetime = 80, inertia = 0.2, capacity = 6, erode = 0.4, deposit = 0.05, gravity = 6, thermal = 0.6, thermal_steps = 6, talus = 0.7, vary = 0.6, protect = 0.8, drop_vary = 0.7, max_change = 30 } },
+    -- Desert: dry, rare and patchy rain (flash floods), the ground mostly shaped by slides (thermal every step) and wind-worn mesa rims.
+    { id = 'desert', label = 'Desert', solver = 'hydraulic', values = { iterations = 120, rain = 0.002, evaporation = 0.05, capacity = 0.5, deposition = 0.2, thermal = 0.7, thermal_every = 1, talus = 0.35, vary = 0.3, rain_vary = 0.7, protect = 0.3 } },
+    -- River valley: wandering rivers (more jitter) with wide soft banks.
+    { id = 'river', label = 'River valley', solver = 'stream', values = { iterations = 20, k = 0.5, m = 0.5, diffusion = 0.3, widen = 2, area_min = 60, talus = 0.5, jitter = 0.5, vary = 0.3, protect = 0.3 } },
 }
 
 --- The panel's choices (module level: the controls come and go).

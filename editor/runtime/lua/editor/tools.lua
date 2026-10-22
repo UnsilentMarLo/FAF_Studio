@@ -45,6 +45,63 @@ local function Table(kind)
     return Areas()
 end
 
+-- ---- keeping areas on the map ---------------------------------------------------------------------------------------------------
+-- 'Limit to map bounds' (Properties panel, area tools): while it is on an area is kept inside the map (0 .. size) while it is drawn, moved, resized and typed; 'Limit to
+-- playable area' narrows that to the playable area (AREA_1 itself is only limited by the map). Both are remembered in the user settings.
+--
+--   LimitAreas / LimitPlayable        the two switches (module fields; SetLimitAreas / SetLimitPlayable change and save them)
+--   AreaBounds(name) -> x0, z0, x1, z1 | nil     the rectangle areas stay in (nil: no limit); `name` is the area being edited
+--   ClampAreaPoint(x, z, name) -> x, z           a point brought inside
+--   ClampAreaShift(r, dx, dz, name) -> dx, dz    a wanted shift of rectangle r, cut so r does not go further out than it is (an area already outside may still come back)
+
+LimitAreas = true
+LimitPlayable = false
+
+pcall(function()
+    local UD = import('/lua/editor/userdata.lua')
+    LimitAreas = UD.Get('areaLimitMap', true) ~= false
+    LimitPlayable = UD.Get('areaLimitPlayable', false) == true
+end)
+
+function SetLimitAreas(on)
+    LimitAreas = on and true or false
+    pcall(function() import('/lua/editor/userdata.lua').Set('areaLimitMap', LimitAreas) end)
+    Bump()
+end
+
+function SetLimitPlayable(on)
+    LimitPlayable = on and true or false
+    pcall(function() import('/lua/editor/userdata.lua').Set('areaLimitPlayable', LimitPlayable) end)
+    Bump()
+end
+
+function AreaBounds(name)
+    if not LimitAreas then return nil end
+    if LimitPlayable then
+        local P = import('/lua/editor/playable.lua')
+        if name ~= P.NAME then
+            local x0, z0, x1, z1 = P.Get()
+            return x0, z0, x1, z1
+        end
+    end
+    local w, h = ed_terrain_info()
+    return 0, 0, (w or 257) - 1, (h or 257) - 1
+end
+
+function ClampAreaPoint(x, z, name)
+    local x0, z0, x1, z1 = AreaBounds(name)
+    if not x0 then return x, z end
+    return math.max(x0, math.min(x1, x)), math.max(z0, math.min(z1, z))
+end
+
+function ClampAreaShift(r, dx, dz, name)
+    local x0, z0, x1, z1 = AreaBounds(name)
+    if not x0 then return dx, dz end
+    dx = math.max(math.min(0, x0 - r[1]), math.min(math.max(0, x1 - r[3]), dx))
+    dz = math.max(math.min(0, z0 - r[2]), math.min(math.max(0, z1 - r[4]), dz))
+    return dx, dz
+end
+
 -- ---- marker types --------------------------------------------------------------------------------------------------------------
 
 local CATEGORY_ORDER = { 'Resources', 'Areas and points', 'Paths', 'Other' }
@@ -275,6 +332,7 @@ end
 function PasteArea(r, dx, dz)
     if not Map.Doc or ReadOnly then return nil end
     local name = UniqueName('area', 'AREA')
+    dx, dz = ClampAreaShift(r, dx, dz)          -- a pasted copy stays on the map too (when the limit is on)
     Map.AddArea(name, r[1] + dx, r[2] + dz, r[3] + dx, r[4] + dz)
     local a = Areas()[name]
     History.Push({
@@ -290,6 +348,8 @@ end
 function NewArea(x0, z0, x1, z1)
     if not Map.Doc or ReadOnly then return nil end
     local name = UniqueName('area', 'AREA')
+    x0, z0 = ClampAreaPoint(x0, z0)
+    x1, z1 = ClampAreaPoint(x1, z1)
     Map.AddArea(name, math.min(x0, x1), math.min(z0, z1), math.max(x0, x1), math.max(z0, z1))
     local a = Areas()[name]
     History.Push({
@@ -406,8 +466,9 @@ function MoveSelectionBy(dx, dz)
                 table.insert(after, { kind = 'marker', name = it.name, x = nx, y = GroundHeight(nx, nz), z = nz })
             else
                 local r = obj.rectangle
+                local adx, adz = ClampAreaShift(r, dx, dz, it.name)
                 table.insert(before, { kind = 'area', name = it.name, r1 = r[1], r2 = r[2], r3 = r[3], r4 = r[4] })
-                table.insert(after, { kind = 'area', name = it.name, r1 = r[1] + dx, r2 = r[2] + dz, r3 = r[3] + dx, r4 = r[4] + dz })
+                table.insert(after, { kind = 'area', name = it.name, r1 = r[1] + adx, r2 = r[2] + adz, r3 = r[3] + adx, r4 = r[4] + adz })
             end
         end
     end
@@ -534,6 +595,14 @@ function SetAreaRect(name, x0, z0, x1, z1)
     local r = a.rectangle
     local ox0, oz0, ox1, oz1 = r[1], r[2], r[3], r[4]
     local nx0, nz0, nx1, nz1 = math.min(x0, x1), math.min(z0, z1), math.max(x0, x1), math.max(z0, z1)
+    -- typed coordinates stay on the map: an edge that was not changed (the fields show one decimal) is left as it is
+    local bx0, bz0, bx1, bz1 = AreaBounds(name)
+    if bx0 then
+        if math.abs(nx0 - ox0) > 0.06 then nx0 = math.max(bx0, math.min(bx1, nx0)) end
+        if math.abs(nz0 - oz0) > 0.06 then nz0 = math.max(bz0, math.min(bz1, nz0)) end
+        if math.abs(nx1 - ox1) > 0.06 then nx1 = math.max(bx0, math.min(bx1, nx1)) end
+        if math.abs(nz1 - oz1) > 0.06 then nz1 = math.max(bz0, math.min(bz1, nz1)) end
+    end
     if nx0 == ox0 and nz0 == oz0 and nx1 == ox1 and nz1 == oz1 then return true end
     r[1], r[2], r[3], r[4] = nx0, nz0, nx1, nz1
     Bump()
@@ -834,7 +903,8 @@ function NewLiveMove()
                 local a = Areas()[b.name]
                 if a then
                     local r = a.rectangle
-                    r[1], r[2], r[3], r[4] = b.r1 + L.dx, b.r2 + L.dz, b.r3 + L.dx, b.r4 + L.dz
+                    local adx, adz = ClampAreaShift({ b.r1, b.r2, b.r3, b.r4 }, L.dx, L.dz, b.name)
+                    r[1], r[2], r[3], r[4] = b.r1 + adx, b.r2 + adz, b.r3 + adx, b.r4 + adz
                 end
             end
         end
@@ -886,6 +956,7 @@ local function BeginResize(name, handle, event)
     dragger.OnMove = function(self, x, y)
         local cx, cz = WorldAt(x, y)
         if not cx or not Areas()[name] then return end
+        cx, cz = ClampAreaPoint(cx, cz, name)
         local x0, z0, x1, z1 = o0, o1, o2, o3
         if string.find(handle, 'w', 1, true) then x0 = cx end
         if string.find(handle, 'e', 1, true) then x1 = cx end

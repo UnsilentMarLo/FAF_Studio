@@ -68,7 +68,7 @@ Panels.Register{
                 Decals.Active = e.path
                 local tool
                 for _, t in UI.Tools do if t.id == UI.State.tool then tool = t end end
-                if not tool or (tool.id ~= 'decal' and tool.id ~= 'decal_erase') then UI.SelectTool('decal') end
+                if not tool or (tool.id ~= 'decal' and tool.id ~= 'decal_erase' and tool.id ~= 'decal_place') then UI.SelectTool('decal') end
                 P:Refresh()
             end,
             bgColor = Skin.color.panel,

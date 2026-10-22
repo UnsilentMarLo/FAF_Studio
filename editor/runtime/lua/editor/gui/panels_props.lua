@@ -64,7 +64,8 @@ Panels.Register{
                 Props.Active = e.path
                 local tool
                 for _, t in UI.Tools do if t.id == UI.State.tool then tool = t end end
-                if not tool or (tool.id ~= 'prop' and tool.id ~= 'prop_erase') then UI.SelectTool('prop') end
+                -- picking a prop must not change the tool while any prop tool (brush, eraser, Place prop) is active
+                if not tool or (tool.id ~= 'prop' and tool.id ~= 'prop_erase' and tool.id ~= 'prop_place') then UI.SelectTool('prop') end
                 P:Refresh()
             end,
             bgColor = Skin.color.panel,

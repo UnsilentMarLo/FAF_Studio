@@ -17,7 +17,7 @@ local presets = {
                 Split('col', 0.4, Stack({ 'tools' }), Stack({ 'brush', 'texbrush', 'shapes' })),
                 Split('row', 0.78,
                     Split('col', 0.72, Stack({ 'viewport' }), Stack({ 'console', 'validation', 'mods', 'hotkeys' })),
-                    Split('col', 0.62, Stack({ 'layers', 'ttype', 'ttlayers' }), Stack({ 'properties', 'view', 'symmetry' })))),
+                    Split('col', 0.62, Stack({ 'layers', 'ttype', 'ttlayers' }), Stack({ 'properties', 'toolsettings', 'view', 'symmetry' })))),
             popouts = {} }
     end,
     Objects = function()
@@ -26,7 +26,7 @@ local presets = {
                 Split('col', 0.42, Stack({ 'tools' }), Stack({ 'markers', 'props', 'decals', 'units' })),
                 Split('row', 0.78,
                     Split('col', 0.72, Stack({ 'viewport' }), Stack({ 'console', 'validation', 'mods', 'hotkeys' })),
-                    Split('col', 0.4, Stack({ 'outliner' }), Stack({ 'properties', 'view', 'symmetry' })))),
+                    Split('col', 0.4, Stack({ 'outliner' }), Stack({ 'properties', 'toolsettings', 'view', 'symmetry' })))),
             popouts = {} }
     end,
     -- Map-wide settings: lighting, fog and water. The viewport shows the result; the camera is the only tool.
@@ -46,7 +46,7 @@ local presets = {
                 Split('col', 0.42, Stack({ 'tools' }), Stack({ 'markers', 'units' })),
                 Split('row', 0.56,
                     Split('col', 0.72, Stack({ 'viewport' }), Stack({ 'console', 'validation', 'mods' })),
-                    Split('col', 0.62, Stack({ 'stages', 'armies' }), Stack({ 'outliner', 'properties', 'view' })))),
+                    Split('col', 0.62, Stack({ 'stages', 'armies' }), Stack({ 'outliner', 'properties', 'toolsettings', 'view' })))),
             popouts = {} }
     end,
     -- Mod projects: pick a unit, change its stats (merge blueprints), test the project in the editor world.
@@ -69,17 +69,21 @@ local presets = {
                     Split('col', 0.6, Stack({ 'graphinspector' }), Stack({ 'graphgallery', 'validation', 'view', 'properties' })))),
             popouts = {} }
     end,
+    -- Review is read-only: the viewport and ONE tab stack with what looking at a map needs (View overlays, checks, statistics, the map's images, the objects, the log). No editing
+    -- panels (Properties edits, Mods, Hotkeys); Tools stays last for the Select / Ruler / Camera tools, Save and Play test.
     Review = function()
         return { tree =
-            Split('row', 0.17,
-                Split('col', 0.3, Stack({ 'tools' }), Stack({ 'outliner' })),
-                Split('row', 0.78,
-                    Split('col', 0.72, Stack({ 'viewport' }), Stack({ 'validation', 'console', 'mods' })),
-                    Split('col', 0.4, Stack({ 'properties' }), Stack({ 'view', 'hotkeys' })))),
+            Split('row', 0.68,
+                Stack({ 'viewport' }),
+                Stack({ 'view', 'validation', 'stats', 'terrainchecks', 'images', 'outliner', 'console', 'tools' })),
             popouts = {} }
     end,
 }
 local presetOrder = { 'Terrain', 'Objects', 'Environment', 'Generate', 'Mission', 'Mod', 'Review' }
+
+-- A workspace whose preset changed for good gets a revision here: the arrangement the editor kept for it (layouts/<name>.lua, written without a `rev` by older editors) is dropped
+-- once, so an old layout does not bring a removed panel arrangement back. Raise the number when a preset is redesigned again.
+local LAYOUT_REV = { Review = 2 }
 
 function Presets()
     return presetOrder
@@ -112,6 +116,42 @@ local function AttachPanels(name, layout)
             end
         end
     end
+end
+
+--- Version of the layouts the editor writes (`layout.version`, apart from the preset revision `rev` above). A panel that came later names the version it came with (`addedInLayout = 2`
+--- in Panels.Register, plus its `stack` hints): a layout saved by an older editor (no `version`, or a lower one) gets that panel added once, next to the panel the hints name, and is
+--- stamped with the current version when it is written, so a panel the user closes afterwards stays closed.
+LAYOUT_VERSION = 2
+
+local function HasPanel(layout, id)
+    if FindStack(layout.tree, id) then return true end
+    for _, p in layout.popouts or {} do
+        if p.tree and FindStack(p.tree, id) then return true end
+    end
+    return false
+end
+
+function Migrate(name, layout)
+    local have = layout.version or 1
+    if have >= LAYOUT_VERSION then return layout end
+    local ok, Panels = pcall(import, '/lua/editor/gui/panels.lua')
+    if ok and Panels then
+        for _, def in Panels.All() do
+            if def.addedInLayout and def.addedInLayout > have and not HasPanel(layout, def.id) then
+                local hints = def.stack
+                if hints and hints.workspace then hints = { hints } end
+                for _, hint in hints or {} do
+                    -- the first hint whose neighbour is in the layout wins (the later hints of a workspace are fallbacks)
+                    if hint.workspace == name and not FindStack(layout.tree, def.id) then
+                        local stack = FindStack(layout.tree, hint.with)
+                        if stack then table.insert(stack.tabs, def.id) end
+                    end
+                end
+            end
+        end
+    end
+    layout.version = LAYOUT_VERSION
+    return layout
 end
 
 function Fresh(name)
@@ -163,8 +203,10 @@ local function ReadLayout(rel)
     return nil
 end
 
-local function WriteLayout(rel, layout)
+local function WriteLayout(rel, layout, name)
     layout.format = UserData.FORMAT
+    layout.rev = name and LAYOUT_REV[name] or nil
+    layout.version = LAYOUT_VERSION
     return ed_write_file(UserData.Path(rel), Serialize(layout))
 end
 
@@ -210,11 +252,13 @@ end
 --- The arrangement kept for the workspace, or nil (first start, reset).
 function LoadKept(name)
     local layout = ReadLayout('layouts/' .. name .. '.lua')
-    return layout and Sanitize(layout)
+    if layout and (layout.rev or 1) < (LAYOUT_REV[name] or 1) then return nil end      -- kept before the preset was redesigned: start from the new preset
+    layout = layout and Sanitize(layout)
+    return layout and Migrate(name, layout)
 end
 
 function SaveKept(name, layout)
-    return WriteLayout('layouts/' .. name .. '.lua', layout)
+    return WriteLayout('layouts/' .. name .. '.lua', layout, name)
 end
 
 --- Forgets the kept arrangement (Reset layout of this workspace).
@@ -223,7 +267,7 @@ function ForgetKept(name)
 end
 
 function Save(name, layout)
-    return WriteLayout('saved/' .. name .. '.lua', layout)
+    return WriteLayout('saved/' .. name .. '.lua', layout, name)
 end
 
 function Load(name)
@@ -237,5 +281,6 @@ function Load(name)
         if okLoad and chunk then ok, old = pcall(chunk) end
         if ok and type(old) == 'table' and old.tree then layout = old end
     end
-    return layout and Sanitize(layout)
+    layout = layout and Sanitize(layout)
+    return layout and Migrate(name, layout)
 end

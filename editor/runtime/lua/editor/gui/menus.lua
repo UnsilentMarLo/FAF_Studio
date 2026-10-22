@@ -196,7 +196,7 @@ end, 20)
 
 -- Window: one submenu per area; the panel's own area decides where it is listed.
 local PANEL_AREA = {
-    General = { 'tools', 'outliner', 'properties', 'console', 'validation', 'history', 'stats', 'mods', 'hotkeys', 'view', 'symmetry' },
+    General = { 'tools', 'outliner', 'properties', 'console', 'validation', 'history', 'stats', 'images', 'mods', 'hotkeys', 'view', 'symmetry' },
     Terrain = { 'brush', 'brushes', 'texbrush', 'shapes', 'layers', 'ttype', 'ttlayers', 'paths', 'erosion', 'fields', 'sctools', 'terrainchecks', 'recipes', 'interop' },
     Objects = { 'markers', 'chains', 'props', 'decals', 'units', 'scatter' },
     World = { 'lighting', 'ambient', 'water', 'waterlook', 'meshmap', 'meshimport' },

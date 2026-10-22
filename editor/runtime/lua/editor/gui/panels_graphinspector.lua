@@ -117,6 +117,20 @@ Panels.Register{
             local lines = W.Paragraph(group, def.desc or '', pad, y, w - 2 * pad, { color = c.textDim, size = 'small' }, Skin.S(14))
             self.lines = lines
             y = y + table.getn(lines) * Skin.S(14) + Skin.S(6)
+            -- an output that fills a map-wide shader texture says what the map's shader does with it (maptextures.lua)
+            if def.mapTexture then
+                local okMT, MT = pcall(import, '/lua/editor/maptextures.lua')
+                if okMT and MT then
+                    local cur = MT.Current(def.mapTexture)
+                    local text = cur.why
+                    if cur.slot then
+                        text = (cur.shader ~= '' and cur.shader or 'The shader') .. ' reads it from the ' .. cur.slot.where .. ' (' .. cur.slot.layout .. ').'
+                    end
+                    local more = W.Paragraph(group, text or '', pad, y, w - 2 * pad, { color = cur.slot and c.accent or c.warn, size = 'small' }, Skin.S(14))
+                    for _, l in more do table.insert(self.lines, l) end
+                    y = y + table.getn(more) * Skin.S(14) + Skin.S(6)
+                end
+            end
             -- name, bypass
             local nameLabel = Add(W.Label(group, 'Name', 0, 0, { color = c.textDim, size = 'small' }))
             W.Place(nameLabel, group, pad, y + 4)
@@ -177,7 +191,7 @@ Panels.Register{
                 local wired = Graph.WireInto(node.id, param.key)
                 if param.kind == 'number' then
                     local label = param.label .. (wired and '  (wired)' or '')
-                    local s = W.Slider(group, { label = label, compact = true, min = param.min, max = param.max, step = param.step, fmt = param.fmt,
+                    local s = W.Slider(group, { label = label, compact = true, min = param.min, max = param.max, step = param.step, fmt = param.fmt, tip = param.tip,
                         get = function()
                             local n = Graph.NodeById(node.id)
                             local v = n and n.params[param.key]

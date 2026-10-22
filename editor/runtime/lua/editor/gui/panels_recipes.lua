@@ -3,6 +3,7 @@
 -- Pick a preset (temperate, alpine, desert, arctic, rocky): it lists the kinds of ground from the bottom up and makes each one's mask from slope / height / curvature / water / noise rules.
 -- Give every role a texture layer (0 = skip it; the base role is the Base layer), tune the knobs, look at one role on the map ("Show role"), then Apply: the paint masks of the layers and the
 -- terrain-type grid are written in ONE undo step. The layers above take away, so a cliff covers rock covers dirt covers grass; the terrain types follow what is seen most in each cell.
+-- The panel shows the shader of the map (how many layers it paints, which mask range) and warns when a kind sits on a layer the shader cannot paint: it is moved to a free layer (recipes.lua).
 --
 -- Lua 5.0 dialect.
 
@@ -14,7 +15,6 @@ local UI = import('/lua/editor/ui.lua')
 local Recipes = import('/lua/editor/recipes.lua')
 local MaskGen = import('/lua/editor/maskgen.lua')
 
-NoAutoRefresh = true
 live = {}
 
 state = { text = '', summary = false }
@@ -44,6 +44,9 @@ Panels.Register{
         local c = Skin.color
         local function Btn(text, w, fn, opts) return W.Button(group, text, 0, 0, Skin.S(w), Skin.S(22), fn, opts) end
 
+        Pn.shaderLine = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
+        Pn.warns = {}
+        for i = 1, 3 do Pn.warns[i] = W.Label(group, '', 0, 0, { color = c.warn, size = 'small' }) end
         Pn.status = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
         Pn.note = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
         Pn.rolesLabel = W.Label(group, 'Kinds of ground, bottom to top', 0, 0, { color = c.text })
@@ -72,7 +75,8 @@ Panels.Register{
             bind = function(row, index)
                 local role = Pn.roles[index]
                 local layer = Recipes.State.layers[index] or 0
-                local text = string.format('%d. %s  ->  %s', index, role.label, (index == 1) and 'Base layer' or (layer >= 1 and ('layer ' .. layer .. '  ' .. Texture(layer)) or 'skipped'))
+                local fit = Recipes.FitLayers(Recipes.State.layers)[index] or layer
+                local text = string.format('%d. %s  ->  %s', index, role.label, (index == 1) and 'Base layer' or (layer >= 1 and ((fit ~= layer and ('layer ' .. layer .. ' > ' .. fit) or ('layer ' .. layer)) .. '  ' .. Texture(fit)) or 'skipped'))
                 W.Fit(row.text, text, math.max(Skin.S(40), row.bg.Width() - Skin.S(12)))
                 row.text:SetColor(index == Recipes.State.selected and c.accent or c.text)
                 local ty = math.floor((row.bg.Height() - row.text.Height()) / 2)
@@ -86,11 +90,11 @@ Panels.Register{
             end,
         })
 
-        Pn.layer = W.Slider(group, { label = 'Texture layer of the selected kind (0 = skip)', compact = true, min = 0, max = 8, step = 1, fmt = '%d',
+        Pn.layer = W.Slider(group, { label = 'Texture layer of the selected kind (0 = skip)', compact = true, min = 0, max = Recipes.Cap(), step = 1, fmt = '%d',
             get = function() return Recipes.State.layers[Recipes.State.selected] or 0 end,
             set = function(v)
                 if Recipes.State.selected == 1 then return end        -- the base role stays on the Base layer
-                Recipes.State.layers[Recipes.State.selected] = v
+                Recipes.State.layers[Recipes.State.selected] = math.min(v, Recipes.Cap())
                 Pn:Refresh()
             end })
 
@@ -153,8 +157,15 @@ Panels.Register{
         function Pn:Refresh()
             self.bPreset:SetText('Preset: ' .. Recipes.Presets[Recipes.State.preset].name)
             self.bTypes:SetOn(Recipes.State.types)
+            -- the shader decides how many layers have a mask: the layer choice follows it, and a kind left on a layer it cannot paint is shown moved
+            self.layer:SetRange(0, Recipes.Cap(), 1, '%d')
             self.list:Refresh()
             self.layer:Refresh()
+            local line, warnings = Recipes.Notes(self.roles)
+            W.Fit(self.shaderLine, line, (self.w or 300) - Skin.S(16))
+            for i = 1, 3 do
+                W.Fit(self.warns[i], warnings[i] or '', (self.w or 300) - Skin.S(16))
+            end
             for _, s in self.knobSliders do s:Refresh() end
             local role = self.roles[Recipes.State.selected]
             W.Fit(self.note, role and ((Recipes.State.selected == 1) and 'The base role has no mask: it is what the other kinds leave free.' or 'Mask of this kind: ' .. table.getn(role.rules) .. ' rules (open them in the Mask generator by copying)') or '', (self.w or 300) - Skin.S(16))
@@ -183,6 +194,13 @@ Panels.Register{
             local y = pad
             W.Place(self.bPreset, group, pad, y, math.min(Skin.S(280), w - 2 * pad), Skin.S(22))
             y = y + Skin.S(30)
+            W.Place(self.shaderLine, group, pad, y)
+            y = y + Skin.S(16)
+            for i = 1, 3 do
+                W.Place(self.warns[i], group, pad, y)
+                y = y + Skin.S(16)
+            end
+            y = y + Skin.S(4)
             W.Place(self.rolesLabel, group, pad, y)
             y = y + Skin.S(22)
             self.list:SetRect(pad, y, w - 2 * pad, Skin.S(20 * math.max(3, math.min(6, table.getn(self.roles)))))
@@ -227,3 +245,14 @@ Panels.Register{
         return Pn
     end,
 }
+
+--- The shell calls this four times a second: the panel only follows a change of the map's shader (its sliders would lose what is being typed if it refreshed everything every time).
+function Refresh()
+    local Pn = live.recipes
+    if not Pn or not Pn.w or not rawget(_G, 'ed_stratum_shader') then return end
+    local name = ed_stratum_shader() or ''
+    if name ~= Pn.shaderShown then
+        Pn.shaderShown = name
+        Pn:Refresh()
+    end
+end

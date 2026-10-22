@@ -544,6 +544,7 @@ function Run(opts)
         fill = opts.fill, level = opts.level, dir = dir, stem = stem, name = info.name,
         source = doc.scenarioPath, files = files, maskFiles = maskFiles, maskW = maskW, maskH = maskH, ttW = ttW, ttH = ttH,
         world = world, layers = layers, props = plan.props, decals = plan.decals, lines = plan.lines,
+        shader = rawget(_G, 'ed_stratum_shader') and ed_stratum_shader() or nil,          -- the blank template has its own shader; the masks are copied as raw bytes in the old shader's range
     }
     local good = ed_write_file(dir .. '/' .. stem .. '.scmap', scmap)
     good = ed_write_file(dir .. '/' .. stem .. '_scenario.lua', Ser.ScenarioChunk(info)) and good
@@ -643,7 +644,14 @@ function ApplyPending(doc)
     for _, hnd in handles do pcall(ed_field_free, hnd) end
     -- world values and the texture layers of the old map
     if P.world then pcall(ed_world_set, P.world, true) end
+    if P.shader and P.shader ~= '' and rawget(_G, 'ed_stratum_shader') then pcall(ed_stratum_shader, P.shader) end
     for _, l in P.layers or {} do pcall(ed_stratum_set_layer, l.i, l.path, l.tile) end
+    -- the map-wide pictures (normal map, lighting ...) were restored with the tile size of the old map: give them the new one so the shader keeps using them, and mark them out of date
+    local okMT, wide = pcall(function() return import('/lua/editor/maptextures.lua').AfterResize(P.old, P.size) end)
+    if okMT and wide and table.getn(wide) > 0 then
+        P.lines = P.lines or {}
+        table.insert(P.lines, 'map textures (' .. table.concat(wide, ', ') .. '): kept active at the new size; they still show the old map, generate them again in the Map textures panel')
+    end
     -- props and decals
     for _, p in P.props or {} do Map.AddProp(p.bp, p.x, p.y, p.z, p.heading, { p.sx, p.sy, p.sz }) end
     for _, d in P.decals or {} do ed_decal_add(d.tex, d.kind, d.x, d.y, d.z, d.ox, d.oy, d.oz, d.sx, d.sy, d.sz, d.cutoff) end

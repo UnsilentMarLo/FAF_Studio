@@ -366,12 +366,16 @@ local function ErodeNode(solver, label, kw, desc, presetsOf)
     for _, p in def.params do
         local c = N(p.key, p.label, p.min, p.max, p.step, p.fmt, p.default)
         if p.key == 'seed' then c.seed = true end
+        c.tip = p.tip
         table.insert(params, c)
     end
     local presets = {}
     for _, pr in Erosion.Presets do
         if pr.solver == solver then
             local values = {}
+            for _, p in def.params do      -- (a preset is complete: the settings it does not name go back to the defaults, except the seed)
+                if p.key ~= 'seed' then values[p.key] = p.default end
+            end
             for k, x in pr.values do values[k] = x end
             table.insert(presets, { id = pr.id, label = pr.label, values = values })
         end
@@ -383,9 +387,7 @@ local function ErodeNode(solver, label, kw, desc, presetsOf)
         eval = function(E, v, ins)
             local values = {}
             for _, p in def.params do values[p.key] = v[p.key] end
-            local seed = nil
-            if solver == 'droplet' then seed = E:Seed(v.seed) end
-            local p = Erosion.OpParams(solver, values, E.step, seed)
+            local p = Erosion.OpParams(solver, values, E.step, E:Seed(v.seed))
             p.a = ins.a
             if ins.mask then p.mask = ins.mask end
             local wantMasks = E.wanted.wear or E.wanted.deposit or E.wanted.flow or E.wanted.accum
@@ -761,7 +763,7 @@ Def('out_height', { label = 'Output: heights', cat = 'outputs', kw = 'output hei
 local TextureRoleIds, TextureRoleLabels = import('/lua/editor/texsets.lua').RoleChoices()
 
 Def('out_layer', { label = 'Output: texture layer', cat = 'outputs', kw = 'output layer stratum texture paint mask write',
-    desc = 'Writes a mask into the paint mask of a texture layer (1..8). The Layer texture setting also gives the layer a texture of a kind (grass, rock, sand ...) from the map\'s texture set; Keep leaves the layer\'s own texture.',
+    desc = 'Writes a mask into the paint mask of a texture layer (1..8; a layer the map\'s shader does not paint, such as layer 8 of the numbered shaders, refuses the build). The Layer texture setting also gives the layer a texture of a kind (grass, rock, sand ...) from the map\'s texture set; Keep leaves the layer\'s own texture.',
     inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'layer',
     params = { N('layer', 'Layer', 1, 8, 1, '%d', 2), C('mode', 'Mode', { 'replace', 'add', 'subtract' }, { 'Replace', 'Add to (the larger)', 'Subtract from' }, 'replace'),
                N('strength', 'Strength', 0, 1, 0.05, '%.2f', 1, { wire = true }), B('takeAway', 'Layers above take away', false),
@@ -946,6 +948,8 @@ end
 for _, op in { 'crop', 'resize', 'path_paste' } do Covers[op] = true end
 -- the stage T7 nodes (graphnodes_t7.lua): the kit hands it the constructors of this file
 import('/lua/editor/graphnodes_t7.lua').Install({ Def = Def, N = N, C = C, B = B, T = T, In = In, Out = Out, One = One, Fit = Fit, SEED = SEED, Fields = Fields }, Covers)
+-- the nodes of the map-wide shader textures (graphnodes_map.lua, maptextures.lua): normal map, environment lighting, lighting texture and their two outputs
+import('/lua/editor/graphnodes_map.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
 
 --- Parses `key=value,key=value` (a number, a word, or a list x:y;x:y) into op parameters: the text format of the golden cases.
 function ParseArgs(text)

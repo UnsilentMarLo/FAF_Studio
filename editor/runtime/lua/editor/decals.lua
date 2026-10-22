@@ -153,7 +153,7 @@ function Dab(cx, cz, brush, slot, image)
     if not Active then return 0 end
     local placed = 0
     local function Heading()
-        local h = Settings.randomHeading and (math.random() * 6.2831853) or 0
+        local h = Settings.randomHeading and import('/lua/editor/toolopts.lua').RandomHeading('decals') or 0
         if image then h = Symmetry.Heading(h, image) end
         return h
     end
@@ -225,7 +225,7 @@ function PlaceAt(tex, x, z)
     BeginStroke()
     local n = 0
     for _, p in Symmetry.Points(x, z) do
-        local h = Settings.randomHeading and (math.random() * 6.2831853) or 0
+        local h = Settings.randomHeading and import('/lua/editor/toolopts.lua').RandomHeading('decals') or 0
         if Place(p.x, p.z, Symmetry.Heading(h, p)) then n = n + 1 end
     end
     EndStroke()
@@ -317,6 +317,10 @@ function Select(d, mode)
     end
     SelRevision = SelRevision + 1
 end
+
+--- Tool settings (toolopts.lua): whether decals snap to the build grid when placed (default on: half a unit), and the step in degrees of a stepped rotation (0 = free).
+function SnapToGrid() return import('/lua/editor/toolopts.lua').SnapToGrid('decals') end
+function RotationStep() return import('/lua/editor/toolopts.lua').RotationStep('decals') end
 
 --- Data of the first selected decal (the panel edits the group through it) and how many decals are selected.
 function Info()

@@ -30,6 +30,9 @@ Brush = {
     falloff = 1.0,     -- 0..1: the share of the radius the edge falls off over. 0 = a flat disc (full strength to the rim, one cell of soft edge),
                        -- 1 = a cosine falloff from the centre to the rim
     level = nil,       -- flatten target (world units); nil = height under the first dab of the stroke
+    noiseScale = 8,        -- noise brush: lattice cell size in samples (the size of the bumps)
+    noiseOctaves = 2,      -- noise brush: 1..4 layers of finer bumps (half the cell size each)
+    noiseRoughness = 0.5,  -- noise brush: the share of the amplitude each further octave keeps (0.3 soft .. 0.7 rough)
 }
 
 --- A box blur of the w x h grid `src` (1-based, row after row), half width `kr` samples, the edge samples repeated; running sums, so the cost does not grow with kr.
@@ -118,10 +121,13 @@ function BrushWeight(distance, radius, dx, dz)
     return Weight(distance, radius, nil, dx, dz)
 end
 
--- Deterministic hash noise in -1..1 (the sim is not involved, but edits should be reproducible). Lua numbers are 32-bit floats: every intermediate here stays below 2^24, so the
--- result is exact. (The first hash multiplied by 374761393 and took math.mod: the product lost its low bits in a float and the hash was -1 nearly everywhere.)
--- ed_terrain_brush (moho/editor/EdBrush.h, Noise) computes the same numbers with integers: keep the two in step.
-local function Noise(x, z, seed)
+-- Smooth noise for the noise brush: value noise on a lattice. The lattice values come from a seeded integer hash in -1..1; between lattice points the four corners are blended
+-- bilinearly with a smoothstep weight, so the result is continuous (no per-sample speckle). It is a function of the world position (x, z in samples) and the stroke's seed only, so
+-- the dabs of one stroke join into continuous bumps. Octaves add finer layers (half the cell size each, `rough` times the amplitude of the one before).
+-- Lua numbers are 32-bit floats: every intermediate of the hash stays below 2^24, so the result is exact. (The first hash multiplied by 374761393 and took math.mod: the product lost
+-- its low bits in a float and the hash was -1 nearly everywhere.) ed_terrain_brush (moho/editor/EdBrush.h, ValueNoise / SmoothNoise) computes the same numbers with the same
+-- operations in the same order: keep the two in step.
+local function Hash(x, z, seed)
     local a = math.mod(math.mod(x, 4093) * 1103 + 17, 4093)
     local b = math.mod(math.mod(z, 4091) * 1999 + 31, 4091)
     local c = math.mod(math.mod(seed, 4079) * 997 + 5, 4079)
@@ -130,6 +136,55 @@ local function Noise(x, z, seed)
     n = math.mod(n * n + a, 4093)
     n = math.mod(n * n + b, 4093)
     return n / 4093 * 2 - 1
+end
+
+local function ValueNoise(x, z, cell, seed)
+    local fx = x / cell
+    local fz = z / cell
+    local ix = math.floor(fx)
+    local iz = math.floor(fz)
+    local tx = fx - ix
+    local tz = fz - iz
+    local bx = 2 * tx
+    bx = 3 - bx
+    tx = tx * tx * bx
+    local bz = 2 * tz
+    bz = 3 - bz
+    tz = tz * tz * bz
+    local v00 = Hash(ix, iz, seed)
+    local v10 = Hash(ix + 1, iz, seed)
+    local v01 = Hash(ix, iz + 1, seed)
+    local v11 = Hash(ix + 1, iz + 1, seed)
+    local top = v10 - v00
+    top = top * tx
+    top = v00 + top
+    local bottom = v11 - v01
+    bottom = bottom * tx
+    bottom = v01 + bottom
+    local d = bottom - top
+    d = d * tz
+    return top + d
+end
+
+--- Smooth noise in -1..1 at sample (x, z): scale = lattice cell size in samples, octaves 1..4, rough = amplitude share of each further octave (0..1).
+local function Noise(x, z, seed, scale, octaves, rough)
+    local cell = scale or 8
+    if cell < 1 then cell = 1 end
+    local count = math.floor(octaves or 2)
+    if count < 1 then count = 1 elseif count > 4 then count = 4 end
+    rough = rough or 0.5
+    if rough < 0 then rough = 0 elseif rough > 1 then rough = 1 end
+    local total, amp, norm = 0, 1, 0
+    for o = 0, count - 1 do
+        if o > 0 and cell < 1 then break end
+        local v = ValueNoise(x, z, cell, seed + o * 1013)
+        v = v * amp
+        total = total + v
+        norm = norm + amp
+        amp = amp * rough
+        cell = cell / 2
+    end
+    return total / norm
 end
 
 --- Whether the height brushes use the native dab (ed_terrain_brush, moho/editor/EdBrush.cpp) when the exe has it. false forces the Lua loop below (tests compare the two).
@@ -259,7 +314,8 @@ function DabOne(cx, cz, slot, image)
         if level == nil and (Brush.mode == 'flatten' or Brush.mode == 'plateau') then
             level = Brush.level
         end
-        local changed, x0, z0, x1, z1, used = nativeBrush(cx, cz, Brush.radius, Brush.mode, Brush.strength, inverted and -1 or 1, Brush.falloff, level or -1, strokeId)
+        local changed, x0, z0, x1, z1, used = nativeBrush(cx, cz, Brush.radius, Brush.mode, Brush.strength, inverted and -1 or 1, Brush.falloff, level or -1, strokeId,
+                                                         Brush.noiseScale, Brush.noiseOctaves, Brush.noiseRoughness)
         if changed ~= nil then
             if used ~= nil and strokeLevel == nil then
                 strokeLevel = used          -- the flatten level of the stroke: the first dab's (Brush.level or the ground under it)
@@ -372,7 +428,7 @@ function DabOne(cx, cz, slot, image)
                     local k = math.min(1, strength * 0.2 * weight) * dir
                     value = value + (blurred[i] - value) * k
                 elseif mode == 'noise' then
-                    value = value + dir * Noise(x, z, strokeId) * strength * weight * WORD
+                    value = value + dir * Noise(x, z, strokeId, Brush.noiseScale, Brush.noiseOctaves, Brush.noiseRoughness) * strength * weight * WORD
                 end
                 value = math.floor(value + 0.5)
                 if value < 0 then value = 0 end

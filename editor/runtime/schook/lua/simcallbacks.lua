@@ -32,6 +32,21 @@ do
                 end
             end
         end
+        if data.on and data.deposits and not ScenarioInfo.EditorDepositsMade then
+            -- The editing sim leaves out the rock prop and the splat of every resource marker (schook/lua/sim/scenarioutilities.lua: the editor draws its own and moves them
+            -- with the marker); a test run shows the ones of the game, made like ScenarioUtilities.CreateResources does, for the markers as they are now. Once per session:
+            -- a splat cannot be removed again, and Stop opens the map afresh.
+            ScenarioInfo.EditorDepositsMade = true
+            for _, d in data.deposits do
+                pcall(function()
+                    local mass = (d.type == 'Mass')
+                    local y = GetTerrainHeight(d.x, d.z)
+                    CreatePropHPR(mass and '/env/common/props/massDeposit01_prop.bp' or '/env/common/props/hydrocarbonDeposit01_prop.bp', d.x, y, d.z, Random(0, 360), 0, 0)
+                    CreateSplat(Vector(d.x, y, d.z), 0, mass and '/env/common/splats/mass_marker.dds' or '/env/common/splats/hydrocarbon_marker.dds',
+                        mass and 2 or 6, mass and 2 or 6, mass and 100 or 200, 0, -1, 0)
+                end)
+            end
+        end
         if data.on and ScenarioInfo.EditorGroupUnits then
             for _, u in ScenarioInfo.EditorGroupUnits do
                 if u and not u.Dead then u:Destroy() end

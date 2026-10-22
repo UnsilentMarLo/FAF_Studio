@@ -85,8 +85,9 @@ local function Providers()
                 if n == 0 then return nil end
                 return sx / n, sz / n
             end,
-            move = function(dx, dz) return Props.MoveSelected(dx, dz) end,
+            move = function(dx, dz) return Props.MoveSelected(Props.SnapDelta(dx, dz)) end,        -- (Tool settings > Props > snap to grid)
             rotate = function(deg) return Props.RotateSelected(deg) end,
+            step = function() return Props.RotationStep() end,                                   -- degrees of a stepped rotation, 0 = free
             offset = function(o) Props.DragOffset = o end,
         },
         decal_select = {
@@ -99,6 +100,7 @@ local function Providers()
             end,
             move = function(dx, dz) return Decals.MoveSelected(dx, dz) end,
             rotate = function(deg) return Decals.RotateSelected(deg) end,
+            step = function() return Decals.RotationStep() end,
             offset = function(o) Decals.DragOffset = o end,
         },
         unit_select = {
@@ -115,6 +117,7 @@ local function Providers()
             end,
             move = function(dx, dz) return Units.MoveSelected(dx, dz) end,
             rotate = function(deg) return Units.RotateSelected(deg) end,
+            step = function() return Units.RotationStep() end,
             offset = function(o) Units.DragOffset = o end,
         },
     }
@@ -373,6 +376,9 @@ function Press(wx, wz, event)
         else
             local a = math.deg(math.atan2(mz - cz, mx - cx))
             local turn = a - startAngle
+            -- stepped rotation (Tool settings): the turn is a whole number of steps, so the label, the ghosts and the result all show the same angle
+            local stepDeg = p.step and p.step() or 0
+            if stepDeg > 0 then turn = math.floor(turn / stepDeg + 0.5) * stepDeg end
             -- screen x / world z make the angle run clockwise on screen: the object turns the way the pointer does
             Preview = { turn = turn }
         end

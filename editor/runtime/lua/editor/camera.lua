@@ -17,8 +17,9 @@
 local Dragger = import('/lua/maui/dragger.lua').Dragger
 
 --- Default gestures. `title` is what the hotkey manager shows.
---- A heading in (-pi, pi]: turning the view past a half turn kept adding to the heading (-3.14 ... -4.71 for east reached by turning left), and the engine's culling of props and
---- mesh instances misbehaves for headings outside that range (parts of the scene did not draw when facing east after a left turn; east by a right turn, +1.57, was fine).
+--- A heading in (-pi, pi]: turning the view past a half turn kept adding to the heading (-3.14 ... -4.71 for east reached by turning left). The real cause of props and units vanishing
+--- in that case was in the engine, not here: MeshRenderer::Batch took the LOD depth from the camera's orientation quaternion, which flips its sign by a full turn (fixed in the engine,
+--- mesh/MeshLodDepth.h). Keeping the heading in range is still tidier, so it stays.
 local TWO_PI = 6.2831853
 function NormalizeHeading(h)
     while h > 3.1415927 do h = h - TWO_PI end
@@ -366,6 +367,65 @@ function FocusSelection()
     return true
 end
 
+-- ---- diagnostics ------------------------------------------------------------------------------------------------------------------------------
+
+--- The numbers mesh LOD and culling are decided from, as text lines (nothing when this engine build has no ed_lod_info). The engine measures a mesh's LOD against `lodRow`: a plane that
+--- gives the depth of a point along the view direction, scaled by the field of view and the LOD scale; `depth` of a unit is that plane applied to its position. `entityId` is optional
+--- (a unit of the unit viewer or the first selected unit when playing); without it only the camera is reported.
+function Diagnostics(entityId)
+    local lines = {}
+    if not rawget(_G, 'ed_lod_info') then return lines end
+    if not entityId then
+        local okV, UnitView = pcall(import, '/lua/editor/unitview.lua')
+        if okV and UnitView.EntityId then entityId = UnitView.EntityId end
+    end
+    if not entityId and rawget(_G, 'GetSelectedUnits') then
+        local ok, sel = pcall(GetSelectedUnits)
+        if ok and sel and sel[1] then
+            local okId, id = pcall(function() return sel[1]:GetEntityId() end)
+            if okId then entityId = id end
+        end
+    end
+    local ok, i = pcall(ed_lod_info, entityId)
+    if not ok or type(i) ~= 'table' then
+        table.insert(lines, 'camera: no information (' .. tostring(i) .. ')')
+        return lines
+    end
+    local function F(v, digits) return string.format('%.' .. (digits or 3) .. 'f', v or 0) end
+    table.insert(lines, 'camera: heading ' .. F(i.heading) .. ' rad (' .. F(math.mod(i.heading * 57.29578, 360), 1) .. ' deg), pitch ' .. F(i.pitch) .. ', zoom ' .. F(i.zoom, 1)
+        .. ', eye distance ' .. F(i.eyeDistance, 1) .. ', fov ' .. F(i.fov) .. ' rad')
+    table.insert(lines, 'camera: eye ' .. F(i.eyeX, 1) .. ', ' .. F(i.eyeY, 1) .. ', ' .. F(i.eyeZ, 1) .. ', viewport ' .. F(i.viewportX, 0) .. ',' .. F(i.viewportY, 0) .. ' '
+        .. F(i.viewportW, 0) .. 'x' .. F(i.viewportH, 0))
+    table.insert(lines, 'LOD: scale ' .. F(i.lodScale) .. ', lodRow ' .. F(i.lodRowA, 5) .. ', ' .. F(i.lodRowB, 5) .. ', ' .. F(i.lodRowC, 5) .. ', ' .. F(i.lodRowD, 3)
+        .. ', dissolve range ' .. F(i.dissolveRange, 1))
+    if i.depth then
+        local cut = {}
+        for n = 1, (i.lodCount or 0) do table.insert(cut, F(i['cutoff' .. n], 0)) end
+        table.insert(lines, 'unit ' .. tostring(entityId) .. ': at ' .. F(i.x, 1) .. ', ' .. F(i.y, 1) .. ', ' .. F(i.z, 1) .. ', LOD depth ' .. F(i.depth, 1) .. ' (straight distance '
+            .. F(i.distance, 1) .. '), selected LOD ' .. tostring(i.lod) .. ' of ' .. tostring(i.lodCount) .. ', cutoffs ' .. table.concat(cut, ' / ') .. ', dissolve ' .. F(i.dissolve, 2)
+            .. ', hidden ' .. tostring(i.hidden))
+    end
+    return lines
+end
+
+--- Command: writes the diagnostics lines to the log and the status line, and to camera_diagnostics.txt in the user folder (and the clipboard when this build has it).
+function ReportDiagnostics()
+    local lines = Diagnostics()
+    if table.getn(lines) == 0 then
+        pcall(function() import('/lua/editor/ui.lua').Say('camera diagnostics need a newer engine build (ed_lod_info)') end)
+        return
+    end
+    local text = table.concat(lines, '\n')
+    for _, line in lines do LOG('EDITOR camera: ' .. line) end
+    local file
+    pcall(function()
+        file = import('/lua/editor/userdata.lua').Path('camera_diagnostics.txt')
+        ed_write_file(file, text)
+    end)
+    if rawget(_G, 'CopyToClipboard') then pcall(CopyToClipboard, text) end
+    pcall(function() import('/lua/editor/ui.lua').Say(lines[1] .. (file and ('   (all lines in ' .. file .. ')') or '')) end)
+end
+
 --- The camera commands: held keys (`hold`) and one-shot actions. Bindings are data (`keys`, `keys2`) and are rebound in the hotkey
 --- manager; nothing here is wired to a key by the engine map except the one-shots.
 function RegisterCommands(Commands)
@@ -391,4 +451,5 @@ function RegisterCommands(Commands)
     Commands.Register{ id = 'camera.north', title = 'Camera: face north', keys = 'N', run = North }
     Commands.Register{ id = 'camera.topdown', title = 'Camera: look straight down', keys = 'T', run = TopDown }
     Commands.Register{ id = 'camera.focus', title = 'Camera: focus on selection', keys = 'F', run = FocusSelection }
+    Commands.Register{ id = 'camera.diagnostics', title = 'Camera: save LOD diagnostics', run = ReportDiagnostics }
 end

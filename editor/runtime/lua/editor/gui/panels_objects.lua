@@ -15,6 +15,7 @@ local UI = import('/lua/editor/ui.lua')
 local Terrain = import('/lua/editor/terrain.lua')
 local Tools = import('/lua/editor/tools.lua')
 local Map = import('/lua/editor/map.lua')
+local ToolOpts = import('/lua/editor/toolopts.lua')
 
 live = {}      -- panel id -> instance, for Refresh
 
@@ -289,7 +290,8 @@ Panels.Register{
             local function Bump(dir)
                 local v = tonumber(f:GetText())
                 if not v then f:SetText(get()) return end
-                f:SetText(string.format(fmt, v + dir * step))
+                local st = type(step) == 'function' and step() or step      -- a function: the amount follows a setting (the rotation step of Tool Settings)
+                f:SetText(string.format(fmt, v + dir * st))
                 apply(f:GetText())
             end
             table.insert(P.items, W.Button(group, '-', fx, y, bw, Skin.S(22), function() Bump(-1) end))
@@ -313,6 +315,25 @@ Panels.Register{
         local function Action(text, onClick)
             local b = W.Button(group, text, Skin.S(10), y, math.max(Skin.S(60), P.w - Skin.S(20)), Skin.S(26), onClick)
             table.insert(P.items, b)
+            y = y + Skin.S(34)
+        end
+        --- The turn of a selection of this kind ('units' | 'props' | 'decals'): the rotation step of the Tool Settings panel when stepped rotation is on, else 15 degrees.
+        local function TurnStep(kind)
+            local s = ToolOpts.RotationStep(kind)
+            if s and s > 0 then return s end
+            return 15
+        end
+        --- A "Rotate -n" and a "Rotate +n" button side by side; n follows the step above and the labels follow it when Tool Settings change.
+        local function TurnRow(kind, rotate)
+            local half = math.floor((math.max(Skin.S(120), P.w - Skin.S(20)) - Skin.S(4)) / 2)
+            local function Make(sign, x)
+                local function Text() return 'Rotate ' .. (sign > 0 and '+' or '-') .. string.format('%g', TurnStep(kind)) end
+                local b = W.Button(group, Text(), x, y, half, Skin.S(26), function() rotate(sign * TurnStep(kind)) end)
+                table.insert(P.items, b)
+                table.insert(P.updaters, function() b:SetText(Text()) end)
+            end
+            Make(-1, Skin.S(10))
+            Make(1, Skin.S(14) + half)
             y = y + Skin.S(34)
         end
 
@@ -342,6 +363,11 @@ Panels.Register{
             table.insert(P.items, b)
             table.insert(P.updaters, function() b:SetOn(get()) end)
             y = y + Skin.S(28)
+        end
+        --- 'Limit to map bounds' (areas stay inside the map while drawn, moved, resized and typed) and, narrowing it, 'Limit to playable area' (tools.lua AreaBounds).
+        local function LimitToggles()
+            Toggle('Limit to map bounds', function() return Tools.LimitAreas end, function(v) Tools.SetLimitAreas(v) end)
+            Toggle('Limit to playable area', function() return Tools.LimitPlayable end, function(v) Tools.SetLimitPlayable(v) end)
         end
         local function Setting(S, label, key, min, max, step, fmt)
             return { label = label, min = min, max = max, step = step, fmt = fmt, get = function() return S[key] end, set = function(v) S[key] = v end }
@@ -498,6 +524,7 @@ Panels.Register{
             end
             table.insert(P.updaters, UpdateSize)
             Gap(6)
+            LimitToggles()
             Action('Delete', function() Tools.DeleteSelection() end)
         end
 
@@ -514,8 +541,8 @@ Panels.Register{
                 fz = Stepper('Z', function() local i = Props.Info() return i and string.format('%.2f', i.z) or '' end,
                     function(t) local x, z = tonumber(fx:GetText()), tonumber(t) if x and z then Props.MoveTo(x, z) end end, 1, '%.2f')
                 ReadOnly('Height', function() local i = Props.Info() return i and string.format('%.2f', i.y) or '' end)
-                Stepper('Rotation', function() local i = Props.Info() return i and string.format('%.0f', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
-                    function(t) local d = tonumber(t) if d then Props.SetHeading(d) end end, 15, '%.0f')
+                Stepper('Rotation', function() local i = Props.Info() return i and string.format('%g', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
+                    function(t) local d = tonumber(t) if d then Props.SetHeading(d) end end, function() return TurnStep('props') end, '%g')
                 Stepper('Scale %', function() local i = Props.Info() return i and string.format('%.0f', i.sx * 100) or '' end,
                     function(t)
                         local v = tonumber(t)
@@ -525,7 +552,7 @@ Panels.Register{
             else
                 Gap(2)
                 Info('Rotate / scale the whole selection:')
-                Action('Rotate +15', function() Props.RotateSelected(15) end)
+                TurnRow('props', function(deg) Props.RotateSelected(deg) end)
                 Action('Scale +10 %', function() Props.ScaleSelected(1.1) end)
                 Action('Scale -10 %', function() Props.ScaleSelected(1 / 1.1) end)
             end
@@ -546,8 +573,8 @@ Panels.Register{
                     function(t) local x, z = tonumber(t), tonumber(fz:GetText()) if x and z then Decals.MoveTo(x, z) end end, 1, '%.2f')
                 fz = Stepper('Z', function() local i = Decals.Info() return i and string.format('%.2f', i.z) or '' end,
                     function(t) local x, z = tonumber(fx:GetText()), tonumber(t) if x and z then Decals.MoveTo(x, z) end end, 1, '%.2f')
-                Stepper('Rotation', function() local i = Decals.Info() return i and string.format('%.0f', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
-                    function(t) local d = tonumber(t) if d then Decals.SetHeading(d) end end, 15, '%.0f')
+                Stepper('Rotation', function() local i = Decals.Info() return i and string.format('%g', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
+                    function(t) local d = tonumber(t) if d then Decals.SetHeading(d) end end, function() return TurnStep('decals') end, '%g')
                 Stepper('Size', function() local i = Decals.Info() return i and string.format('%.1f', i.size) or '' end,
                     function(t) local v = tonumber(t) if v and v > 0 then Decals.SetSize(v) end end, 1, '%.1f')
             end
@@ -569,10 +596,10 @@ Panels.Register{
                     function(t) local x, z = tonumber(t), tonumber(fz:GetText()) if x and z then Units.MoveTo(x, z) end end, 1, '%.2f')
                 fz = Stepper('Z', function() local i = Units.Info() return i and string.format('%.2f', i.z) or '' end,
                     function(t) local x, z = tonumber(fx:GetText()), tonumber(t) if x and z then Units.MoveTo(x, z) end end, 1, '%.2f')
-                Stepper('Rotation', function() local i = Units.Info() return i and string.format('%.0f', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
-                    function(t) local d = tonumber(t) if d then Units.SetHeading(d) end end, 15, '%.0f')
+                Stepper('Rotation', function() local i = Units.Info() return i and string.format('%g', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
+                    function(t) local d = tonumber(t) if d then Units.SetHeading(d) end end, function() return TurnStep('units') end, '%g')
             else
-                Action('Rotate +15', function() Units.RotateSelected(15) end)
+                TurnRow('units', function(deg) Units.RotateSelected(deg) end)
             end
             Action('Give to the army of the Units panel', function() Units.SetArmy(Units.ArmyName) end)
             Gap(6)
@@ -599,6 +626,8 @@ Panels.Register{
             elseif kind == 'area' then
                 Title('Area tool')
                 Help('Drag in the world to draw a rectangle. With the Select area tool you can move it, or drag its handles to resize.')
+                Gap(6)
+                LimitToggles()
             elseif tool and tool.id == 'army' then
                 Title('Start position tool')
                 ReadOnly('Next', function() return import('/lua/editor/armies.lua').NextName() end)
@@ -648,6 +677,8 @@ Panels.Register{
                     Help('Select marker: click a marker to select it, drag on empty ground for a box, Shift adds or removes. Drag a selected marker to move it. Areas are not picked here: use the Select area tool.')
                 elseif tool and tool.id == 'area_select' then
                     Help('Select area: click inside an area to select it (the smallest one under the pointer), drag on empty ground for a box, Shift adds or removes. Drag a selected area to move it, or its handles to resize. Markers are not picked here: use the Select marker tool.')
+                    Gap(6)
+                    LimitToggles()
                 else
                     Help('Click a marker or area to select it. Drag on empty ground to box select; Shift adds or removes.')
                 end
@@ -783,19 +814,31 @@ Panels.Register{
         live.validation = P
         P.summary = W.Label(group, '', Skin.S(10), Skin.S(8), { color = Skin.color.textDim })
         P.run = W.Button(group, 'Check now', 0, 0, Skin.S(90), Skin.S(22), function() Validate.Run() ModCheck.Run() end)
-        P.snap = W.Button(group, 'Snap to grid', 0, 0, Skin.S(100), Skin.S(22), function() Validate.FixAlignment() end)
-        P.pull = W.Button(group, 'Pull inside', 0, 0, Skin.S(84), Skin.S(22), function() Validate.PullMarkersInside() end)
+        -- the fixes move markers or write mod files: not in a read-only workspace (Review), where the buttons are dimmed and say why
+        local function Fixing(fn)
+            return function()
+                if Tools.ReadOnly then UI.Say('read-only workspace: switch to Objects or Terrain to fix this') return end
+                fn()
+            end
+        end
+        P.snap = W.Button(group, 'Snap to grid', 0, 0, Skin.S(100), Skin.S(22), Fixing(function() Validate.FixAlignment() end),
+            { tip = function() return Tools.ReadOnly and 'Read-only workspace: switch to Objects or Terrain to move markers onto the build grid.' or nil end })
+        P.pull = W.Button(group, 'Pull inside', 0, 0, Skin.S(84), Skin.S(22), Fixing(function() Validate.PullMarkersInside() end),
+            { tip = function() return Tools.ReadOnly and 'Read-only workspace: switch to Objects or Terrain to move markers back into the map.' or nil end })
+        if Tools.ReadOnly then
+            for _, b in { P.snap, P.pull } do b.label:SetColor(Skin.color.textDim) end
+        end
         -- problems of a mod project's new units can carry a fix (unitcheck.lua: write the files, add the builders ...): the button runs the selected one, `fixAll` every one
         P.modSel = false
-        P.fix = W.Button(group, 'Fix', 0, 0, Skin.S(150), Skin.S(22), function()
+        P.fix = W.Button(group, 'Fix', 0, 0, Skin.S(150), Skin.S(22), Fixing(function()
             local issue = P.modSel and ModCheck.Issues[P.modSel]
             if issue and issue.fix then
                 pcall(issue.fix)
                 ModCheck.Touch()
                 ModCheck.Run()
             end
-        end)
-        P.fixAll = W.Button(group, 'Fix all', 0, 0, Skin.S(60), Skin.S(22), function()
+        end))
+        P.fixAll = W.Button(group, 'Fix all', 0, 0, Skin.S(60), Skin.S(22), Fixing(function()
             local fixes = {}
             for _, issue in ModCheck.Issues do
                 if issue.fix then table.insert(fixes, issue.fix) end
@@ -803,7 +846,7 @@ Panels.Register{
             for _, fix in fixes do pcall(fix) end
             ModCheck.Touch()
             ModCheck.Run()
-        end)
+        end))
         P.list = W.VirtualList(group, {
             -- the map checks first, then the problems of the open mod project (modcheck.lua)
             getCount = function() return table.getn(Validate.Issues) + table.getn(ModCheck.Issues) end,

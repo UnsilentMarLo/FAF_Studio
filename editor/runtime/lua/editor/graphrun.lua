@@ -755,6 +755,34 @@ end
 
 function DropBuildCache() DropBuild(BuildRun) end
 
+--- Writes the map-wide textures of the output nodes Output: map normal map and Output: map lighting (maptextures.lua; each is an undo entry that Build merges with the rest). Raises with a
+--- message when one cannot be made. Adds result.maptextures (how many) and result.mapNote (a sentence for the status line). A module function, not a local: Build is near the upvalue limit.
+function BuildMapTextures(run, graph, result)
+    local MT = import('/lua/editor/maptextures.lua')
+    local notes = {}
+    for _, node in OutputNodes(graph, 'mapnormal') do
+        local col = run:Value(node.id, 'view')
+        if col then
+            local res, msg = MT.FromGraph('normal', { nx = col.r, nz = col.g }, { size = V(run, node, 'size'), assign = V(run, node, 'assign') })
+            if not res then error('map normal map: ' .. tostring(msg)) end
+            result.maptextures = (result.maptextures or 0) + 1
+            if msg then table.insert(notes, msg) end
+        end
+    end
+    for _, node in OutputNodes(graph, 'maplight') do
+        local shadow = run:Value(node.id, 'view')
+        if shadow then
+            local res, msg = MT.FromGraph('light', { shadow = shadow, ao = run:Value(node.id, 'occlusion') }, { size = V(run, node, 'size'), assign = V(run, node, 'assign') })
+            if not res then error('map lighting: ' .. tostring(msg)) end
+            result.maptextures = (result.maptextures or 0) + 1
+            if msg then table.insert(notes, msg) end
+        end
+    end
+    if result.maptextures then
+        result.mapNote = string.format(', %d map texture%s', result.maptextures, result.maptextures == 1 and '' or 's') .. (notes[1] and (' (' .. table.concat(notes, '; ') .. ')') or '')
+    end
+end
+
 --- Runs the graph at full resolution and writes the outputs: heights, texture layers, terrain types and scattered props as ONE undo step.
 --- Returns { changed = samples, layers = n, types = n, props = n, ms, slow = { { id, ms } ... } } or nil and a message.
 function Build()
@@ -790,6 +818,14 @@ function Build()
             local msg = e and e.err or 'not evaluated'
             DropBuild(run)
             return nil, 'output node ' .. id .. ': ' .. tostring(msg)
+        end
+    end
+    -- an output into a layer the map's shader does not paint (strata.lua WhyNotPaintable) refuses the whole build before anything is written
+    for _, node in OutputNodes(graph, 'layer') do
+        local why = import('/lua/editor/strata.lua').WhyNotPaintable(math.floor(V(run, node, 'layer') + 0.5))
+        if why then
+            DropBuild(run)
+            return nil, 'output node ' .. node.id .. ': ' .. why
         end
     end
     local result = { changed = 0, layers = 0, types = 0, props = 0 }
@@ -837,6 +873,8 @@ function Build()
                     if ok then result.colormaps = (result.colormaps or 0) + 1 else error('colour image: ' .. tostring(werr)) end
                 end
             end
+            -- map-wide shader textures: the normal map and the lighting texture (maptextures.lua)
+            BuildMapTextures(run, graph, result)
             -- props
             local Scatter = import('/lua/editor/scatter.lua')
             for _, node in OutputNodes(graph, 'scatter') do

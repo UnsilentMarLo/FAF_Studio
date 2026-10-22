@@ -60,7 +60,22 @@ local function Need(f, err)
 end
 
 function Height(step, x0, z0, x1, z1) return Need(ed_field_height(step or 1, x0, z0, x1, z1)) end
-function Stratum(layer, raw) return Need(ed_field_stratum(layer - 1, raw)) end
+-- The engine decodes a paint mask byte the way the half-range shaders read it (saturate(2m - 1)); the full-range shaders read the byte as it is (shaders.lua RangeOf), so for those the
+-- fields of a mask are made from, and written as, the raw bytes (m / 255 and e * 255).
+local function FullRange()
+    local ok, range = pcall(function() return import('/lua/editor/strata.lua').Range() end)
+    return ok and range == 'full'
+end
+
+function Stratum(layer, raw)
+    if not raw and FullRange() then
+        local f = Need(ed_field_stratum(layer - 1, true))
+        local g, err = ed_field_op('affine', { a = f, mul = 1 / 255, add = 0 })
+        ed_field_free(f)
+        return Need(g, err)
+    end
+    return Need(ed_field_stratum(layer - 1, raw))
+end
 function New(w, h, value, cell, ox, oz) return Need(ed_field_new(w, h, value or 0, cell or 1, ox or 0, oz or 0)) end
 function Image(path, opts) return Need(ed_field_image(path, opts or {})) end
 function Table(w, h, values, cell, ox, oz) return Need(ed_field_from_table(w, h, values, cell or 1, ox or 0, oz or 0)) end
@@ -186,7 +201,15 @@ end
 function CommitMask(f, layer, opts)
     opts = opts or {}
     local stratum = layer - 1
-    local before, changed = ed_field_commit_mask(f, stratum, opts)
+    local src, o = f, opts
+    if not opts.raw and FullRange() then
+        src = Op('affine', { a = f, mul = 255, add = 0 })
+        o = {}
+        for k, v in opts do o[k] = v end
+        o.raw = true
+    end
+    local before, changed = ed_field_commit_mask(src, stratum, o)
+    if src ~= f then ed_field_free(src) end
     if not before then return nil, changed end
     if changed == 0 then
         ed_field_free(before)

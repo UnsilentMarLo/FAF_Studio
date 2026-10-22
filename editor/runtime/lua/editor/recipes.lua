@@ -2,14 +2,19 @@
 -- curvature / water / noise rules each one is made, and in which order they lie on top of each other. Apply fills the paint masks of the texture layers (and, if asked, the terrain-type
 -- grid) in one undo step. The rules are the mask generator's (maskgen.lua), so every role is also something you can open there.
 --
--- Roles are listed from the bottom up. The first role is the base layer (no mask: it is what is left). The other roles go to texture layers 1..8 (Layers[i] = the layer of role i, 0 = skip
+-- Roles are listed from the bottom up. The first role is the base layer (no mask: it is what is left). The other roles go to texture layers 1..Cap() (Layers[i] = the layer of role i, 0 = skip
 -- the role); the layers above take away: the shader lets a higher layer cover a lower one, and the terrain types follow what is seen most in each cell, so a cell gets the type of its
 -- visible ground (the default type of the layer's texture, terraintype.lua).
+--
+-- The shader of the map decides two things (strata.lua Profile / Range): how many layers have a paint mask (TTerrainXP 8; the numbered shaders 7, their 8th mask is the roughness multiplier or unused;
+-- TTerrainGlow 4; TTerrain 4 too, but layers 5-8 switch the map to TTerrainXP as before) and how a mask byte is read (half or full range). A role on a layer the shader cannot paint is moved to the highest
+-- free layer (or shares the top layer: the masks are merged); the masks are written in the shader's encoding by the field commit (fields.lua), so a recipe looks the same on every shader.
 --
 --   Presets                       { id, name, uses = { knob names }, roles = function(knobs, stats) -> list of { id, label, keywords, rules } }
 --   Knobs, KnobInfo               the settings shared by the presets (cliff / rock angle, snow line, beach width, breakup, patch size, seed)
 --   State                         { preset, layers = { [roleIndex] = layer }, types = bool }
 --   Roles() -> list               the roles of the current preset with the current knobs
+--   Cap()                         the highest layer the shader of the map paints with a mask       FitLayers(layers) -> layers the roles really get       Notes(roles) -> { shaderLine, warnings }
 --   AutoLayers(roles)             layer numbers in order (1, 2, 3 ...)      MatchTextures(roles)     layer numbers by the names of the textures the layers hold now
 --   PreviewRole(i) -> field       evaluates one role at preview resolution and shows it (maskgen preview)
 --   Apply() -> summary | nil, message       writes everything: ONE undo step; the summary lists the share of each role
@@ -19,6 +24,7 @@
 local Fields = import('/lua/editor/fields.lua')
 local History = import('/lua/editor/history.lua')
 local MaskGen = import('/lua/editor/maskgen.lua')
+local Strata = import('/lua/editor/strata.lua')
 
 local function Rule(type, values, op, invert)
     local r = MaskGen.NewRule(type)
@@ -131,10 +137,63 @@ function Roles()
     return p.roles(Knobs, Stats())
 end
 
+--- The highest painted layer the shader of the map draws with a mask: 8 for TTerrainXP and for TTerrain (writing layers 5-8 switches it to TTerrainXP, as it always did), 7 for the numbered
+--- shaders, 4 for TTerrainGlow. Without a terrain: 8.
+function Cap()
+    return Strata.PaintCap()
+end
+
+--- The layers the roles really get: a role on a layer the shader cannot paint takes the highest free layer it can, or shares the top layer when none is free (Apply merges the masks).
+function FitLayers(layers)
+    local cap = Cap()
+    local fit, used = {}, {}
+    for i = 1, table.getn(layers) do
+        fit[i] = layers[i] or 0
+        if fit[i] >= 1 and fit[i] <= cap then used[fit[i]] = true end
+    end
+    for i = table.getn(layers), 1, -1 do
+        if fit[i] > cap then
+            local free
+            for k = cap, 1, -1 do
+                if not used[k] then free = k break end
+            end
+            fit[i] = free or cap
+            used[fit[i]] = true
+        end
+    end
+    return fit
+end
+
+--- What the panel says about the shader: a line (which shader, mask range, painted layers) and the warnings (roles that had to move, a shader nobody described).
+function Notes(roles)
+    local name = rawget(_G, 'ed_stratum_shader') and ed_stratum_shader() or '?'
+    local p = rawget(_G, 'ed_stratum_shader') and Strata.Profile() or {}
+    local cap = Cap()
+    local line = 'Shader ' .. tostring(name) .. ': masks in the ' .. (p.range or 'half') .. ' range, ' .. cap .. ' painted layers'
+    local warnings = {}
+    if p.supported == false and p.reason then
+        table.insert(warnings, 'No notes about this shader: masks are written in the half range')
+    end
+    local want = State.layers or {}
+    local fit = FitLayers(want)
+    for i, role in roles do
+        local w = want[i] or 0
+        if w > cap then
+            local shared = false
+            for j = 1, table.getn(roles) do
+                if j ~= i and fit[j] == fit[i] then shared = true end
+            end
+            table.insert(warnings, role.label .. ': layer ' .. w .. ' is not painted here, ' .. (shared and ('merged into layer ' .. fit[i]) or ('moved to layer ' .. fit[i])))
+        end
+    end
+    return line, warnings
+end
+
 --- Role i goes to layer i (the first role is the base layer, 0).
 function AutoLayers(roles)
     local layers = {}
-    for i = 1, table.getn(roles) do layers[i] = math.min(8, i - 1) end
+    local cap = Cap()
+    for i = 1, table.getn(roles) do layers[i] = math.min(cap, i - 1) end
     return layers
 end
 
@@ -146,12 +205,13 @@ function MatchTextures(roles)
     local layers, used = {}, { [0] = true }
     layers[1] = 0
     local names = {}
-    for l = 1, 8 do
+    local cap = Cap()
+    for l = 1, cap do
         local albedo = ed_stratum_layer(l)
         names[l] = albedo and Lower(albedo) or ''
     end
     for i = 2, table.getn(roles) do
-        for l = 1, 8 do
+        for l = 1, cap do
             if not used[l] and names[l] ~= '' then
                 for _, key in roles[i].keywords do
                     if string.find(names[l], key, 1, true) then
@@ -166,7 +226,7 @@ function MatchTextures(roles)
     end
     for i = 2, table.getn(roles) do
         if not layers[i] then
-            for l = 1, 8 do
+            for l = 1, cap do
                 if not used[l] then
                     layers[i] = l
                     used[l] = true
@@ -199,6 +259,8 @@ function Apply()
         layerOf = AutoLayers(roles)
         State.layers = layerOf
     end
+    layerOf = FitLayers(layerOf)          -- roles on layers the shader cannot paint move to free ones (State.layers keeps the wish)
+    local cap = Cap()
     local TT = import('/lua/editor/terraintype.lua')
     return Fields.Run(function(S)
         local c = MaskGen.NewContext(S, { step = 1 })
@@ -220,7 +282,7 @@ function Apply()
         -- masks first (history entries are collected, not pushed)
         local parts = {}
         local cells = 0
-        for layer = 1, 8 do
+        for layer = 1, cap do
             if p[layer] then
                 local entry, n = MaskGen.WriteLayer(c, p[layer], layer, { mode = 1, strength = 1, takeAway = false }, true)
                 if entry then
@@ -233,7 +295,7 @@ function Apply()
         local rest = S:Op('const', { like = c.H, value = 1 })
         local share = {}
         local covered = {}
-        for layer = 8, 1, -1 do
+        for layer = cap, 1, -1 do
             local m = p[layer]
             if not m then
                 local albedo = ed_stratum_layer(layer)
@@ -248,7 +310,7 @@ function Apply()
         if State.types and rawget(_G, 'ed_tt_info') and ed_tt_info() then
             local best = rest
             local codes = S:Op('const', { like = c.H, value = TT.TypeOfLayer(0) })
-            for layer = 1, 8 do
+            for layer = 1, cap do
                 if share[layer] then
                     local win = S:Op('threshold', { a = S:Op('sub', { a = share[layer], b = best }), value = 0 })
                     codes = S:Op('blend', { a = codes, b = S:Op('const', { like = c.H, value = TT.TypeOfLayer(layer) }), mask = win })

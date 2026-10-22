@@ -151,7 +151,7 @@ function Dab(cx, cz, brush, slot, image)
     if not Active then return 0 end
     local placed = 0
     local function Heading()
-        local h = Settings.randomHeading and (math.random() * 6.2831853) or 0
+        local h = Settings.randomHeading and import('/lua/editor/toolopts.lua').RandomHeading('props') or 0
         if image then h = Symmetry.Heading(h, image) end
         return h
     end
@@ -229,6 +229,19 @@ function TakeEntry()
     return e
 end
 
+--- Tool settings (toolopts.lua): whether props snap to the build grid (default on: half a unit, as placing always did), and the step in degrees of a stepped rotation (0 = free).
+function SnapToGrid() return import('/lua/editor/toolopts.lua').SnapToGrid('props') end
+function RotationStep() return import('/lua/editor/toolopts.lua').RotationStep('props') end
+
+--- A move of the selection by (dx, dz) put on the grid like a placed prop: the first selected prop goes to the nearest half unit, the others move by the same amount (a group keeps its layout).
+--- Unchanged when snapping is off. For drags only; typed coordinates (MoveTo) stay exact.
+function SnapDelta(dx, dz)
+    if not SnapToGrid() then return dx, dz end
+    local p = Selection[1]
+    if not p then return dx, dz end
+    return math.floor((p.x + dx) * 2 + 0.5) / 2 - p.x, math.floor((p.z + dz) * 2 + 0.5) / 2 - p.z
+end
+
 --- Drops one prop of `bp` at (x, z) and at every symmetry image (heading and size from the brush settings), as one undo step: what the asset browser does when an entry is dragged into the viewport.
 --- Returns the number placed.
 function PlaceAt(bp, x, z)
@@ -236,7 +249,7 @@ function PlaceAt(bp, x, z)
     BeginStroke()
     local n = 0
     for _, p in Symmetry.Points(x, z) do
-        local h = Settings.randomHeading and (math.random() * 6.2831853) or 0
+        local h = Settings.randomHeading and import('/lua/editor/toolopts.lua').RandomHeading('props') or 0
         if Place(p.x, p.z, Symmetry.Heading(h, p)) then n = n + 1 end
     end
     EndStroke()
@@ -576,7 +589,7 @@ function Press(wx, wz, event)
     local function Done(self)
         local off = DragOffset
         DragOffset = false
-        if off and (math.abs(off[1]) + math.abs(off[2])) > 0.2 then MoveSelected(off[1], off[2]) end
+        if off and (math.abs(off[1]) + math.abs(off[2])) > 0.2 then MoveSelected(SnapDelta(off[1], off[2])) end
         self:Destroy()
     end
     dragger.OnRelease = function(self, x, y) Done(self) end

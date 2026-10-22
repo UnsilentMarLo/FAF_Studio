@@ -27,14 +27,7 @@ Graph = {
         { ['id'] = 4, ['params'] = { ['hi'] = 62, ['lo'] = 28 }, ['type'] = 'range', ['x'] = 448, ['y'] = 0 },
         {
             ['id'] = 5,
-            ['params'] = {
-                ['deposition'] = 0.08,
-                ['erosion'] = 0.08,
-                ['iterations'] = 150,
-                ['rain'] = 0.004,
-                ['talus'] = 0.6,
-                ['thermal'] = 0.3,
-            },
+            ['params'] = { ['deposition'] = 0.08, ['talus'] = 0.6, ['thermal'] = 0.3 },
             ['type'] = 'erode_hydraulic',
             ['x'] = 672,
             ['y'] = 0,

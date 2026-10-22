@@ -80,6 +80,35 @@ function Run()
     T.Undo()
     check('noise undo', ed_terrain_get(160, 160) == 25, tostring(ed_terrain_get(160, 160)))
 
+    -- the noise is smooth (value noise at world coordinates): the heights of neighbouring samples differ little, a bigger scale gives a smoother surface, and the dabs of one stroke join
+    do
+        local saved = { T.Brush.falloff, T.Brush.noiseScale, T.Brush.noiseOctaves, T.Brush.noiseRoughness }
+        local function Roughness(scale)
+            T.Brush.noiseScale, T.Brush.noiseOctaves, T.Brush.noiseRoughness = scale, 1, 0.5
+            T.Brush.falloff = 0
+            T.Brush.strength = 4
+            T.Brush.radius = 24
+            T.BeginStroke()
+            T.Dab(200, 200)
+            T.Dab(215, 200)         -- a second dab of the same stroke, overlapping the first
+            T.EndStroke()
+            local sum, step = 0, 0
+            for x = 194, 220 do          -- inside both dabs (their rims are one sample wide)
+                local d = math.abs(ed_terrain_get(x + 1, 200) - ed_terrain_get(x, 200))
+                sum = sum + d
+                if d > step then step = d end
+            end
+            T.Undo()
+            return sum, step
+        end
+        local fine, fineStep = Roughness(3)
+        local coarse, coarseStep = Roughness(24)
+        check('noise: a bigger scale is smoother', coarse < fine * 0.6, 'scale 3: ' .. fine .. ', scale 24: ' .. coarse)
+        check('noise: no jumps between neighbours at scale 24', coarseStep < 2.5, tostring(coarseStep))
+        check('noise undo (scales)', ed_terrain_get(200, 200) == 25, tostring(ed_terrain_get(200, 200)))
+        T.Brush.falloff, T.Brush.noiseScale, T.Brush.noiseOctaves, T.Brush.noiseRoughness = saved[1], saved[2], saved[3], saved[4]
+    end
+
     -- clamps at the edge
     T.Brush.mode = 'raise'
     T.Brush.radius = 10

@@ -10,7 +10,7 @@
 --   Thumb(kind, id) -> VFS path of the thumbnail picture of a 'look' or 'theme' (editor/tools/gen_env_thumbs.py), or nil
 -- Themes
 --   Themes() -> list { id, name, group, desc, user, layers = { [0] = { albedo, size, normal, nsize }, ... [9] } }
---   ApplyTheme(entry, opts) -> true | false, reason         opts: clearUnused (remove the textures of layers the theme leaves empty, and what they painted), preview (returns the revert function)
+--   ApplyTheme(entry, opts) -> true | false, reason         (a layer of a theme without `size` gets the Optimal tile of its texture, texscale.lua)   opts: clearUnused (remove the textures of layers the theme leaves empty, and what they painted), preview (returns the revert function)
 --   SaveTheme(name) -> entry      DeleteTheme(id)      ImportTheme(scmapPath, name) -> entry | nil, reason      CurrentLayers() -> the present layers in the theme shape
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
@@ -348,7 +348,9 @@ function ApplyTheme(entry, opts)
     for i = 0, 9 do
         local l = entry.layers[i]
         if l and l.albedo and l.albedo ~= '' then
-            local ok = Strata.SetTexture(i, l.albedo, l.normal or '', l.size or 4, l.nsize or l.size or 4)
+            -- a look without a tile size gets the Optimal one for its texture (texscale.lua), the normal map the same as the albedo
+            local size = l.size or import('/lua/editor/texscale.lua').Optimal(l.albedo)
+            local ok = Strata.SetTexture(i, l.albedo, l.normal or '', size, l.nsize or size)
             if not ok then table.insert(missing, l.albedo) end
             touched[i] = true
         end

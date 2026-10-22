@@ -98,8 +98,21 @@ local function Available()
     return rawget(_G, 'ed_overlay_set') ~= nil
 end
 
-local function GroundHeight(x, z)
-    local h = ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or 0
+local function GroundHeight(x, z, coarse)
+    -- the ground between the height samples (one per world unit) is a slope: reading the nearest sample made every outline a staircase that sank into the ground and floated
+    -- above it by up to half a step, which showed when the camera was close. `coarse` (the long outlines of big areas, seen from far) keeps the one read.
+    if coarse then
+        return MeshView.GroundAt(x, z, ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or 0)
+    end
+    local ix, iz = math.floor(x), math.floor(z)
+    local h = ed_terrain_get(ix, iz) or 0
+    local fx, fz = x - ix, z - iz
+    if fx > 0.001 or fz > 0.001 then
+        local h10 = ed_terrain_get(ix + 1, iz) or h
+        local h01 = ed_terrain_get(ix, iz + 1) or h
+        local h11 = ed_terrain_get(ix + 1, iz + 1) or h
+        h = (h * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz
+    end
     return MeshView.GroundAt(x, z, h)          -- lines and rings hug the visible ground of a mesh map
 end
 
@@ -111,9 +124,9 @@ end
 
 local LIFT = 0.15     -- lines float a little above the ground
 
-local function Push(pts, x, z)
+local function Push(pts, x, z, coarse)
     table.insert(pts, x)
-    table.insert(pts, GroundHeight(x, z) + LIFT)
+    table.insert(pts, GroundHeight(x, z, coarse) + LIFT)
     table.insert(pts, z)
 end
 
@@ -133,15 +146,17 @@ local function Circle(cx, cz, r, segs, base, span)
     return pts
 end
 
---- Rectangle outline hugging the terrain: every side is sampled about every 2 world units.
+--- Rectangle outline hugging the terrain: every side is sampled about every 2 world units, a small one (a footprint or skirt of a structure, which is looked at from
+--- close by) every half unit with the ground read between the height samples, so it lies on the slope instead of cutting across it.
 local function Box(x0, z0, x1, z1)
     local pts = {}
+    local small = math.max(x1 - x0, z1 - z0) <= 12
     local function Side(ax, az, bx, bz)
         local len = math.sqrt((bx - ax) * (bx - ax) + (bz - az) * (bz - az))
-        local n = math.max(2, math.min(120, math.ceil(len / 2)))
+        local n = math.max(2, math.min(120, math.ceil(len / (small and 0.5 or 2))))
         for i = 0, n - 1 do
             local f = i / n
-            Push(pts, ax + (bx - ax) * f, az + (bz - az) * f)
+            Push(pts, ax + (bx - ax) * f, az + (bz - az) * f, not small)
         end
     end
     Side(x0, z0, x1, z0)
@@ -495,7 +510,8 @@ local function GridView(view, px)
     while (vis[3] - vis[1]) / step > 90 or (vis[4] - vis[2]) / step > 90 do step = step * 4 end
 
     local inside = gridStep == step and vis[1] >= gridX0 and vis[3] <= gridX1 and vis[2] >= gridZ0 and vis[4] <= gridZ1
-    if inside and math.mod(frameCount, 90) ~= 0 then return end
+    -- the lines are laid onto the terrain again (up to ~50000 height reads) when the ground changed (TerrainEpoch), not on a timer
+    if inside and gridKey == TerrainEpoch.Epoch then return end
 
     local mapX, mapZ = MapSize()
     local pad = 10 * step
@@ -504,6 +520,7 @@ local function GridView(view, px)
     local z0 = math.max(0, math.floor((vis[2] - pad) / step) * step)
     local z1 = math.min(mapZ, math.ceil((vis[4] + pad) / step) * step)
     gridStep, gridX0, gridX1, gridZ0, gridZ1 = step, x0, x1, z0, z1
+    gridKey = TerrainEpoch.Epoch
 
     local seen = {}
     local sample = math.max(1, math.floor(step / 2))      -- sample finer than the line spacing so the lines follow slopes
@@ -705,57 +722,9 @@ end
 
 -- ---- terrain type grid -------------------------------------------------------------------------------------------------------------
 
-local typeKey = ''
-local typeIds = {}
-
---- One coloured cell layer per terrain type present in the part of the grid the camera sees (the cells draw as small squares: ed_overlay_nodes). The window covers the whole visible map and
---- coarsens (overlaywin.lua: 2, 4, 8 ... units per node) when the view is zoomed out, so the layer stays glued to the terrain at every zoom.
+--- The terrain type cells (ttoverlay.lua keeps the layers and redraws only the cells a dab changed).
 local function DrawTypes(view)
-    local TT = import('/lua/editor/terraintype.lua')
-    if not TT.Visible then
-        if typeKey ~= '' then
-            for id, _ in typeIds do ed_overlay_remove(id) end
-            typeIds = {}
-            typeKey = ''
-        end
-        return
-    end
-    if not ed_tt_info() then return end
-    local x0, z0, nw, nh, step = import('/lua/editor/overlaywin.lua').Window(view, 290)
-    if not x0 then return end
-    local key = string.format('%d|%d|%d|%d|%d|%d', x0, z0, nw, nh, step, TT.Revision)
-    if key == typeKey then return end
-    typeKey = key
-    local codes = TT.NodeCodes(x0, z0, nw, nh, step)
-    if not codes then return end
-    local n = nw * nh
-    local byType = {}
-    for i = 1, n do
-        local v = codes[i]
-        local t = byType[v]
-        if not t then
-            t = {}
-            byType[v] = t
-        end
-        t[i] = 255
-    end
-    local seen = {}
-    for code, cells in byType do
-      if code > TT.DEFAULT then        -- cells without a type (0) and the default type stay clear
-        local id = 'tt:' .. code
-        local grid = {}
-        for i = 1, n do grid[i] = cells[i] or 0 end
-        ed_overlay_nodes(id, x0, z0, nw, nh, grid, TT.ColorOf(code), 120, step)
-        typeIds[id] = true
-        seen[id] = true
-      end
-    end
-    for id, _ in typeIds do
-        if not seen[id] then
-            ed_overlay_remove(id)
-            typeIds[id] = nil
-        end
-    end
+    import('/lua/editor/ttoverlay.lua').Draw(view)
 end
 
 -- ---- selected props ----------------------------------------------------------------------------------------------------------------
@@ -1181,8 +1150,7 @@ local function ForgetObjects()
     rampKey = ''
     propSelIds = {}
     propSelKey = ''
-    typeIds = {}
-    typeKey = ''
+    import('/lua/editor/ttoverlay.lua').Forget()
     lastRevision = -1
     lastChanged = -1
     handleCount = 0

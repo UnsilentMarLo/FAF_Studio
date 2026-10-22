@@ -55,10 +55,12 @@ function Load()
     pcall(function() import('/lua/editor/graph.lua').LoadSidecar(session.file) end)             -- the terrain graph (nodes, wires, parameters)
     pcall(function() import('/lua/editor/paths.lua').LoadSidecar(session.file) end)             -- spline paths of the terrain tool
     pcall(function() import('/lua/editor/interop.lua').LoadSidecar(session.file) end)           -- import / export settings for external terrain tools
+    pcall(function() import('/lua/editor/shaders.lua').LoadSidecar(session.file) end)           -- the mask range the paint was made for (after a plain shader switch)
     pcall(function() import('/lua/editor/texsets.lua').ApplyIfNew() end)       -- a new map's empty layers get the default texture set
     if Doc.resizePayload then pcall(function() import('/lua/editor/resize.lua').ApplyPending(Doc) end) end     -- a resized map: heights, masks, props, decals (Map > Resize)
     pcall(function() import('/lua/editor/meshview.lua').OnMapLoaded() end)                      -- mesh terrain of a TerrainSystem = 'mesh' map
     pcall(function() import('/lua/editor/units.lua').SpawnGroupEntities() end)                    -- units of the mission's own groups are shown while editing
+    pcall(function() import('/lua/editor/symmetry.lua').AutoDetect() end)                       -- sets the symmetry mode when the start positions, resource markers and heights are symmetric
     return Doc
 end
 
@@ -301,7 +303,11 @@ function SaveAsCore(diskDir, stem, opts)
     end
 
     EnsureDefaultEnvCube()
-    if not ed_map_save(diskDir .. '/' .. stem .. '.scmap') then
+    local restoreTextures = nil
+    pcall(function() restoreTextures = import('/lua/editor/maptextures.lua').PrepareSave(diskDir, mount) end)       -- the map-wide textures made in the editor go into this map folder
+    local savedScmap = ed_map_save(diskDir .. '/' .. stem .. '.scmap')
+    if restoreTextures then pcall(restoreTextures) end            -- (an autosave only borrows the paths)
+    if not savedScmap then
         return nil, 'ed_map_save failed'
     end
     if opts and opts.preview then

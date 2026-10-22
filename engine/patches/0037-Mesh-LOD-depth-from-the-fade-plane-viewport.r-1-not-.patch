@@ -1,0 +1,336 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 12:21:05 +0000
+Subject: [PATCH] Mesh LOD depth from the fade plane (viewport.r[1]), not the
+ camera orientation quaternion; ed_lod_info camera diagnostics
+
+MeshRenderer::Batch dotted each instance position with the first 16 bytes of the camera (the orientation quaternion) instead of its fadePlane argument (the camera's viewport.r[1], what the binary reads at 0x007DFB7F). The LOD depth therefore depended on the heading and flipped sign when the heading was reached by turning the other way round: units/props switched LOD and vanished when the camera only turned. New ed_lod_info([entityId]) returns eye position, heading, pitch, zoom, fov, the LOD plane, viewport and the selected LOD with its cutoffs.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdUnitBones.cpp b/src/sdk/moho/editor/EdUnitBones.cpp
+index 6e55ccc..a51370d 100644
+--- a/src/sdk/moho/editor/EdUnitBones.cpp
++++ b/src/sdk/moho/editor/EdUnitBones.cpp
+@@ -1,6 +1,7 @@
+ // EDITOR: the bones of a unit as the renderer draws them right now (docs/projects/MOD_UNIT_EDITOR_DESIGN.md, unit viewer).
+ //
+ //   ed_camera_info() -> fovRad, eyeDistance, focusX, focusY, focusZ, heading, pitch, targetZoom, viewportX, viewportY, viewportW, viewportH
++//   ed_lod_info([entityId]) -> table: eye position, heading, pitch, zoom, fov, lodScale, the LOD plane (viewport.r[1]), viewport, and for an entity its LOD depth, cutoffs, selected LOD
+ //   ed_unit_bones(entityId) -> { { name, parent, x, y, z, fx, fy, fz, ux, uy, uz }, ... } | nil, message
+ //
+ // One entry per bone of the entity's mesh instance (the pose is already in world space), in bone order (parent = index of the parent bone, -1 for the root; Lua counts from 1 for the list, the indices
+@@ -11,6 +12,7 @@
+ 
+ #include <cmath>
+ #include <cstdint>
++#include <cstdio>
+ 
+ #include "boost/shared_ptr.h"
+ #include "lua/LuaPrimitives.h"
+@@ -21,10 +23,16 @@
+ #include "moho/lua/CScrLuaBinder.h"
+ #include "moho/lua/CScrLuaInitForm.h"
+ #include "moho/mesh/Mesh.h"
++#include "moho/mesh/MeshLodDepth.h"
+ #include "moho/render/RCamManager.h"
+ #include "moho/render/camera/CameraImpl.h"
+ #include "moho/sim/CWldSession.h"
+ 
++namespace moho
++{
++  extern float ren_MeshDissolve; // Mesh.cpp: the fade range past a LOD cutoff
++}
++
+ namespace
+ {
+   // v rotated by the unit quaternion q (w, x, y, z lanes of Wm3's storage: m_afTuple[0] = w)
+@@ -124,6 +132,92 @@ namespace
+     return 12;
+   }
+ 
++  void SetNumberField(lua_State* const L, const char* const key, const lua_Number value)
++  {
++    lua_pushstring(L, key);
++    lua_pushnumber(L, value);
++    lua_settable(L, -3);
++  }
++
++  // ed_lod_info([entityId]) -> { camera numbers..., [entity numbers...] } | nil
++  // The numbers a mesh LOD decision is made from (camera diagnostics; the user sends them when units or props vanish):
++  //   camera:  eyeX eyeY eyeZ (the real eye position of the last frame), heading pitch zoom (the target zoom) eyeDistance fov, lodScale, lodRowA..D (viewport.r[1]: the plane the LOD depth is
++  //            measured against), viewportX/Y/W/H, ren_MeshDissolve
++  //   entity:  x y z (interpolated position of the mesh instance), depth (what MeshRenderer::Batch compares with the cutoffs), distance (straight line eye to instance), lod (selected LOD,
++  //            0 based, -1 = none, culled), lodCount, cutoff1..cutoffN, maxCutoff, dissolve, hidden, quatDepth (the retired quaternion based value, for comparison: must not be what is used now)
++  int __cdecl cfunc_EdLodInfo(lua_State* const L)
++  {
++    moho::CameraImpl* const camera = moho::CAM_GetManager()->GetCamera("WorldCamera");
++    if (camera == nullptr) {
++      lua_pushnil(L);
++      return 1;
++    }
++    const moho::GeomCamera3& cam = camera->CameraGetView();
++    Wm3::Vector2f origin;
++    Wm3::Vector2f size;
++    camera->CameraGetViewport(origin, size);
++    lua_newtable(L);
++    SetNumberField(L, "eyeX", cam.tranform.pos_.x);
++    SetNumberField(L, "eyeY", cam.tranform.pos_.y);
++    SetNumberField(L, "eyeZ", cam.tranform.pos_.z);
++    SetNumberField(L, "heading", camera->mHeading);
++    SetNumberField(L, "pitch", camera->mFarPitch);
++    SetNumberField(L, "zoom", camera->mTargetZoom);
++    SetNumberField(L, "eyeDistance", camera->mZoom);
++    SetNumberField(L, "fov", camera->mFarFov);
++    SetNumberField(L, "lodScale", cam.lodScale);
++    SetNumberField(L, "lodRowA", cam.viewport.r[1].x);
++    SetNumberField(L, "lodRowB", cam.viewport.r[1].y);
++    SetNumberField(L, "lodRowC", cam.viewport.r[1].z);
++    SetNumberField(L, "lodRowD", cam.viewport.r[1].w);
++    SetNumberField(L, "viewportX", origin.x);
++    SetNumberField(L, "viewportY", origin.y);
++    SetNumberField(L, "viewportW", size.x);
++    SetNumberField(L, "viewportH", size.y);
++    SetNumberField(L, "dissolveRange", moho::ren_MeshDissolve);
++
++    if (lua_type(L, 1) == LUA_TNUMBER) {
++      moho::CWldSession* const session = moho::WLD_GetActiveSession();
++      moho::UserEntity* const entity =
++        session != nullptr ? session->LookupEntityId(static_cast<moho::EntId>(lua_tonumber(L, 1))) : nullptr;
++      moho::MeshInstance* const instance = entity != nullptr ? entity->mMeshInstance : nullptr;
++      if (instance != nullptr) {
++        const Wm3::Vec3f& p = instance->interpolatedPosition;
++        const float depth = moho::MeshLodDepth(cam.viewport.r[1].x, cam.viewport.r[1].y, cam.viewport.r[1].z, cam.viewport.r[1].w, p.x, p.y, p.z);
++        const Wm3::Quatf& q = cam.tranform.orient_;
++        const float dx = p.x - cam.tranform.pos_.x;
++        const float dy = p.y - cam.tranform.pos_.y;
++        const float dz = p.z - cam.tranform.pos_.z;
++        SetNumberField(L, "x", p.x);
++        SetNumberField(L, "y", p.y);
++        SetNumberField(L, "z", p.z);
++        SetNumberField(L, "depth", depth);
++        SetNumberField(L, "distance", std::sqrt(dx * dx + dy * dy + dz * dz));
++        SetNumberField(L, "quatDepth", moho::MeshLodDepth(q.m_afTuple[0], q.m_afTuple[1], q.m_afTuple[2], q.m_afTuple[3], p.x, p.y, p.z));
++        SetNumberField(L, "dissolve", instance->dissolve);
++        SetNumberField(L, "hidden", instance->isHidden != 0u ? 1.0 : 0.0);
++        const boost::shared_ptr<moho::Mesh> mesh = instance->GetMesh();
++        if (mesh) {
++          const moho::MeshLOD* const chosen = mesh->ComputeLOD(depth);
++          int index = -1;
++          int count = 0;
++          char key[16];
++          for (moho::MeshLOD* const* it = mesh->lods.begin(); it != mesh->lods.end(); ++it, ++count) {
++            if (*it == chosen && chosen != nullptr) {
++              index = count;
++            }
++            std::snprintf(key, sizeof(key), "cutoff%d", count + 1);
++            SetNumberField(L, key, *it != nullptr ? (*it)->cutoff : 0.0f);
++          }
++          SetNumberField(L, "lod", index);
++          SetNumberField(L, "lodCount", count);
++          SetNumberField(L, "maxCutoff", mesh->GetMaxCutoff());
++        }
++      }
++    }
++    return 1;
++  }
++
+   [[nodiscard]] moho::CScrLuaInitFormSet& UserLuaInitSet()
+   {
+     if (moho::CScrLuaInitFormSet* const set = moho::SCR_FindLuaInitFormSet("User"); set != nullptr) {
+@@ -138,6 +232,7 @@ namespace
+     EdUnitBonesLuaBootstrap()
+     {
+       (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_camera_info", &cfunc_EdCameraInfo, nullptr, "<global>", "ed_camera_info() -> fov, eye, focus x y z, heading, pitch, targetZoom, viewport x y w h");
++      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_lod_info", &cfunc_EdLodInfo, nullptr, "<global>", "ed_lod_info([entityId]) -> table of the camera and LOD numbers (eye, heading, pitch, zoom, fov, LOD row, viewport; with an entity id its depth, cutoffs and selected LOD) | nil");
+       (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_unit_bones", &cfunc_EdUnitBones, nullptr, "<global>", "ed_unit_bones(entityId) -> list of bones | nil, message");
+     }
+   };
+diff --git a/src/sdk/moho/editor/tests/MeshLodDepthTest.cpp b/src/sdk/moho/editor/tests/MeshLodDepthTest.cpp
+new file mode 100644
+index 0000000..61c9be9
+--- /dev/null
++++ b/src/sdk/moho/editor/tests/MeshLodDepthTest.cpp
+@@ -0,0 +1,97 @@
++// Stand-alone test of the mesh LOD depth (mesh/MeshLodDepth.h; no engine needed).
++//   g++ -std=c++20 -O2 -I src/sdk src/sdk/moho/editor/tests/MeshLodDepthTest.cpp -o MeshLodDepthTest
++//   MSVC: cl /std:c++20 /EHsc /O2 /I src/sdk MeshLodDepthTest.cpp
++//
++// The camera's LOD row (GeomCamera3::viewport.r[1]) is slope * (view-space depth) + intercept as a plane (a,b,c,d). MeshRenderer::Batch must
++// dot the instance position with that plane. It used to dot it with the camera's orientation quaternion. The test builds the camera the way
++// CameraImpl::UpdateCoords does (focus + eye distance + heading + pitch), and checks that
++//   * the depth of the focus point is the eye distance times the slope for every heading, also for headings outside (-pi, pi] (the engine's
++//     NormalizeQuadrantRelative lets the heading accumulate: -4.71 for east reached by turning left, +1.57 reached by turning right);
++//   * the old quaternion formula is NOT: it changes with the heading and flips its sign by a full turn (q and -q are one rotation).
++#include <cmath>
++#include <cstdio>
++
++#include "moho/mesh/MeshLodDepth.h"
++
++static int gFailures = 0;
++static int gChecks = 0;
++#define CHECK(cond, ...)                               \
++  do {                                                 \
++    ++gChecks;                                         \
++    if (!(cond)) {                                     \
++      ++gFailures;                                     \
++      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
++      std::printf(__VA_ARGS__);                        \
++      std::printf("\n");                               \
++    }                                                  \
++  } while (0)
++
++struct Vec3 { float x, y, z; };
++struct Quat { float w, x, y, z; }; // lane order of Wm3::Quatf's storage: m_afTuple[0..3] = w, x, y, z
++
++static Quat Mul(const Quat& a, const Quat& b)
++{
++  return {a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z, a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
++          a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x, a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
++}
++
++// yaw about +Y by heading, then pitch about X: a camera orientation like COORDS_Orient(heading, pitch)
++static Quat Orient(float heading, float pitch)
++{
++  const Quat yaw{std::cos(heading * 0.5f), 0.0f, std::sin(heading * 0.5f), 0.0f};
++  const Quat tilt{std::cos(pitch * 0.5f), std::sin(pitch * 0.5f), 0.0f, 0.0f};
++  return Mul(yaw, tilt);
++}
++
++static Vec3 Rotate(const Quat& q, const Vec3& v)
++{
++  const Quat p{0.0f, v.x, v.y, v.z};
++  const Quat c{q.w, -q.x, -q.y, -q.z};
++  const Quat r = Mul(Mul(q, p), c);
++  return {r.x, r.y, r.z};
++}
++
++int main()
++{
++  const float pi = 3.14159265f;
++  const Vec3 focus{300.0f, 12.0f, 700.0f};
++  const float eyeDistance = 150.0f;
++  const float pitch = 1.0f;
++  const float slope = 1.1f; // 2 * tan(fov / 2)-ish, a LOD scale of 1
++
++  const float headings[] = {0.0f, 1.5708f, -4.7124f, 1.5708f - 2.0f * pi, -pi, pi, 3.0f, 3.0f - 2.0f * pi, 6.0f};
++  float firstOld = 0.0f;
++  float minOld = 1e30f, maxOld = -1e30f;
++  bool first = true;
++  for (const float h : headings) {
++    const Quat q = Orient(h, pitch);
++    const Vec3 forward = Rotate(q, {0.0f, 0.0f, 1.0f}); // the direction the eye looks along (up to the engine's sign convention)
++    const Vec3 eye{focus.x - forward.x * eyeDistance, focus.y - forward.y * eyeDistance, focus.z - forward.z * eyeDistance};
++    // viewport.r[1] as plane (a,b,c,d): slope * (dot(p - eye, forward)) = slope * forward . p - slope * forward . eye
++    const float a = slope * forward.x, b = slope * forward.y, c = slope * forward.z;
++    const float d = -slope * (forward.x * eye.x + forward.y * eye.y + forward.z * eye.z);
++
++    const float depth = moho::MeshLodDepth(a, b, c, d, focus.x, focus.y, focus.z);
++    CHECK(std::fabs(depth - slope * eyeDistance) < 1e-2f, "heading %.4f: depth of the focus %.4f, expected %.4f", h, depth, slope * eyeDistance);
++    // a point one forward step further is exactly slope further away, whatever the heading
++    const float further = moho::MeshLodDepth(a, b, c, d, focus.x + forward.x, focus.y + forward.y, focus.z + forward.z);
++    CHECK(std::fabs(further - depth - slope) < 1e-2f, "heading %.4f: depth step %.4f", h, further - depth);
++
++    // the old formula: the orientation quaternion's lanes as the plane
++    const float old = moho::MeshLodDepth(q.w, q.x, q.y, q.z, focus.x, focus.y, focus.z);
++    if (first) { firstOld = old; first = false; }
++    minOld = std::fmin(minOld, old);
++    maxOld = std::fmax(maxOld, old);
++  }
++  CHECK(maxOld - minOld > 100.0f, "the old quaternion formula should vary with the heading (%.2f .. %.2f, first %.2f)", minOld, maxOld, firstOld);
++
++  // q and -q (heading and heading + a full turn) are the same camera: the old depth flips sign, the new one does not
++  const Quat q0 = Orient(1.5708f, pitch);
++  const Quat q1 = Orient(1.5708f - 2.0f * pi, pitch);
++  const float o0 = moho::MeshLodDepth(q0.w, q0.x, q0.y, q0.z, 500.0f, 0.0f, 500.0f);
++  const float o1 = moho::MeshLodDepth(q1.w, q1.x, q1.y, q1.z, 500.0f, 0.0f, 500.0f);
++  CHECK(std::fabs(o0 + o1) < 0.5f && std::fabs(o0) > 10.0f, "old formula: %.2f vs %.2f should be negatives", o0, o1);
++
++  std::printf("%d checks, %d failures (old formula over headings: %.1f .. %.1f)\n", gChecks, gFailures, minOld, maxOld);
++  return gFailures ? 1 : 0;
++}
+diff --git a/src/sdk/moho/mesh/Mesh.cpp b/src/sdk/moho/mesh/Mesh.cpp
+index f237dda..2f22f7f 100644
+--- a/src/sdk/moho/mesh/Mesh.cpp
++++ b/src/sdk/moho/mesh/Mesh.cpp
+@@ -25,6 +25,7 @@
+ #include "moho/math/Vector4f.h"
+ #include "moho/math/VMatrix4.h"
+ #include "moho/mesh/MeshBatch.h"
++#include "moho/mesh/MeshLodDepth.h"
+ #include "moho/mesh/ShaderDictionary.h"
+ #include "moho/misc/ID3DDeviceResources.h"
+ #include "moho/render/Shadow.h"
+@@ -4880,24 +4881,17 @@ namespace moho
+ 
+       instance->UpdateInterpolatedFields();
+ 
+-      // View-depth distance: the binary treats the first sixteen bytes of the
+-      // camera transform as a plane (a,b,c,d) and dots the interpolated world
+-      // position against it -- 0x007DFB7F..0x007DFBB9 reads [cam+8]*pos.z +
+-      // [cam+4]*pos.y + [cam+0]*pos.x + [cam+0Ch], with `orient_` at +0x00.
+-      // Those are MEMORY LANES 0..3 of the quaternion, which in Wm3's storage
+-      // are (w,x,y,z). The previous body spelled them as the named fields
+-      // (.x,.y,.z,.w) -- correct only while lane 0 was called .x; the
+-      // scalar-first conversion moved lane 0 to .w, and this site was not
+-      // converted with it, so every mesh got a garbage depth and was culled by
+-      // ComputeLOD. Index the storage directly so the lane order can no
+-      // longer drift with the naming.
++      // View-depth distance: the world position dotted against the fade plane
++      // (a,b,c,d) argument, i.e. the camera's `viewport.r[1]` (0x007DFB7F..
++      // 0x007DFBB9 reads [plane+8]*pos.z + [plane+4]*pos.y + [plane+0]*pos.x +
++      // [plane+0Ch]). The first reconstruction read those four floats from the
++      // camera's orientation quaternion (`camera.tranform.orient_`) instead, which
++      // made the LOD depth depend on the heading (and on the quaternion's sign,
++      // so on which way round the camera had been turned): units switched LOD and
++      // disappeared when the camera only turned. See MeshLodDepth.h.
+       const Wm3::Vec3f& worldPos = instance->interpolatedPosition;
+-      const Wm3::Quatf& plane = camera.tranform.orient_;
+       const float distance =
+-        worldPos.z * plane.m_afTuple[2]
+-        + worldPos.y * plane.m_afTuple[1]
+-        + plane.m_afTuple[0] * worldPos.x
+-        + plane.m_afTuple[3];
++        MeshLodDepth(fadePlane.x, fadePlane.y, fadePlane.z, fadePlane.w, worldPos.x, worldPos.y, worldPos.z);
+ 
+       const boost::shared_ptr<Mesh> mesh = instance->GetMesh();
+       const MeshLOD* const lod = mesh->ComputeLOD(distance);
+diff --git a/src/sdk/moho/mesh/MeshLodDepth.h b/src/sdk/moho/mesh/MeshLodDepth.h
+new file mode 100644
+index 0000000..de9a88f
+--- /dev/null
++++ b/src/sdk/moho/mesh/MeshLodDepth.h
+@@ -0,0 +1,32 @@
++#pragma once
++
++namespace moho
++{
++  /**
++   * FAF Studio fix (no address; the shipped body is inline in MeshRenderer::Batch, 0x007DFB7F..0x007DFBB9).
++   *
++   * What it does:
++   * The depth a mesh instance is LOD-selected and dissolved at: the world position dotted against the 4-float
++   * "fade plane" `(a, b, c, d)` that `MeshRenderer::Batch` receives as its last argument, which every caller
++   * fills with the camera's `viewport.r[1]` (view-space depth scaled to the FOV and the camera LOD scale).
++   *
++   * History: the reconstruction read these four floats from the first 16 bytes of the camera (the orientation
++   * quaternion) instead, so the "distance" was `q.w*x + q.x*y + q.y*z + q.z` - unrelated to how far the mesh is
++   * from the eye, different for every heading, and sign-flipped when the heading was reached by turning the
++   * other way round (q and -q are the same rotation). Units went to a lower LOD and vanished just by turning.
++   *
++   * Plain floats on purpose: this header has no engine dependencies so the stand-alone tests can include it.
++   */
++  [[nodiscard]] inline float MeshLodDepth(
++    const float planeA,
++    const float planeB,
++    const float planeC,
++    const float planeD,
++    const float x,
++    const float y,
++    const float z
++  ) noexcept
++  {
++    return (planeA * x) + (planeB * y) + (planeC * z) + planeD;
++  }
++} // namespace moho

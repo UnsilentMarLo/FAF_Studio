@@ -6,6 +6,7 @@
 Without an argument it writes the templates of File > New map and Map > Resize (128, 256, 512, 1024, 2048) into editor/runtime/maps (mounted at /maps/<name> by
 init_editor.lua); `--size N [maps_folder]` writes one of them; a folder argument writes the 256 map there.
 """
+import math
 import os
 import sys
 
@@ -13,6 +14,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "pylib"))
 from luadata import LuaCall, LuaTable  # noqa: E402
 from project import MapProject  # noqa: E402
+
+
+def optimal_tile(px):
+    """Tile size in world units for a texture px pixels wide: the same formula as editor/runtime/lua/editor/texscale.lua (texel density: px / (screen pixels per world unit
+    at 1080 px, 45 degrees field of view, 27 units eye distance), rounded to 0.5, 4 .. 64)."""
+    density = 1080 / (2 * 27 * math.tan(math.radians(45) / 2))
+    return min(64.0, max(4.0, math.floor(px / density / 0.5 + 0.5) * 0.5))
+
+
+# grass001_albedo.dds / _normals.dds of Evergreen are 512 x 512 (174904 bytes: DXT1 with mip maps, _asset_index/scd/env.scd.tsv)
+GRASS_PX = 512
 
 
 def vec(x, y, z):
@@ -26,8 +38,11 @@ def build(folder, stem="editor_blank", size=256):
     ground = int(round(25.0 / sc.height_scale))
     for i in range(len(sc.heights)):
         sc.heights[i] = ground
-    sc.strata[0] = ("/env/Evergreen/layers/grass001_albedo.dds", 4.0)
-    sc.strata_normals[0] = ("/env/Evergreen/layers/grass001_normals.dds", 4.0)
+    # tile sizes from texel density (optimal_tile); the editor gives a new map a full texture set anyway (texsets.ApplyIfNew), this is what a template shows before that
+    tile = optimal_tile(GRASS_PX)
+    sc.strata[0] = ("/env/Evergreen/layers/grass001_albedo.dds", tile)
+    sc.strata_normals[0] = ("/env/Evergreen/layers/grass001_normals.dds", tile)
+    # the opaque Upper layer is recognised by this exact size (40) and made transparent by strata.lua Normalize: do not change it without changing that test
     sc.strata[9] = ("/env/Evergreen/layers/Dirt001_albedo.dds", 40.0)
     # one army, one start marker in the middle
     info = dict((tuple(t), v) for t, v in proj.scenario_assign)[("ScenarioInfo",)]

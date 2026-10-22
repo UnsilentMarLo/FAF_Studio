@@ -639,13 +639,13 @@ function OnWorldPress(event)
         PlaceMarkerAt(wx, wz)
         return true
     elseif tool.kind == 'area' then
-        State.areaStart = { wx, wz }
-        State.areaEnd = { wx, wz }
+        State.areaStart = { ObjectTools.ClampAreaPoint(wx, wz) }       -- (kept on the map while 'Limit to map bounds' is on)
+        State.areaEnd = { ObjectTools.ClampAreaPoint(wx, wz) }
         local dragger = Dragger()
         dragger.OnMove = function(self, x, y)
             local mx, mz = ScreenToWorld(x, y)
             if mx then
-                State.areaEnd = { mx, mz }
+                State.areaEnd = { ObjectTools.ClampAreaPoint(mx, mz) }
             end
         end
         dragger.OnRelease = function(self, x, y)
@@ -743,7 +743,8 @@ function SetMode(mode)
         return
     end
     State.mode = mode
-    pcall(function() SimCallback({ Func = 'EdSetPlay', Args = { on = (mode == 'play') } }, false) end)       -- mission scripts start their first stage on Play
+    -- (a test run also gets the rock and splat of every resource marker: the editing sim leaves them out, markervis.lua)
+    pcall(function() SimCallback({ Func = 'EdSetPlay', Args = { on = (mode == 'play'), deposits = (mode == 'play') and import('/lua/editor/markervis.lua').DepositList() or nil } }, false) end)       -- mission scripts start their first stage on Play
     if mode == 'play' then
         GameUIHidden(false)
         UnitBars(true)

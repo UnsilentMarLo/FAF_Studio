@@ -10,11 +10,14 @@
 -- stroke may reach), Scatter, minimum / maximum slope angle (cells outside are skipped) and a height range, Invert.
 --
 --   Layers()                               list of { index, name, albedo, normal, size, nsize, ... }
---   SetTexture(i, albedo, normal, size, nsize)     Snapshot(i) / Restore(snapshot)      SetSizes(i, size, nsize)
+--   SetTexture(i, albedo, normal, size, nsize)     (size nil = Optimal tile of the texture, texscale.lua; the 4 of Clear / Info is the engine's empty slot value)     Snapshot(i) / Restore(snapshot)      SetSizes(i, size, nsize)
 --   Move(i, +1 | -1)     Clear(i)     ClearMask(i)     FillMask(i)     each returns an undo entry (or nil)
 --   Active               the painted layer (1..8) the paint / erase brushes work on
 --   Brush                the texture brush settings
 --   BeginStroke() / Dab(cx, cz, brush, weight) / EndStroke()      painting; TakeEntry() returns the undo entry of the finished stroke
+--   Range()                                'half' | 'full': how the map's shader reads a mask byte (shaders.lua RangeOf); every brush and mask tool stores bytes that way
+--   Profile()                              shaders.lua Profile of the map's shader (painted layers, what layer 8 is ...)
+--   PaintCap()                             the highest layer the shader paints with a mask      WhyNotPaintable(i) -> nil | reason: the check of every tool that writes a layer mask
 --
 -- Undo entries are plain { label, undo, redo } like the object edits (history.lua keeps one order for everything).
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
@@ -43,6 +46,7 @@ CLEAR = '/textures/editor/layers/clear_albedo.dds'
 NONE_NORMAL = '/env/common/layers/none_normal.dds'
 
 local PI = 3.14159265
+local Shaders = import('/lua/editor/shaders.lua')
 
 --- The legacy terrain technique ('TTerrain') blends the painted layers 1..4 only; layers 5..8 need 'TTerrainXP' (what FAF maps use).
 local function EnsureShader(layer)
@@ -66,19 +70,59 @@ local stroke = false      -- { orig = { [cell] = value }, layer, minX, minZ, max
 local pending = false     -- the finished stroke's undo entry until ui.lua takes it
 local notice = false      -- a message for the status line (ui.lua shows it)
 
--- The terrain shader reads a mask byte m as saturate(2 * m / 255 - 1) (terrain.fx): bytes up to 127 mean "nothing", 255 means "fully this layer".
--- The brushes work on that effective value (0..1) and store it back in the shader's encoding, so the first dab already shows and an erased
--- cell goes back to 0.
-local function Decode(m)
+-- The terrain shaders of the TTerrain family and the half-range numbered ones (Terrain050 ...) read a mask byte m as saturate(2 * m / 255 - 1) (terrain.fx): bytes up to 127 mean "nothing",
+-- 255 means "fully this layer". The full-range shaders (Terrain000, Terrain100 ...) read the byte as it is (m / 255). The brushes work on the effective value (0..1) and store it back in the
+-- encoding of the map's shader (Range()), so the first dab already shows and an erased cell goes back to 0.
+local function Decode(m, full)
+    if full then return m / 255 end
     local e = 2 * m / 255 - 1
     if e < 0 then return 0 end
     return e
 end
 
-local function Encode(e)
+local function Encode(e, full)
     if e <= 0 then return 0 end
     if e > 1 then e = 1 end
+    if full then return math.floor(e * 255 + 0.5) end
     return math.floor((e + 1) / 2 * 255 + 0.5)
+end
+
+--- How the shader of the map reads a paint mask byte: 'half' (saturate(2m - 1)) or 'full' (the byte is the share). See shaders.lua.
+function Range()
+    return Shaders.RangeOf(ed_stratum_shader())
+end
+
+--- shaders.lua Profile of the map's shader: painted layers, what layer 8 is, what the Upper layer is, ...
+function Profile()
+    return Shaders.Profile(ed_stratum_shader())
+end
+
+--- nil when layer i (1..8) can be painted with the map's shader, else the reason (the numbered shaders have no painted 8th layer: its mask is the roughness multiplier or unused).
+local function Unpaintable(i)
+    if i ~= 8 then return nil end
+    local p = Profile()
+    if p.l8 == 'rough' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': its mask is the roughness multiplier' end
+    if p.l8 == 'data' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': it only holds map-wide data' end
+    return nil
+end
+
+--- The highest layer the map's shader draws with a paint mask: 8 for TTerrainXP and for TTerrain (writing layers 5-8 switches it to TTerrainXP), 7 for the numbered shaders (their 8th mask is the
+--- roughness multiplier or map-wide data), 4 for TTerrainGlow; 8 without a terrain. recipes.lua Cap() is this function.
+function PaintCap()
+    if not rawget(_G, 'ed_stratum_shader') then return 8 end
+    local name = ed_stratum_shader()
+    if not name or name == 'TTerrain' then return 8 end
+    return Profile().painted or 8
+end
+
+--- nil when layer i (1..8) can be written with a mask tool (mask generator, graph outputs, field commit, mask import, recipes), else the reason as a sentence. Every tool that writes a layer's mask
+--- calls this first so none of them paints a layer the map's shader reads as something else.
+function WhyNotPaintable(i)
+    i = math.floor((i or 0) + 0.5)
+    if i < 1 or i > 8 then return 'Layer ' .. tostring(i) .. ' does not exist (1 to 8)' end
+    local cap = PaintCap()
+    if i <= cap then return nil end
+    return Unpaintable(i) or ('Layer ' .. i .. ' is not drawn with ' .. tostring(ed_stratum_shader()) .. ': it paints layers 1 to ' .. cap .. ' only')
 end
 
 --- Mask size in cells and the world size of one cell (nil without a terrain).
@@ -154,6 +198,7 @@ end
 --- normal map stands in. Returns true when the albedo loaded.
 function SetTexture(i, albedoPath, normalPath, size, nsize)
     EnsureShader(i)
+    if not size then size = import('/lua/editor/texscale.lua').Optimal(albedoPath) end      -- no size given: the Optimal tile of the texture (texel density)
     if not normalPath or normalPath == '' then
         normalPath = NormalFor(albedoPath)
     end
@@ -320,8 +365,14 @@ function AutoPaint(i, erase)
         return nil
     end
     EnsureShader(i)
+    local why = Unpaintable(i)
+    if why then
+        notice = why
+        return nil
+    end
     local w, h, cell = MaskInfo()
     if not w then return nil end
+    local full = (Range() == 'full')
     local b = Brush
     local target = b.target / 100
     local frac = math.min(1, math.abs(b.strength) / 100)
@@ -333,13 +384,13 @@ function AutoPaint(i, erase)
             local z = math.floor((k - 1) / w)
             local slope, height = SlopeAt((x + 0.5) * cell, (z + 0.5) * cell)
             if slope >= b.minSlope and slope <= b.maxSlope and height >= b.minHeight and height <= b.maxHeight then
-                local e = Decode(before[k])
+                local e = Decode(before[k], full)
                 if erase then
                     e = e * (1 - frac)
                 elseif e < target then
                     e = e + (target - e) * frac
                 end
-                after[k] = Encode(e)
+                after[k] = Encode(e, full)
             end
         end
         return after
@@ -358,11 +409,15 @@ local strokeSeed = 0
 function BeginStroke()
     EnsureShader(Active)
     local w, h, cell = MaskInfo()
-    stroke = { orig = {}, base = {}, cov = {}, layer = Active, w = w, h = h, cell = cell, minX = nil, last = {} }
+    stroke = { orig = {}, base = {}, cov = {}, layer = Active, w = w, h = h, cell = cell, minX = nil, last = {}, full = (Range() == 'full') }
     pending = false
     strokeSeed = strokeSeed + 1
     local albedo = ed_stratum_layer(Active)
-    if not albedo or albedo == '' then
+    local why = Unpaintable(Active)
+    if why then
+        stroke.refused = true
+        notice = why
+    elseif not albedo or albedo == '' then
         stroke.refused = true
         notice = LayerName(Active) .. ' has no texture: pick one in the Layers panel first'
     end
@@ -429,6 +484,7 @@ function Dab(cx, cz, brush, weight, slot)
     local circle = (brush.mode == 'paint' or brush.mode == 'erase')
     local softMin = cell * 1.5              -- the edge is at least one and a half mask cells wide
     local scatter = b.scatter
+    local full = stroke.full            -- the shader reads a mask byte as it is (Range() == 'full') instead of saturate(2m - 1)
     for z = z0, z1 do
         local wz = (z + 0.5) * cell
         local dz = wz - cz
@@ -466,11 +522,17 @@ function Dab(cx, cz, brush, weight, slot)
                     cov = wt * frac
                     covT[key] = cov
                 end
-                -- Decode: the shader reads a byte m as saturate(2 * m / 255 - 1)
-                local e0 = 2 * base / 255 - 1
-                if e0 < 0 then e0 = 0 end
-                local e = 2 * old / 255 - 1
-                if e < 0 then e = 0 end
+                -- Decode: the shader reads a byte m as saturate(2 * m / 255 - 1) (full range shaders: m / 255)
+                local e0, e
+                if full then
+                    e0 = base / 255
+                    e = old / 255
+                else
+                    e0 = 2 * base / 255 - 1
+                    if e0 < 0 then e0 = 0 end
+                    e = 2 * old / 255 - 1
+                    if e < 0 then e = 0 end
+                end
                 if erase then
                     e = math.min(e, e0 * (1 - cov))
                 elseif e0 < target then
@@ -482,7 +544,11 @@ function Dab(cx, cz, brush, weight, slot)
                     new = 0
                 else
                     if e > 1 then e = 1 end
-                    new = math.floor((e + 1) / 2 * 255 + 0.5)
+                    if full then
+                        new = math.floor(e * 255 + 0.5)
+                    else
+                        new = math.floor((e + 1) / 2 * 255 + 0.5)
+                    end
                 end
                 if new ~= old then
                     if origT[key] == nil then origT[key] = old end

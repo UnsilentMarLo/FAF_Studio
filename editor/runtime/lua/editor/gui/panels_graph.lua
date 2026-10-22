@@ -1019,6 +1019,7 @@ Panels.Register{
                     end
                 end
                 state.text = string.format('built in %.0f ms: %d height samples, %d layers, %d types, %d props (one undo step)%s', r.ms, r.changed, r.layers, r.types, r.props, slow)
+                if r.mapNote then state.text = state.text .. r.mapNote end
             else
                 state.text = 'not built: ' .. tostring(err)
             end

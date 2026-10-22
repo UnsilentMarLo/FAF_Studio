@@ -334,7 +334,9 @@ local function UseTexture(entry)
     if not before then return nil, 'no terrain layer is selected' end
     local albedo, normal = before.albedo, before.normal
     if entry.tags.type == 'normal' then normal = entry.key else albedo = entry.key normal = '' end
-    Strata.SetTexture(i, albedo, normal, before.size, before.nsize)
+    local size, nsize = before.size, before.nsize
+    if entry.tags.type ~= 'normal' then size, nsize = import('/lua/editor/texscale.lua').Carry(before.albedo, size, nsize, albedo) end      -- an empty or default tile size becomes the Optimal one
+    Strata.SetTexture(i, albedo, normal, size, nsize)
     local after = Strata.Snapshot(i)
     UI.PushEdit({
         label = 'texture of layer ' .. tostring(i),
@@ -353,10 +355,13 @@ function Pick(entry)
         SelectTool('unit')
     elseif entry.kind == 'props' then
         import('/lua/editor/props.lua').Active = entry.key
-        SelectTool('prop')
+        -- (an active prop tool, the brush, the eraser or Place prop, stays: picking a prop does not change the tool)
+        local now = import('/lua/editor/ui.lua').State.tool
+        if now ~= 'prop_place' and now ~= 'prop_erase' then SelectTool('prop') end
     elseif entry.kind == 'decals' then
         import('/lua/editor/decals.lua').Active = entry.key
-        SelectTool('decal')
+        local now = import('/lua/editor/ui.lua').State.tool
+        if now ~= 'decal_place' and now ~= 'decal_erase' then SelectTool('decal') end
     elseif entry.kind == 'markers' then
         import('/lua/editor/tools.lua').SetMarkerType(entry.key)
         SelectTool('marker')
