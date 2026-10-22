@@ -7,6 +7,8 @@
 --   Visible                  show the type grid as coloured cells in the world (View panel / Terrain type panel)
 --   BeginStroke() / Dab(cx, cz, brush) / EndStroke(); TakeEntry() -> undo entry of the finished stroke
 --   ColorOf(code)            'RRGGBB'
+--   Mark(x0, z0, x1, z1) / TakeDirty()   a change of grid cells (bumps Revision) / the cells changed since the last look, for ttoverlay.lua
+--   Cell()                   world units per grid cell; NodeCodes(x0, z0, nw, nh, step) the codes under an overlay window
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
