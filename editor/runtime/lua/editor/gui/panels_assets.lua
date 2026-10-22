@@ -218,6 +218,13 @@ Panels.Register{
             end,
         })
 
+        -- every draw of the cells is a wave of picture requests: what scrolled out of view is cancelled in the worker (assetthumbs.lua NewWave), the cells on screen are made top to bottom
+        local gridRefresh = P.grid.Refresh
+        P.grid.Refresh = function(self, a, b)
+            Thumbs.NewWave('assets')
+            return gridRefresh(self, a, b)
+        end
+
         -- the preview strip under the grid
         P.pFrame = Bitmap(group)
         P.pFrame:SetSolidColor(c.panelAlt)
