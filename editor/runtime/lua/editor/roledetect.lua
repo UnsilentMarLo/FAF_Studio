@@ -8,7 +8,7 @@
 --       "dark" / "light" words move a rock to dark rock / high rock. Two kinds in one name (SandRock) lower the confidence.
 --   (b) the COLOUR (ClassifyColour): the albedo reduced natively to 16 x 16 (ed_dds_thumb, then ed_dds_read; cached per path). Features are the mean colour (RGB, HSV), the green dominance
 --       and the contrast; the rules: near white = snow; green dominant (hue 60..170) = grass; yellow-tan, bright, not very saturated = sand; brown, mid brightness = dirt; grey = rock
---       (dark = dark rock, pale = high rock); bluish dark = wet ground; bluish bright = ice (snow).
+--       (dark = dark rock, pale = high rock); bluish dark or molten orange = wet ground; bluish bright = ice (snow).
 --   Decide(): a clear name wins; a rock name is refined by the colour (dark / pale); when the name says nothing, or says grass AND sand, the colour decides (sand versus grass is the one
 --   pair the colour settles even against a weak name); a strong colour against a weak name wins. Every answer carries a confidence 0..1 and its source.
 --
@@ -66,7 +66,7 @@ local TOKENS = {
     { 'grass', 'grass', 1.0, 's' }, { 'gras', 'grass', 1.0, 's' }, { 'moss', 'grass', 0.8, 's' }, { 'hosta', 'grass', 1.0, 's' }, { 'jungle', 'grass', 0.9, 's' },
     { 'jung', 'grass', 0.8, 'p' }, { 'fern', 'grass', 0.7, 's' }, { 'meadow', 'grass', 1.0, 's' }, { 'lawn', 'grass', 1.0, 's' }, { 'turf', 'grass', 1.0, 's' },
     { 'weed', 'grass', 0.6, 's' }, { 'shrub', 'grass', 0.5, 's' }, { 'bush', 'grass', 0.5, 'w' }, { 'leaf', 'grass', 0.5, 'w' }, { 'leaves', 'grass', 0.6, 'w' },
-    { 'veget', 'grass', 0.9, 'p' }, { 'foliage', 'grass', 0.8, 's' }, { 'sphagnum', 'grass', 0.7, 's' }, { 'clover', 'grass', 1.0, 's' }, { 'forest', 'grass', 0.6, 'w' },
+    { 'veget', 'grass', 0.9, 'p' }, { 'bushy', 'grass', 0.6, 's' }, { 'creeper', 'grass', 0.6, 's' }, { 'foliage', 'grass', 0.8, 's' }, { 'sphagnum', 'grass', 0.7, 's' }, { 'clover', 'grass', 1.0, 's' }, { 'forest', 'grass', 0.6, 'w' },
     { 'pasture', 'grass', 1.0, 's' }, { 'green', 'grass', 0.7, 'w' }, { 'heather', 'grass', 0.8, 's' },
     -- sand
     { 'sand', 'sand', 1.0, 's' }, { 'dune', 'sand', 1.0, 's' }, { 'desert', 'sand', 0.9, 's' }, { 'beach', 'sand', 1.0, 's' }, { 'dust', 'sand', 0.6, 's' },
@@ -240,7 +240,7 @@ function ClassifyColour(f)
     local white = Ramp(val, 0.70, 0.86) * (1 - Ramp(sat, 0.10, 0.26))
     local icy = Ramp(val, 0.60, 0.78) * Band(hue, 165, 190, 250, 275) * Ramp(sat, 0.05, 0.12) * (1 - Ramp(sat, 0.30, 0.45))
     s.snow = math.max(white, icy * 0.85)
-    s.grass = Ramp(f.gdom, 0.0, 0.05) * Band(hue, 58, 72, 150, 175) * Ramp(sat, 0.12, 0.28)
+    s.grass = Ramp(f.gdom, 0.0, 0.05) * Band(hue, 52, 64, 150, 175) * Ramp(sat, 0.12, 0.28)
     s.sand = Band(hue, 18, 30, 56, 64) * Band(sat, 0.08, 0.16, 0.50, 0.70) * Ramp(val, 0.42, 0.62) * Ramp(f.warm, 0.0, 0.06)
     s.dirt = Band(hue, 5, 14, 40, 52) * Band(sat, 0.14, 0.24, 0.70, 0.85) * Band(val, 0.16, 0.26, 0.50, 0.66)
     local grey = 1 - Ramp(sat, 0.14, 0.30)
@@ -248,7 +248,8 @@ function ClassifyColour(f)
     s.highrock = grey * Ramp(val, 0.56, 0.70) * (1 - Ramp(val, 0.80, 0.90))
     s.darkrock = (1 - Ramp(sat, 0.40, 0.60)) * (1 - Ramp(val, 0.20, 0.32))
     s.wet = math.max(Band(hue, 165, 185, 265, 285) * Ramp(sat, 0.08, 0.18) * (1 - Ramp(val, 0.42, 0.58)),
-                     Band(hue, 10, 20, 50, 60) * Ramp(sat, 0.35, 0.50) * (1 - Ramp(val, 0.20, 0.30)) * 0.8)
+                     Band(hue, 10, 20, 50, 60) * Ramp(sat, 0.35, 0.50) * (1 - Ramp(val, 0.20, 0.30)) * 0.8,
+                     Band(hue, -1, 0, 24, 36) * Ramp(sat, 0.65, 0.82) * Ramp(val, 0.45, 0.60) * 0.8)          -- molten ground: saturated orange red
     local top, second, role = 0, 0, nil
     for r, v in s do
         if v > top then second, top, role = top, v, r

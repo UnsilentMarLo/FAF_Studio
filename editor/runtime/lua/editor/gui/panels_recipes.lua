@@ -1,23 +1,26 @@
--- The Stratum recipes panel (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T2; logic in recipes.lua).
+-- The Stratum recipes panel (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T2; logic in recipes.lua, role detection in roledetect.lua).
 --
--- Pick a preset (temperate, alpine, desert, arctic, rocky): it lists the kinds of ground from the bottom up and makes each one's mask from slope / height / curvature / water / noise rules.
--- Give every role a texture layer (0 = skip it; the base role is the Base layer), tune the knobs, look at one role on the map ("Show role"), then Apply: the paint masks of the layers and the
--- terrain-type grid are written in ONE undo step. The layers above take away, so a cliff covers rock covers dirt covers grass; the terrain types follow what is seen most in each cell.
--- The panel shows the shader of the map (how many layers it paints, which mask range) and warns when a kind sits on a layer the shader cannot paint: it is moved to a free layer (recipes.lua).
+-- A recipe paints the eight kinds of ground (grass, dirt, wet ground, sand, rock, dark rock, high rock, snow) on the texture layers that hold them. The table lists every layer of the map with
+-- its texture, the kind of ground the editor found in it (from the file name, else from the colour of the texture) and how sure it is; click the kind to correct it (remembered per texture).
+-- The Base layer can be any kind: it is the default ground, so the recipe leaves that kind to the base and lets the others claim their places. A kind with no layer is skipped; Assign textures
+-- fills EMPTY layers with the textures of the missing kinds from the current texture set. "Show" draws one layer's kind on the map (red squares). The settings below are the rules' numbers
+-- (cliff angle, snow share, beach width, dirt coverage ...). Apply writes the paint masks and the terrain-type grid in ONE undo step and measures how much of the map each layer covers
+-- (mask = the opacity share of the layer's mask, seen = what shows after the layers above took theirs).
 --
 -- Lua 5.0 dialect.
 
-local Bitmap = import('/lua/maui/bitmap.lua').Bitmap
 local W = import('/lua/editor/gui/widgets.lua')
 local Skin = import('/lua/editor/gui/skin.lua')
 local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local Recipes = import('/lua/editor/recipes.lua')
+local Detect = import('/lua/editor/roledetect.lua')
 local MaskGen = import('/lua/editor/maskgen.lua')
+local Menu = import('/lua/editor/gui/menu.lua')
 
 live = {}
 
-state = { text = '', summary = false }
+state = { text = '', summary = false, cov = false }
 
 local function Say(text)
     pcall(function() UI.Say(text) end)
@@ -29,109 +32,143 @@ local function DestroySlider(s)
     if s.field.frame then s.field.frame:Destroy() end
 end
 
-local function Texture(layer)
-    if layer < 1 then return layer == 0 and 'Base layer' or '' end
-    local albedo = ed_stratum_layer(layer)
-    if not albedo or albedo == '' then return 'no texture' end
-    return (string.gsub(albedo, '^.*/', ''))
+local function Pct(v) return string.format('%.0f%%', (v or 0) * 100) end
+
+--- The text of the role button of a layer: the kind, and how sure the editor is.
+local function RoleText(e, cap)
+    if not e then return 'empty' end
+    if e.layer > cap then return 'not painted' end
+    if e.override == 'none' then return 'Not used (set)' end
+    if e.override then return Detect.Label(e.override) .. ' (set)' end
+    if not e.role then return 'Unknown' end
+    return Detect.Label(e.role) .. ' ' .. Pct(e.conf)
+end
+
+--- The layers' signature: changes when a texture is swapped (the shell tick compares it).
+local function Signature()
+    local parts = {}
+    for l = 0, 8 do parts[l + 1] = tostring(Detect.Albedo(l) or '') end
+    return table.concat(parts, '|')
 end
 
 Panels.Register{
     id = 'recipes', title = 'Stratum recipes', minW = 260, minH = 220, stack = { workspace = 'Terrain', with = 'console' },
     create = function(group, host)
-        local Pn = { knobSliders = {}, roles = {} }
+        local Pn = { knobSliders = {}, roles = {}, rows = {}, plan = false }
         live.recipes = Pn
         local c = Skin.color
         local function Btn(text, w, fn, opts) return W.Button(group, text, 0, 0, Skin.S(w), Skin.S(22), fn, opts) end
 
         Pn.shaderLine = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
         Pn.warns = {}
-        for i = 1, 3 do Pn.warns[i] = W.Label(group, '', 0, 0, { color = c.warn, size = 'small' }) end
+        for i = 1, 5 do Pn.warns[i] = W.Label(group, '', 0, 0, { color = c.warn, size = 'small' }) end
         Pn.status = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
         Pn.note = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
-        Pn.rolesLabel = W.Label(group, 'Kinds of ground, bottom to top', 0, 0, { color = c.text })
-        Pn.knobsLabel = W.Label(group, 'Settings of the preset', 0, 0, { color = c.text })
+        Pn.rolesLabel = W.Label(group, 'Layers and their kind of ground', 0, 0, { color = c.text })
+        Pn.covNote = W.Label(group, 'mask: share of the map the mask covers; seen: share that shows', 0, 0, { color = c.textDim, size = 'small' })
+        Pn.knobsLabel = W.Label(group, 'Settings of the recipe', 0, 0, { color = c.text })
         Pn.summaryLabels = {}
 
         local function Fresh()
+            Pn.plan = Recipes.Plan()
             Pn.roles = Recipes.Roles()
-            local layers = Recipes.State.layers
-            if not layers or table.getn(layers) ~= table.getn(Pn.roles) then Recipes.State.layers = Recipes.AutoLayers(Pn.roles) end
-            Recipes.State.selected = math.max(1, math.min(Recipes.State.selected or 1, table.getn(Pn.roles)))
         end
 
         Pn.bPreset = Btn('', 280, function()
-            Recipes.State.preset = math.mod(Recipes.State.preset, table.getn(Recipes.Presets)) + 1
-            Recipes.State.layers = nil
-            Recipes.State.selected = 1
+            Recipes.SelectPreset(math.mod(Recipes.State.preset, table.getn(Recipes.Presets)) + 1)
             Fresh()
-            Pn:BuildKnobs()
-            Pn:OnResize(Pn.w, Pn.h)
-        end, { tip = 'The recipe (grass, desert, snow ... ). Click to step to the next one.' })
-
-        Pn.list = W.VirtualList(group, {
-            rowH = 20,
-            getCount = function() return table.getn(Pn.roles) end,
-            bind = function(row, index)
-                local role = Pn.roles[index]
-                local layer = Recipes.State.layers[index] or 0
-                local fit = Recipes.FitLayers(Recipes.State.layers)[index] or layer
-                local text = string.format('%d. %s  ->  %s', index, role.label, (index == 1) and 'Base layer' or (layer >= 1 and ((fit ~= layer and ('layer ' .. layer .. ' > ' .. fit) or ('layer ' .. layer)) .. '  ' .. Texture(fit)) or 'skipped'))
-                W.Fit(row.text, text, math.max(Skin.S(40), row.bg.Width() - Skin.S(12)))
-                row.text:SetColor(index == Recipes.State.selected and c.accent or c.text)
-                local ty = math.floor((row.bg.Height() - row.text.Height()) / 2)
-                row.text.Left:Set(function() return row.bg.Left() + Skin.S(6) end)
-                row.text.Top:Set(function() return row.bg.Top() + ty end)
-            end,
-            bgColor = c.panelAlt,
-            onSelect = function(index)
-                Recipes.State.selected = index
-                Pn:Refresh()
-            end,
-        })
-
-        Pn.layer = W.Slider(group, { label = 'Texture layer of the selected kind (0 = skip)', compact = true, min = 0, max = Recipes.Cap(), step = 1, fmt = '%d',
-            get = function() return Recipes.State.layers[Recipes.State.selected] or 0 end,
-            set = function(v)
-                if Recipes.State.selected == 1 then return end        -- the base role stays on the Base layer
-                Recipes.State.layers[Recipes.State.selected] = math.min(v, Recipes.Cap())
-                Pn:Refresh()
-            end })
-
-        Pn.bShow = Btn('Show kind on map', 120, function()
-            local f, err = Recipes.PreviewRole(Recipes.State.selected)
-            state.text = f and ('showing ' .. Pn.roles[Recipes.State.selected].label .. ' (red squares on the map)') or tostring(err)
-            MaskGen.Preview.show = true
+            for _, s in Pn.knobSliders do s:Refresh() end
             Pn:Refresh()
-        end)
+        end, { tip = 'The style of the recipe (natural, alpine, desert, arctic, rocky, coast). Click to step to the next one; it sets the numbers below.' })
+
+        -- one row per layer 0..8: texture, kind of ground (a menu), Show, coverage
+        for l = 0, 8 do
+            local layer = l
+            local row = { layer = layer }
+            row.name = W.Label(group, '', 0, 0, { color = c.text, size = 'small' })
+            row.cov = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
+            row.btn = W.Button(group, '', 0, 0, Skin.S(130), Skin.S(22), function()
+                local e = Pn.plan and Pn.plan.info[layer]
+                if not e then return end
+                local items = {}
+                local autoText = e.auto and ('Detected: ' .. Detect.Label(e.auto) .. ' ' .. Pct(e.autoConf)) or 'Detected: unknown'
+                table.insert(items, { title = autoText .. (e.override == nil and '   (current)' or ''), run = function()
+                    Detect.SetOverride(e.albedo, nil)
+                    Fresh()
+                    Pn:Refresh()
+                end })
+                local ids, labels = Detect.Choices()
+                for i, id in ids do
+                    local role = id
+                    table.insert(items, { title = labels[i] .. (e.override == role and '   (current)' or ''), run = function()
+                        Detect.SetOverride(e.albedo, role)
+                        Fresh()
+                        Pn:Refresh()
+                    end })
+                end
+                local x, y = row.btn.Left(), row.btn.Bottom()
+                Menu.Show(GetFrame(0), x, y, items)
+            end, { tip = 'The kind of ground this layer\'s texture shows, found from its file name and colour. Click to choose another kind, or Not used to leave the layer alone.' })
+            row.show = W.Button(group, 'Show', 0, 0, Skin.S(44), Skin.S(22), function()
+                local e = Pn.plan and Pn.plan.info[layer]
+                if not e or not e.role then
+                    state.text = 'this layer has no kind of ground'
+                    Pn:Refresh()
+                    return
+                end
+                local index
+                for i, id in Recipes.Order do
+                    if id == e.role then index = i end
+                end
+                local f, err = Recipes.PreviewRole(index)
+                state.text = f and ('showing ' .. Detect.Label(e.role) .. ' (red squares on the map)') or tostring(err)
+                MaskGen.Preview.show = true
+                Pn:Refresh()
+            end, { tip = 'Show where the recipe puts this kind of ground, as red squares on the map.' })
+            Pn.rows[l + 1] = row
+        end
+
         Pn.bHide = Btn('Hide', 44, function()
             MaskGen.ClearPreview()
             state.text = ''
             Pn:Refresh()
-        end)
-        Pn.bAuto = Btn('Layers in order', 100, function()
-            Recipes.State.layers = Recipes.AutoLayers(Pn.roles)
+        end, { tip = 'Hide the red squares.' })
+        Pn.bDetect = Btn('Detect again', 100, function()
+            Detect.Forget()
+            Detect.ClearOverrides()
+            Recipes.Invalidate()
+            Recipes.State.layers = nil
+            Fresh()
+            state.text = 'kinds of ground detected again from the textures'
             Pn:Refresh()
-        end)
-        Pn.bMatch = Btn('Match textures', 100, function()
-            Recipes.State.layers = Recipes.MatchTextures(Pn.roles)
-            state.text = 'layers picked by the texture names'
+        end, { tip = 'Read the textures again and forget the kinds you set by hand.' })
+        Pn.bAssign = Btn('Assign textures', 110, function()
+            local n, text = Recipes.AssignMissing()
+            state.text = text
+            Say(text)
+            Fresh()
             Pn:Refresh()
-        end)
-        Pn.bTypes = Btn('Terrain types too', 110, function(self) Recipes.State.types = self.on end, { toggle = true })
+        end, { tip = 'Give empty layers the textures of the kinds of ground the map lacks, from the current texture set. Layers that have a texture are not touched.' })
+        Pn.bMeasure = Btn('Measure', 70, function()
+            state.cov = Recipes.Coverage() or false
+            state.text = state.cov and 'coverage measured from the masks on the map' or 'no masks to measure'
+            Pn:Refresh()
+        end, { tip = 'Measure how much of the map each layer covers now, from its paint mask.' })
+        Pn.bTypes = Btn('Terrain types too', 110, function(self) Recipes.State.types = self.on end, { toggle = true, tip = 'Also write the terrain types (how ground sounds and slows units) from the layer seen most in each cell.' })
         Pn.bApply = Btn('Apply recipe', 100, function()
             Fresh()
             local summary, cells = Recipes.Apply()
             if summary then
                 state.summary = summary
                 state.text = cells .. ' cells changed (one undo step)'
+                state.cov = Recipes.Coverage() or false
             else
                 state.summary = false
                 state.text = 'not applied: ' .. tostring(cells)
             end
             Say(state.text)
             Pn:Refresh()
-        end)
+        end, { tip = 'Paint the map with the recipe. One undo step.' })
 
         function Pn:BuildKnobs()
             for _, s in self.knobSliders do DestroySlider(s) end
@@ -147,36 +184,60 @@ Panels.Register{
                         set = function(v)
                             Recipes.Knobs[i.key] = v
                             Fresh()
-                            Pn.list:Refresh()
+                            Pn:RefreshRows()
                         end })
                     table.insert(self.knobSliders, s)
                 end
             end
         end
 
+        --- The table: one line per layer.
+        function Pn:RefreshRows()
+            local cap = Recipes.Cap()
+            local plan = self.plan
+            local cov = state.cov
+            for l = 0, 8 do
+                local row = self.rows[l + 1]
+                local e = plan and plan.info[l]
+                local nameW = math.max(Skin.S(60), (self.nameW or Skin.S(120)))
+                local label = (l == 0 and 'Base' or ('Layer ' .. l)) .. ': ' .. (e and e.short or 'no texture')
+                W.Fit(row.name, label, nameW)
+                row.name:SetColor((e and l <= cap) and c.text or c.textDim)
+                row.btn:SetText(RoleText(e, cap))
+                local text = ''
+                if cov and e and l <= cap then
+                    if l == 0 then
+                        text = 'seen ' .. Pct(cov.seen[0])
+                    else
+                        text = 'mask ' .. Pct(cov.mask[l]) .. '  seen ' .. Pct(cov.seen[l])
+                    end
+                end
+                W.Fit(row.cov, text, math.max(Skin.S(40), self.covW or Skin.S(120)))
+            end
+        end
+
         function Pn:Refresh()
-            self.bPreset:SetText('Preset: ' .. Recipes.Presets[Recipes.State.preset].name)
+            self.bPreset:SetText('Style: ' .. Recipes.Presets[Recipes.State.preset].name)
             self.bTypes:SetOn(Recipes.State.types)
-            -- the shader decides how many layers have a mask: the layer choice follows it, and a kind left on a layer it cannot paint is shown moved
-            self.layer:SetRange(0, Recipes.Cap(), 1, '%d')
-            self.list:Refresh()
-            self.layer:Refresh()
+            if not self.plan then Fresh() end
+            self.sigShown = Signature()
+            self:RefreshRows()
             local line, warnings = Recipes.Notes(self.roles)
             W.Fit(self.shaderLine, line, (self.w or 300) - Skin.S(16))
-            for i = 1, 3 do
+            for i = 1, 5 do
                 W.Fit(self.warns[i], warnings[i] or '', (self.w or 300) - Skin.S(16))
             end
             for _, s in self.knobSliders do s:Refresh() end
-            local role = self.roles[Recipes.State.selected]
-            W.Fit(self.note, role and ((Recipes.State.selected == 1) and 'The base role has no mask: it is what the other kinds leave free.' or 'Mask of this kind: ' .. table.getn(role.rules) .. ' rules (open them in the Mask generator by copying)') or '', (self.w or 300) - Skin.S(16))
+            W.Fit(self.note, 'Rules of the recipe: select a style, then Apply. Kinds with no layer are skipped.', (self.w or 300) - Skin.S(16))
             W.Fit(self.status, state.text, (self.w or 300) - Skin.S(16))
             local lines = {}
             if state.summary then
                 for _, e in state.summary do
-                    table.insert(lines, string.format('%-24s %5.1f%%   %s', e.label, e.share * 100, e.layer >= 1 and ('layer ' .. e.layer) or 'Base'))
+                    local where = e.layer >= 1 and ('layer ' .. e.layer) or (e.layer == 0 and 'Base' or '')
+                    table.insert(lines, string.format('%-30s %5.1f%%   %s', e.label, e.share * 100, where))
                 end
             end
-            for i = 1, 8 do
+            for i = 1, 10 do
                 local lab = self.summaryLabels[i]
                 if not lab then
                     lab = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
@@ -189,24 +250,46 @@ Panels.Register{
         function Pn:OnResize(w, h)
             if not w then return end
             self.w, self.h = w, h
-            self:Refresh()          -- also makes the summary labels, placed below
             local pad = Skin.S(8)
+            local gap = Skin.S(4)
+            -- table columns: name | kind button | Show | coverage; a narrow panel puts the name on a line of its own
+            local btnW, showW = Skin.S(130), Skin.S(44)
+            local twoLine = w < Skin.S(420)
+            local covW = twoLine and (w - 2 * pad - btnW - showW - 2 * gap) or Skin.S(130)
+            self.covW = covW
+            self.nameW = twoLine and (w - 2 * pad) or (w - 2 * pad - btnW - showW - covW - 3 * gap)
+            self:Refresh()          -- also makes the summary labels, placed below
             local y = pad
-            W.Place(self.bPreset, group, pad, y, math.min(Skin.S(280), w - 2 * pad), Skin.S(22))
+            W.Place(self.bPreset, group, pad, y, math.min(Skin.S(300), w - 2 * pad), Skin.S(22))
             y = y + Skin.S(30)
             W.Place(self.shaderLine, group, pad, y)
             y = y + Skin.S(16)
-            for i = 1, 3 do
+            for i = 1, 5 do
                 W.Place(self.warns[i], group, pad, y)
                 y = y + Skin.S(16)
             end
             y = y + Skin.S(4)
             W.Place(self.rolesLabel, group, pad, y)
+            y = y + Skin.S(20)
+            for l = 0, 8 do
+                local row = self.rows[l + 1]
+                if twoLine then
+                    W.Place(row.name, group, pad, y)
+                    y = y + Skin.S(16)
+                    W.Place(row.btn, group, pad, y, btnW, Skin.S(22))
+                    W.Place(row.show, group, pad + btnW + gap, y, showW, Skin.S(22))
+                    W.Place(row.cov, group, pad + btnW + showW + 2 * gap, y + Skin.S(4))
+                    y = y + Skin.S(28)
+                else
+                    W.Place(row.name, group, pad, y + Skin.S(4))
+                    W.Place(row.btn, group, pad + self.nameW + gap, y, btnW, Skin.S(22))
+                    W.Place(row.show, group, pad + self.nameW + btnW + 2 * gap, y, showW, Skin.S(22))
+                    W.Place(row.cov, group, pad + self.nameW + btnW + showW + 3 * gap, y + Skin.S(4))
+                    y = y + Skin.S(26)
+                end
+            end
+            W.Place(self.covNote, group, pad, y)
             y = y + Skin.S(22)
-            self.list:SetRect(pad, y, w - 2 * pad, Skin.S(20 * math.max(3, math.min(6, table.getn(self.roles)))))
-            y = y + Skin.S(20 * math.max(3, math.min(6, table.getn(self.roles)))) + pad
-            self.layer:Place(pad, y, w - 2 * pad)
-            y = y + Skin.S(48)
             local function Flow(buttons)
                 local bx = pad
                 for _, b in buttons do
@@ -220,7 +303,7 @@ Panels.Register{
                 end
                 y = y + Skin.S(26)
             end
-            Flow({ self.bShow, self.bHide, self.bAuto, self.bMatch })
+            Flow({ self.bHide, self.bDetect, self.bAssign, self.bMeasure })
             W.Place(self.note, group, pad, y)
             y = y + Skin.S(22)
             W.Place(self.knobsLabel, group, pad, y)
@@ -234,7 +317,7 @@ Panels.Register{
             Flow({ self.bTypes, self.bApply })
             W.Place(self.status, group, pad, y)
             y = y + Skin.S(20)
-            for i = 1, 8 do
+            for i = 1, 10 do
                 if self.summaryLabels[i] then W.Place(self.summaryLabels[i], group, pad, y) end
                 y = y + Skin.S(16)
             end
@@ -246,13 +329,18 @@ Panels.Register{
     end,
 }
 
---- The shell calls this four times a second: the panel only follows a change of the map's shader (its sliders would lose what is being typed if it refreshed everything every time).
+--- The shell calls this four times a second: the panel follows a change of the map's shader or of the layers' textures (its sliders would lose what is being typed if it refreshed everything
+--- every time).
 function Refresh()
     local Pn = live.recipes
     if not Pn or not Pn.w or not rawget(_G, 'ed_stratum_shader') then return end
     local name = ed_stratum_shader() or ''
-    if name ~= Pn.shaderShown then
+    local sig = Signature()
+    if name ~= Pn.shaderShown or sig ~= Pn.sigShown then
         Pn.shaderShown = name
+        Pn.plan = Recipes.Plan()
+        Pn.roles = Recipes.Roles()
+        state.cov = false
         Pn:Refresh()
     end
 end
