@@ -26,7 +26,10 @@ local function LayerColor(albedo)
     return r, g, b
 end
 
+local fullRange = false          -- the shader of the map reads a mask byte as it is (strata.lua Range), set by Render
+
 local function Decode(m)
+    if fullRange then return m / 255 end
     local e = 2 * m / 255 - 1
     if e < 0 then return 0 end
     return e
@@ -44,6 +47,7 @@ function Render(size)
     if not w then return nil end
     local mapSize = w - 1
     local Strata = import('/lua/editor/strata.lua')
+    fullRange = (Strata.Range() == 'full')
     -- the layers: colour and mask (the base layer has none: it is what the others leave free)
     local colors, masks = {}, {}
     colors[0] = { LayerColor(ed_stratum_layer(0)) }

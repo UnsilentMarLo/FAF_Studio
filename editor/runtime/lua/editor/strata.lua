@@ -45,6 +45,7 @@ CLEAR = '/textures/editor/layers/clear_albedo.dds'
 NONE_NORMAL = '/env/common/layers/none_normal.dds'
 
 local PI = 3.14159265
+local Shaders = import('/lua/editor/shaders.lua')
 
 --- The legacy terrain technique ('TTerrain') blends the painted layers 1..4 only; layers 5..8 need 'TTerrainXP' (what FAF maps use).
 local function EnsureShader(layer)
@@ -99,8 +100,8 @@ end
 local function Unpaintable(i)
     if i ~= 8 then return nil end
     local p = Profile()
-    if p.l8 == 'rough' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': its mask is the roughness multiplier (Convert layers... moves its paint to another layer)' end
-    if p.l8 == 'data' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': it only holds map-wide data (Convert layers... moves its paint to another layer)' end
+    if p.l8 == 'rough' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': its mask is the roughness multiplier' end
+    if p.l8 == 'data' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': it only holds map-wide data' end
     return nil
 end
 
@@ -343,8 +344,14 @@ function AutoPaint(i, erase)
         return nil
     end
     EnsureShader(i)
+    local why = Unpaintable(i)
+    if why then
+        notice = why
+        return nil
+    end
     local w, h, cell = MaskInfo()
     if not w then return nil end
+    local full = (Range() == 'full')
     local b = Brush
     local target = b.target / 100
     local frac = math.min(1, math.abs(b.strength) / 100)
@@ -356,13 +363,13 @@ function AutoPaint(i, erase)
             local z = math.floor((k - 1) / w)
             local slope, height = SlopeAt((x + 0.5) * cell, (z + 0.5) * cell)
             if slope >= b.minSlope and slope <= b.maxSlope and height >= b.minHeight and height <= b.maxHeight then
-                local e = Decode(before[k])
+                local e = Decode(before[k], full)
                 if erase then
                     e = e * (1 - frac)
                 elseif e < target then
                     e = e + (target - e) * frac
                 end
-                after[k] = Encode(e)
+                after[k] = Encode(e, full)
             end
         end
         return after
@@ -381,11 +388,15 @@ local strokeSeed = 0
 function BeginStroke()
     EnsureShader(Active)
     local w, h, cell = MaskInfo()
-    stroke = { orig = {}, base = {}, cov = {}, layer = Active, w = w, h = h, cell = cell, minX = nil, last = {} }
+    stroke = { orig = {}, base = {}, cov = {}, layer = Active, w = w, h = h, cell = cell, minX = nil, last = {}, full = (Range() == 'full') }
     pending = false
     strokeSeed = strokeSeed + 1
     local albedo = ed_stratum_layer(Active)
-    if not albedo or albedo == '' then
+    local why = Unpaintable(Active)
+    if why then
+        stroke.refused = true
+        notice = why
+    elseif not albedo or albedo == '' then
         stroke.refused = true
         notice = LayerName(Active) .. ' has no texture: pick one in the Layers panel first'
     end
@@ -452,6 +463,7 @@ function Dab(cx, cz, brush, weight, slot)
     local circle = (brush.mode == 'paint' or brush.mode == 'erase')
     local softMin = cell * 1.5              -- the edge is at least one and a half mask cells wide
     local scatter = b.scatter
+    local full = stroke.full            -- the shader reads a mask byte as it is (Range() == 'full') instead of saturate(2m - 1)
     for z = z0, z1 do
         local wz = (z + 0.5) * cell
         local dz = wz - cz
@@ -489,11 +501,17 @@ function Dab(cx, cz, brush, weight, slot)
                     cov = wt * frac
                     covT[key] = cov
                 end
-                -- Decode: the shader reads a byte m as saturate(2 * m / 255 - 1)
-                local e0 = 2 * base / 255 - 1
-                if e0 < 0 then e0 = 0 end
-                local e = 2 * old / 255 - 1
-                if e < 0 then e = 0 end
+                -- Decode: the shader reads a byte m as saturate(2 * m / 255 - 1) (full range shaders: m / 255)
+                local e0, e
+                if full then
+                    e0 = base / 255
+                    e = old / 255
+                else
+                    e0 = 2 * base / 255 - 1
+                    if e0 < 0 then e0 = 0 end
+                    e = 2 * old / 255 - 1
+                    if e < 0 then e = 0 end
+                end
                 if erase then
                     e = math.min(e, e0 * (1 - cov))
                 elseif e0 < target then
@@ -505,7 +523,11 @@ function Dab(cx, cz, brush, weight, slot)
                     new = 0
                 else
                     if e > 1 then e = 1 end
-                    new = math.floor((e + 1) / 2 * 255 + 0.5)
+                    if full then
+                        new = math.floor(e * 255 + 0.5)
+                    else
+                        new = math.floor((e + 1) / 2 * 255 + 0.5)
+                    end
                 end
                 if new ~= old then
                     if origT[key] == nil then origT[key] = old end

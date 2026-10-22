@@ -190,7 +190,10 @@ end
 -- layer's visible share is its mask value times what the layers above it leave free (the masks "subtract" from the ones below); the cell takes the type of
 -- the layer with the largest share, the base layer's share being what nothing covers.
 
+local fullRange = false          -- the shader of the map reads a mask byte as it is (strata.lua Range), set by Generate
+
 local function Decode(m)
+    if fullRange then return m / 255 end
     local e = 2 * m / 255 - 1
     if e < 0 then return 0 end
     return e
@@ -251,6 +254,7 @@ function Generate(opts)
     local gw, gh = ed_tt_info()
     local mw, mh = ed_stratum_info()
     if not gw or not mw then return nil end
+    fullRange = (import('/lua/editor/strata.lua').Range() == 'full')
     local masks = {}
     for k = 1, 8 do
         local albedo = ed_stratum_layer(k)
