@@ -444,9 +444,10 @@ end
 
 local function IconPath(id) return '/textures/ui/common/icons/units/' .. string.upper(id) .. '_icon.dds' end
 
---- The icon of the game data.
+--- The icon of the game data (or of the mod the unit comes from: units.lua IconPath looks in the folder of the unit's blueprint first).
 function Shipped(id)
-    local disk = ed_vfs_to_disk(IconPath(id)) or ed_vfs_to_disk(string.lower(IconPath(id)))
+    local path = import('/lua/editor/units.lua').IconPath(id) or IconPath(id)
+    local disk = ed_vfs_to_disk(path) or ed_vfs_to_disk(string.lower(path))
     if not disk then return nil, 'the game has no icon for ' .. id end
     local px, w, h, mips, fourcc, bytes = ed_dds_read(disk)
     if not px then return nil, w end
@@ -537,6 +538,7 @@ function Write(project, id, r, mips)
     local path = Bp.ROOT .. '/' .. project .. '/textures/ui/common/icons/units/' .. string.lower(id) .. '_icon.dds'
     local bytes, why = ed_dds_write(path, r.w, r.h, r.px, mips or 1)
     if not bytes then return nil, why end
+    pcall(function() import('/lua/editor/units.lua').IconRefresh() end)      -- (the unit browser finds the new icon)
     return path, bytes
 end
 

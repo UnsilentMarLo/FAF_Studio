@@ -73,6 +73,7 @@ end
 local ICON_DIR = '/textures/ui/common/icons/units/'
 local GENERIC_ICONS = { land = true, air = true, sea = true, amph = true, naval = true, default = true }
 local iconCache = {}            -- id -> { path | false, at }
+local meshCache = {}            -- id -> vfs path | false
 local iconMods = false          -- { at, files = { lower file name -> vfs path } }: the icon files of every mod
 local ICON_MISS_TTL = 6         -- seconds a "no icon" answer is trusted (a project can write one while the editor runs)
 local ICON_MODS_TTL = 30
@@ -180,6 +181,14 @@ end
 
 --- The mesh file of a unit's first level of detail, a vfs path | nil (the icon fallback renders it). Relative names are read from the folder of the blueprint.
 function MeshFile(id)
+    local cached = meshCache[id]
+    if cached ~= nil then return cached or nil end
+    local path = FindMeshFile(id)
+    meshCache[id] = path or false
+    return path
+end
+
+function FindMeshFile(id)
     local bp = Blueprint(id)
     local display = bp and bp.Display
     if not display then return nil end
@@ -202,6 +211,7 @@ end
 --- Forgets the icon answers (an icon was written, a mod was loaded).
 function IconRefresh()
     iconCache = {}
+    meshCache = {}
     iconMods = false
 end
 
