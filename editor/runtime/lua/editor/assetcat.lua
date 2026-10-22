@@ -353,10 +353,13 @@ function Pick(entry)
         SelectTool('unit')
     elseif entry.kind == 'props' then
         import('/lua/editor/props.lua').Active = entry.key
-        SelectTool('prop')
+        -- (an active prop tool, the brush, the eraser or Place prop, stays: picking a prop does not change the tool)
+        local now = import('/lua/editor/ui.lua').State.tool
+        if now ~= 'prop_place' and now ~= 'prop_erase' then SelectTool('prop') end
     elseif entry.kind == 'decals' then
         import('/lua/editor/decals.lua').Active = entry.key
-        SelectTool('decal')
+        local now = import('/lua/editor/ui.lua').State.tool
+        if now ~= 'decal_place' and now ~= 'decal_erase' then SelectTool('decal') end
     elseif entry.kind == 'markers' then
         import('/lua/editor/tools.lua').SetMarkerType(entry.key)
         SelectTool('marker')

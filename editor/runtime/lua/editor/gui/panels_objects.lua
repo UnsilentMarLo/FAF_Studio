@@ -343,6 +343,11 @@ Panels.Register{
             table.insert(P.updaters, function() b:SetOn(get()) end)
             y = y + Skin.S(28)
         end
+        --- 'Limit to map bounds' (areas stay inside the map while drawn, moved, resized and typed) and, narrowing it, 'Limit to playable area' (tools.lua AreaBounds).
+        local function LimitToggles()
+            Toggle('Limit to map bounds', function() return Tools.LimitAreas end, function(v) Tools.SetLimitAreas(v) end)
+            Toggle('Limit to playable area', function() return Tools.LimitPlayable end, function(v) Tools.SetLimitPlayable(v) end)
+        end
         local function Setting(S, label, key, min, max, step, fmt)
             return { label = label, min = min, max = max, step = step, fmt = fmt, get = function() return S[key] end, set = function(v) S[key] = v end }
         end
@@ -498,6 +503,7 @@ Panels.Register{
             end
             table.insert(P.updaters, UpdateSize)
             Gap(6)
+            LimitToggles()
             Action('Delete', function() Tools.DeleteSelection() end)
         end
 
@@ -599,6 +605,8 @@ Panels.Register{
             elseif kind == 'area' then
                 Title('Area tool')
                 Help('Drag in the world to draw a rectangle. With the Select area tool you can move it, or drag its handles to resize.')
+                Gap(6)
+                LimitToggles()
             elseif tool and tool.id == 'army' then
                 Title('Start position tool')
                 ReadOnly('Next', function() return import('/lua/editor/armies.lua').NextName() end)
@@ -648,6 +656,8 @@ Panels.Register{
                     Help('Select marker: click a marker to select it, drag on empty ground for a box, Shift adds or removes. Drag a selected marker to move it. Areas are not picked here: use the Select area tool.')
                 elseif tool and tool.id == 'area_select' then
                     Help('Select area: click inside an area to select it (the smallest one under the pointer), drag on empty ground for a box, Shift adds or removes. Drag a selected area to move it, or its handles to resize. Markers are not picked here: use the Select marker tool.')
+                    Gap(6)
+                    LimitToggles()
                 else
                     Help('Click a marker or area to select it. Drag on empty ground to box select; Shift adds or removes.')
                 end
@@ -783,19 +793,31 @@ Panels.Register{
         live.validation = P
         P.summary = W.Label(group, '', Skin.S(10), Skin.S(8), { color = Skin.color.textDim })
         P.run = W.Button(group, 'Check now', 0, 0, Skin.S(90), Skin.S(22), function() Validate.Run() ModCheck.Run() end)
-        P.snap = W.Button(group, 'Snap to grid', 0, 0, Skin.S(100), Skin.S(22), function() Validate.FixAlignment() end)
-        P.pull = W.Button(group, 'Pull inside', 0, 0, Skin.S(84), Skin.S(22), function() Validate.PullMarkersInside() end)
+        -- the fixes move markers or write mod files: not in a read-only workspace (Review), where the buttons are dimmed and say why
+        local function Fixing(fn)
+            return function()
+                if Tools.ReadOnly then UI.Say('read-only workspace: switch to Objects or Terrain to fix this') return end
+                fn()
+            end
+        end
+        P.snap = W.Button(group, 'Snap to grid', 0, 0, Skin.S(100), Skin.S(22), Fixing(function() Validate.FixAlignment() end),
+            { tip = function() return Tools.ReadOnly and 'Read-only workspace: switch to Objects or Terrain to move markers onto the build grid.' or nil end })
+        P.pull = W.Button(group, 'Pull inside', 0, 0, Skin.S(84), Skin.S(22), Fixing(function() Validate.PullMarkersInside() end),
+            { tip = function() return Tools.ReadOnly and 'Read-only workspace: switch to Objects or Terrain to move markers back into the map.' or nil end })
+        if Tools.ReadOnly then
+            for _, b in { P.snap, P.pull } do b.label:SetColor(Skin.color.textDim) end
+        end
         -- problems of a mod project's new units can carry a fix (unitcheck.lua: write the files, add the builders ...): the button runs the selected one, `fixAll` every one
         P.modSel = false
-        P.fix = W.Button(group, 'Fix', 0, 0, Skin.S(150), Skin.S(22), function()
+        P.fix = W.Button(group, 'Fix', 0, 0, Skin.S(150), Skin.S(22), Fixing(function()
             local issue = P.modSel and ModCheck.Issues[P.modSel]
             if issue and issue.fix then
                 pcall(issue.fix)
                 ModCheck.Touch()
                 ModCheck.Run()
             end
-        end)
-        P.fixAll = W.Button(group, 'Fix all', 0, 0, Skin.S(60), Skin.S(22), function()
+        end))
+        P.fixAll = W.Button(group, 'Fix all', 0, 0, Skin.S(60), Skin.S(22), Fixing(function()
             local fixes = {}
             for _, issue in ModCheck.Issues do
                 if issue.fix then table.insert(fixes, issue.fix) end
@@ -803,7 +825,7 @@ Panels.Register{
             for _, fix in fixes do pcall(fix) end
             ModCheck.Touch()
             ModCheck.Run()
-        end)
+        end))
         P.list = W.VirtualList(group, {
             -- the map checks first, then the problems of the open mod project (modcheck.lua)
             getCount = function() return table.getn(Validate.Issues) + table.getn(ModCheck.Issues) end,

@@ -1,7 +1,10 @@
 -- Marker visuals, drawn in the UI lane so they follow the pointer every frame while a marker is dragged: the template's prop mesh
--- (what the GPG editor showed) as a WorldMesh, and for Mass / Hydrocarbon the deposit mesh and the ground splat like the game's own
--- ScenarioUtilities.CreateResources (the splat is a ground decal of the overlay renderer). Called every frame by overlay.lua while editing.
--- (They used to be sim props: every move waited for a sim tick, and moved splats were left behind.)
+-- (what the GPG editor showed) as a WorldMesh, except for Mass / Hydrocarbon, which show what the game shows instead: the deposit mesh (the little rock) and the
+-- ground splat of ScenarioUtilities.CreateResources (the splat is a ground decal of the overlay renderer, laid onto the terrain). Called every frame by overlay.lua
+-- while editing. (They used to be sim props: every move waited for a sim tick, and moved splats were left behind.)
+-- The game makes its own copy of the rock and the splat when a map loads; they cannot be moved or removed afterwards, so the editing sim does not make them
+-- (schook/lua/sim/scenarioutilities.lua CreateResources) and a test run gets them for the markers as they are then (simcallbacks.lua EdSetPlay, DepositList below):
+-- there is exactly one representation of a resource marker at any time.
 
 local Map = import('/lua/editor/map.lua')
 local MC = import('/lua/editor/markercheck.lua')
@@ -58,7 +61,7 @@ local function Build(name, m)
     local pos = Vector(x, y, z)
 
     local meshName = MeshOf(m.prop)
-    if meshName then
+    if meshName and not dep then          -- a resource marker is its deposit mesh and splat, no marker prop on top
         local mesh = WorldMesh()
         mesh:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = MARKER_SCALE, LODCutoff = LOD_CUTOFF })
         mesh:SetStance(pos, EulerToQuaternion(0, yaw, 0))
@@ -123,6 +126,20 @@ function Ghost(spots, propBp)
     end
     for i = n + 1, table.getn(ghosts) do ghosts[i]:SetHidden(true) end
     ghostShown = n
+end
+
+--- The resource markers of the document as { type, x, y, z } (Mass / Hydrocarbon): what a test run needs to create the deposit props and splats the editing sim
+--- left out (ui.lua SetMode sends them with EdSetPlay).
+function DepositList()
+    local list = {}
+    local doc = Map.Doc
+    if not doc then return list end
+    for _, m in doc.save.MasterChain._MASTERCHAIN_.Markers do
+        if DEPOSITS[m.type] and m.position then
+            table.insert(list, { type = m.type, x = m.position[1], y = m.position[2], z = m.position[3] })
+        end
+    end
+    return list
 end
 
 --- Drops every marker object (play mode, shutdown).

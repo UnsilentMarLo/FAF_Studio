@@ -77,8 +77,16 @@ local function Info(kind)
 end
 
 --- The build grid: a unit stands where its footprint's corners lie on whole cells (unitfit.Snap), things that move freely snap to half a unit.
+--- Each kind has its own switch (Tool settings panel: Units.SnapToGrid() ...); with it off the thing stands exactly where the pointer is.
 local function Snap(info, x, z)
-    if info.unit and info.bp then return Fit().Snap(info.bp, x, z, 0) end
+    if info.unit then
+        if not Units().SnapToGrid() then return x, z end
+        if info.bp then return Fit().Snap(info.bp, x, z, 0) end
+    elseif info.decal then
+        if not Decals().SnapToGrid() then return x, z end
+    elseif not Props().SnapToGrid() then
+        return x, z
+    end
     return math.floor(x * 2 + 0.5) / 2, math.floor(z * 2 + 0.5) / 2
 end
 
@@ -187,6 +195,14 @@ end
 
 local function Cursor(info)
     if dragging and dragPos then return Snap(info, dragPos[1], dragPos[2]) end
+    -- The point under the pointer is worked out from the pointer's screen position on every frame, like a click does (ui.lua OnWorldPress): GetMouseWorldPos is only
+    -- refreshed by a mouse move, so while the wheel zoomed the camera toward the pointer the preview stayed at the old world point and slid away from the mouse.
+    local sp = GetMouseScreenPos()
+    local sx, sy = sp and (sp[1] or sp.x), sp and (sp[2] or sp.y)
+    if sx and sy then
+        local hx, _, hz = import('/lua/editor/meshview.lua').ScreenRay(sx, sy)
+        if hx then return Snap(info, hx, hz) end
+    end
     local pos = GetMouseWorldPos()
     if not pos then return nil end
     return Snap(info, pos[1], pos[3])
@@ -565,6 +581,7 @@ function UpdateMoves(ui)
     local skip
     if tool == 'prop_select' then
         local off = Props().DragOffset
+        if off then off = { Props().SnapDelta(off[1], off[2]) } end        -- the preview stands where the prop will land (Tool settings > Props > snap)
         if off or turn then
             for _, p in Props().Selection do
                 table.insert(list, { id = p.bp, x = p.x + (off and off[1] or 0), z = p.z + (off and off[2] or 0), heading = Props().SelectedHeading(p) + math.rad(-(turn or 0)) })

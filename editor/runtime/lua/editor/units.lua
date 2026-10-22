@@ -364,9 +364,14 @@ local function Transform(label, change)
     return true
 end
 
+--- Tool settings (toolopts.lua): whether units snap to the build grid (default on), and the step in degrees of a stepped rotation (0 = free).
+function SnapToGrid() return import('/lua/editor/toolopts.lua').SnapToGrid('units') end
+function RotationStep() return import('/lua/editor/toolopts.lua').RotationStep('units') end
+
 --- A move of the selection by (dx, dz) put on the build grid: the first selected unit goes to the nearest grid spot of its footprint (unitfit.Snap: odd footprints on a cell centre, even
 --- ones on a corner) and the others move by the same amount, so a group keeps its layout. Without a selection, or when the blueprint is unknown, the delta is kept.
 function SnapDelta(dx, dz)
+    if not SnapToGrid() then return dx, dz end          -- Tool settings > Units: snapping is off
     for _, sel in Selection do
         local u = Find(sel)
         if u then

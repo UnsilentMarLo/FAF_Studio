@@ -7,6 +7,11 @@
 --   Find(id)             one entry (an id nobody knows gets a plain entry)
 --   Current()            the shader of the open map;   Set(id) -> true | nil, message     changes it (the terrain re-reads the technique on the next frame)
 --   Discover()           the composite terrain techniques found in effects/terrain.fx: { name = normalsTechnique }
+--   Profile(id)          what the mask bytes and layers mean for a shader: { range = 'half' | 'full' (how the albedo pass reads a mask byte: saturate(2m - 1) or m), painted = 4 | 7 | 8 (painted layers it blends),
+--                          l8 = 'paint' | 'rough' | 'data' | 'none' (what layer 8 is: a painted layer, the roughness multiplier mask, map-wide data in its textures, not drawn),
+--                          upper = 'overlay' | 'specular' | 'atlas', alpha = 'spec' | 'matte' | 'glow' | 'unused' (the albedo alpha of the layers), supported, reason }
+--   RangeOf(id)          'half' or 'full': the encoding of the paint masks a shader reads (strata.lua uses it for every mask it reads or writes)
+--   Rows(id)             the layer table of a shader: { { layer, albedo, normal }, ... } Base, Layer 1-8, Upper;  Notes(id): the lines under it
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 

@@ -144,6 +144,18 @@ Panels.Register{
             W.Slider(group, { label = 'Falloff % (0 flat, 100 full)', min = 0, max = 100, step = 1, fmt = '%d',
                 get = function() return B.falloff * 100 end, set = function(v) B.falloff = v / 100 end }),
         }
+        -- the noise brush's own settings (shown while the Noise tool is active)
+        P.noise = {
+            W.Slider(group, { label = 'Noise scale (units)', min = 2, max = 64, step = 1, fmt = '%d',
+                tip = 'The size of the bumps the noise brush makes, in map units. Small values give fine, close bumps; large values give broad hills.',
+                get = function() return B.noiseScale end, set = function(v) B.noiseScale = v end }),
+            W.Slider(group, { label = 'Octaves', min = 1, max = 4, step = 1, fmt = '%d',
+                tip = 'How many layers of noise are added. Each further layer has half the bump size and adds finer detail.',
+                get = function() return B.noiseOctaves end, set = function(v) B.noiseOctaves = v end }),
+            W.Slider(group, { label = 'Roughness', min = 0.3, max = 0.7, step = 0.05, fmt = '%.2f',
+                tip = 'How strong the finer layers are. Low values stay smooth; high values add rough detail on top of the big bumps.',
+                get = function() return B.noiseRoughness end, set = function(v) B.noiseRoughness = v end }),
+        }
         P.title = W.Label(group, 'Profile', 0, 0, { color = Skin.color.textDim })
         for i = 1, 48 do
             local bar = Bitmap(group)
@@ -157,6 +169,12 @@ Panels.Register{
 
         function P:Refresh()
             for _, s in P.sliders do s:Refresh() end
+            local noiseOn = (B.mode == 'noise')
+            if noiseOn ~= P.noiseShown and P.w then
+                P:OnResize(P.w, P.h)          -- the noise sliders come and go with the tool (OnResize calls Refresh again)
+                return
+            end
+            if noiseOn then for _, s in P.noise do s:Refresh() end end
             -- the brush's weight from the centre (left) to the rim (right), in the brightness the world preview uses
             local mode = UI.State.tool
             local ref = (mode == 'flatten' or mode == 'smooth') and 1.0 or 6.0
@@ -185,9 +203,19 @@ Panels.Register{
         function P:OnResize(w, h)
             local pad = Skin.S(10)
             local y = pad
+            P.w, P.h = w, h
             for _, s in P.sliders do
                 s:Place(pad, y, w - 2 * pad)
                 y = y + Skin.S(52)
+            end
+            P.noiseShown = (B.mode == 'noise')
+            for _, s in P.noise do
+                if P.noiseShown then
+                    s:Place(pad, y, w - 2 * pad)
+                    y = y + Skin.S(52)
+                else
+                    s:Place(-20000, -20000, Skin.S(100))
+                end
             end
             W.Place(P.title, group, pad, y)
             P.gx, P.gy, P.gw, P.gh = pad, y + Skin.S(20), w - 2 * pad, Skin.S(56)

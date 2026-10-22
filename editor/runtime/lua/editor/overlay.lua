@@ -99,7 +99,17 @@ local function Available()
 end
 
 local function GroundHeight(x, z)
-    local h = ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or 0
+    -- the ground between the height samples (one per world unit) is a slope: reading the nearest sample made every outline a staircase that sank into the ground and floated
+    -- above it by up to half a step, which showed when the camera was close
+    local ix, iz = math.floor(x), math.floor(z)
+    local h = ed_terrain_get(ix, iz) or 0
+    local fx, fz = x - ix, z - iz
+    if fx > 0.001 or fz > 0.001 then
+        local h10 = ed_terrain_get(ix + 1, iz) or h
+        local h01 = ed_terrain_get(ix, iz + 1) or h
+        local h11 = ed_terrain_get(ix + 1, iz + 1) or h
+        h = (h * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz
+    end
     return MeshView.GroundAt(x, z, h)          -- lines and rings hug the visible ground of a mesh map
 end
 
