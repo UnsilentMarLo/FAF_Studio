@@ -4,6 +4,8 @@
 -- R = perlin 65 x 65 seed=4 scale=14 octaves=3 (0..1 erodibility), F = const 33 x 33 value=10. The checksum is FNV-1a over the float32 bit patterns (ed_field_checksum), valid for the editor build (MSVC x64, no FMA contraction).
 
 -- The cases from hydraulic_pinned on cover the map edge option (edge=pinned is the old behaviour) and the settings that vary the erosion or keep the terrain's range and volume.
+-- Hillslope creep (creep = 2 passes per round by default) changed every droplet case below except the creep=0 one: droplet_creep0 carries the checksum `droplet` had before creep existed (the old
+-- solver is unchanged), droplet_creep4 / droplet_creep_mask cover a stronger creep and creep with a mask and variation (protect, hardness).
 -- The droplet cases use the default of 32 feedback rounds (they had 4: droplet_rounds4 is the old behaviour, its checksum is the one `droplet` had before), the stream cases the
 -- smooth cut share F / (1 + F) and the valley width that grows with the catchment (width_vary, route_every).
 
@@ -36,6 +38,9 @@ droplet_conserve|erode_droplet|density=0.8,seed=3,conserve=1,max_change=2|a=H|95
 stream_jitter|erode_stream|iterations=6,jitter=0.5,vary=0.5,rain_vary=0.5,protect=0.5,seed=2|a=H|bc27d518280d70af
 droplet_rounds4|erode_droplet|density=0.8,seed=3,rounds=4|a=H|f7485e61e7eed0fa
 droplet_rounds1|erode_droplet|density=0.8,seed=3,rounds=1|a=H|b2c9118e13578f7c
+droplet_creep0|erode_droplet|density=0.8,seed=3,creep=0|a=H|3f798e896678586b
+droplet_creep4|erode_droplet|density=0.8,seed=3,creep=4|a=H|0000000000000000
+droplet_creep_mask|erode_droplet|density=0.8,seed=3,creep=3,vary=0.5,protect=0.5,drop_vary=0.5|a=H,mask=R|0000000000000000
 stream_width0|erode_stream|iterations=6,width_vary=0|a=H|bb598651e5b92649
 stream_route3|erode_stream|iterations=6,route_every=3|a=H|7c91d68825f08555
 stream_hierarchy|erode_stream|iterations=6,k=0.1,width_vary=1,widen=2,area_min=20|a=H|2d75ed50e18c29bc
