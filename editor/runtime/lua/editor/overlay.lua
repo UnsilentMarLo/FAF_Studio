@@ -98,9 +98,12 @@ local function Available()
     return rawget(_G, 'ed_overlay_set') ~= nil
 end
 
-local function GroundHeight(x, z)
+local function GroundHeight(x, z, coarse)
     -- the ground between the height samples (one per world unit) is a slope: reading the nearest sample made every outline a staircase that sank into the ground and floated
-    -- above it by up to half a step, which showed when the camera was close
+    -- above it by up to half a step, which showed when the camera was close. `coarse` (the long outlines of big areas, seen from far) keeps the one read.
+    if coarse then
+        return MeshView.GroundAt(x, z, ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or 0)
+    end
     local ix, iz = math.floor(x), math.floor(z)
     local h = ed_terrain_get(ix, iz) or 0
     local fx, fz = x - ix, z - iz
@@ -121,9 +124,9 @@ end
 
 local LIFT = 0.15     -- lines float a little above the ground
 
-local function Push(pts, x, z)
+local function Push(pts, x, z, coarse)
     table.insert(pts, x)
-    table.insert(pts, GroundHeight(x, z) + LIFT)
+    table.insert(pts, GroundHeight(x, z, coarse) + LIFT)
     table.insert(pts, z)
 end
 
@@ -143,15 +146,17 @@ local function Circle(cx, cz, r, segs, base, span)
     return pts
 end
 
---- Rectangle outline hugging the terrain: every side is sampled about every 2 world units.
+--- Rectangle outline hugging the terrain: every side is sampled about every 2 world units, a small one (a footprint or skirt of a structure, which is looked at from
+--- close by) every half unit with the ground read between the height samples, so it lies on the slope instead of cutting across it.
 local function Box(x0, z0, x1, z1)
     local pts = {}
+    local small = math.max(x1 - x0, z1 - z0) <= 12
     local function Side(ax, az, bx, bz)
         local len = math.sqrt((bx - ax) * (bx - ax) + (bz - az) * (bz - az))
-        local n = math.max(2, math.min(120, math.ceil(len / 2)))
+        local n = math.max(2, math.min(120, math.ceil(len / (small and 0.5 or 2))))
         for i = 0, n - 1 do
             local f = i / n
-            Push(pts, ax + (bx - ax) * f, az + (bz - az) * f)
+            Push(pts, ax + (bx - ax) * f, az + (bz - az) * f, not small)
         end
     end
     Side(x0, z0, x1, z0)

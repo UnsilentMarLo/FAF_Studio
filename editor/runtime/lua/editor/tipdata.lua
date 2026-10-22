@@ -856,6 +856,7 @@ Command = {
     ["assets.prune"] = "Delete asset browser thumbnails made by older versions of the thumbnail recipe (current ones are kept).",
     ["assets.window"] = "Open the asset browser in its own window.",
     ["camera.focus"] = "Move the camera to the selection.",
+    ["camera.diagnostics"] = "Save the camera position, field of view and the LOD numbers of a selected unit to a file, for a report of vanishing units or props.",
     ["camera.go1"] = "Move the camera to bookmark 1.",
     ["camera.go2"] = "Move the camera to bookmark 2.",
     ["camera.go3"] = "Move the camera to bookmark 3.",

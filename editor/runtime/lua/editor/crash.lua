@@ -189,6 +189,10 @@ function Diagnostics()
             Add(string.format('monitor %d: %dx%d at %d,%d%s', i, w or 0, h or 0, x or 0, y or 0, (primary == 1 or primary == true) and ' (primary)' or ''))
         end
     end
+    local okCam, camLines = pcall(function() return import('/lua/editor/camera.lua').Diagnostics() end)
+    if okCam and type(camLines) == 'table' then
+        for _, line in camLines do Add(line) end
+    end
     local pending = PendingAutosave()
     if pending then Add('unsaved autosave of: ' .. tostring(pending.map)) end
     local settings = ed_read_file(UserData.Path('settings.lua'))
