@@ -255,9 +255,9 @@ Panels.Register{
             -- table columns: name | kind button | Show | coverage; a narrow panel puts the name on a line of its own
             local btnW, showW = Skin.S(130), Skin.S(44)
             local twoLine = w < Skin.S(420)
-            local covW = twoLine and (w - 2 * pad - btnW - showW - 2 * gap) or Skin.S(130)
+            local covW = Skin.S(130)
             self.covW = covW
-            self.nameW = twoLine and (w - 2 * pad) or (w - 2 * pad - btnW - showW - covW - 3 * gap)
+            self.nameW = twoLine and (w - 2 * pad - covW - gap) or (w - 2 * pad - btnW - showW - covW - 3 * gap)
             self:Refresh()          -- also makes the summary labels, placed below
             local y = pad
             W.Place(self.bPreset, group, pad, y, math.min(Skin.S(300), w - 2 * pad), Skin.S(22))
@@ -275,10 +275,10 @@ Panels.Register{
                 local row = self.rows[l + 1]
                 if twoLine then
                     W.Place(row.name, group, pad, y)
+                    W.Place(row.cov, group, pad + self.nameW + gap, y)
                     y = y + Skin.S(16)
                     W.Place(row.btn, group, pad, y, btnW, Skin.S(22))
                     W.Place(row.show, group, pad + btnW + gap, y, showW, Skin.S(22))
-                    W.Place(row.cov, group, pad + btnW + showW + 2 * gap, y + Skin.S(4))
                     y = y + Skin.S(28)
                 else
                     W.Place(row.name, group, pad, y + Skin.S(4))
