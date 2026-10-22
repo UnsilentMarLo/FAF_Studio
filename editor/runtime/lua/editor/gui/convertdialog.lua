@@ -212,8 +212,8 @@ function Open(targetId, done)
         Keep(d:Button('Cancel', 134, buttonsY, 100, BUTTON_H, function() Dialog.Close() end, { tip = 'Close without changing anything.' }))
     end
 
-    function state.Run()
-        local report, why = Conv.Run(plan, { layer8 = state.choice, mergeInto = state.mergeInto, upper = state.upper })
+    --- Draws the result of a conversion (or its failure) in place of the options.
+    function state.ShowReport(report, why)
         Clear()
         -- the report gets the room of the options block too
         view:SetRect(14, TOP, INNER, buttonsY - 8 - TOP)
@@ -222,7 +222,6 @@ function Open(targetId, done)
             view:Text(tostring(why), { color = c.error, size = 'text' })
             view:Show()
             CloseButton()
-            Say('conversion failed: ' .. tostring(why))
             return
         end
         state.report = report
@@ -233,6 +232,15 @@ function Open(targetId, done)
         end
         view:Show()
         CloseButton()
+    end
+
+    function state.Run()
+        local report, why = Conv.Run(plan, { layer8 = state.choice, mergeInto = state.mergeInto, upper = state.upper })
+        state.ShowReport(report, why)
+        if not report then
+            Say('conversion failed: ' .. tostring(why))
+            return
+        end
         Say(report.status)
         if done then done(report) end
     end

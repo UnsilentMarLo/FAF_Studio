@@ -68,6 +68,121 @@ function Run()
     local SB = import('/lua/editor/gui/shaderbrowser.lua')
     local pool = { Shaders.Find('TTerrain'), Shaders.Find('TTerrainXP'), Shaders.Find('Terrain250') }
     check('the shader search needs every word', table.getn(SB.Filter(pool, 'half mask')) >= 1 and table.getn(SB.Filter(pool, 'half qqqzz')) == 0)
+    -- layout: no control may reach outside its dialog (Maui does not clip), no text outside its view, no huge gaps between blocks
+    local Skin = import('/lua/editor/gui/skin.lua')
+    local TextView = import('/lua/editor/gui/textview.lua')
+    local function Outside(d, controls, what)
+        local gl, gt = d.group.Left(), d.group.Top()
+        local gr, gb = gl + d.width, gt + d.height
+        for _, ctl in controls do
+            local ok, l, t, r, b = pcall(function() return ctl.Left(), ctl.Top(), ctl.Right(), ctl.Bottom() end)
+            if ok and (l < gl or t < gt or r > gr + 1 or b > gb + 1) then
+                return what .. ' control at ' .. l .. ',' .. t .. ' .. ' .. r .. ',' .. b .. ' outside ' .. gl .. ',' .. gt .. ' .. ' .. gr .. ',' .. gb
+            end
+        end
+        return nil
+    end
+    local function OutsideView(d, v)
+        local vl, vt = d.group.Left() + Skin.S(v.x), d.group.Top() + Skin.S(v.y)
+        local vr, vb = vl + Skin.S(v.w), vt + Skin.S(v.h)
+        for _, ctl in v.labels do
+            local l, t, r, b = ctl.Left(), ctl.Top(), ctl.Right(), ctl.Bottom()
+            if l < vl or t < vt or r > vr or b > vb then
+                return 'a text line at ' .. l .. ',' .. t .. ' .. ' .. r .. ',' .. b .. ' outside its view ' .. vl .. ',' .. vt .. ' .. ' .. vr .. ',' .. vb
+            end
+        end
+        return nil
+    end
+    local function Gaps(v)
+        -- the space between two blocks is a small fixed padding, never a block of reserved height
+        local prev
+        for _, item in v.items do
+            if not item.spacer then
+                if prev and item.y - (prev.y + prev.h) > Skin.S(24) then return 'gap of ' .. (item.y - (prev.y + prev.h)) .. ' px between two blocks' end
+                prev = item
+            end
+        end
+        return nil
+    end
+    local function ScanView(d, v, what)
+        local bad = OutsideView(d, v) or Gaps(v)
+        local top = v.off
+        v:ScrollTo(v.maxOff)
+        bad = bad or OutsideView(d, v)
+        v:ScrollTo(math.floor(v.maxOff / 2))
+        bad = bad or OutsideView(d, v)
+        v:ScrollTo(top)
+        return bad and (what .. ': ' .. bad) or nil
+    end
+    -- a long text: several paragraphs, a word wider than the view, a table row
+    do
+        local d = Dialog.Open('layout', 420, 320)
+        local v = TextView.New(d, 14, 36, 392, 200)
+        v:Heading('A heading', { before = 0 })
+        for i = 1, 3 do
+            local words = {}
+            for k = 1, 70 do table.insert(words, 'word' .. k) end
+            v:Text(table.concat(words, ' '))
+        end
+        v:Bullet('A bullet with a long text that wraps over several lines of the view and keeps its indent: ' .. string.rep('lorem ipsum ', 12))
+        v:Text(string.rep('x', 120))
+        v:Row({ { 'Layer 8', 56 }, { string.rep('albedo ', 14), 150 }, { string.rep('normal ', 10), 120 } })
+        v:Show()
+        check('a long text is taller than the view and scrolls', v.contentH > 200 and v.maxOff > 0, v.contentH)
+        check('a long text stays inside its view', ScanView(d, v, 'long text') == nil, ScanView(d, v, 'long text'))
+        check('a long text stays inside the dialog', Outside(d, v:Controls(), 'long text') == nil, Outside(d, v:Controls(), 'long text'))
+        v:Clear()
+        v:Text('one short line')
+        v:Show()
+        check('a short text needs no scrolling', v.maxOff == 0 and not v.barShown)
+        v:Destroy()
+        Dialog.Close()
+    end
+    -- the shader browser: every shader, both tabs
+    do
+        local B = SB.Open(function() end)
+        local bad
+        for i, sh in B.all do
+            B.sel = i
+            for _, tab in { 'layers', 'notes' } do
+                B.tab = tab
+                B.show()
+                bad = bad or Outside(B.dialog, B.controls(), sh.id .. ' (' .. tab .. ')') or ScanView(B.dialog, B.view, sh.id .. ' (' .. tab .. ')')
+            end
+        end
+        check('every shader fits in the shader browser (' .. table.getn(B.all) .. ' shaders, Layers and Notes)', bad == nil, bad)
+        -- the warning of a refused conversion wraps inside the dialog
+        B.sel = false
+        for i, sh in B.all do
+            if sh.id == 'Terrain301' then B.sel = i end
+        end
+        if B.sel then
+            B.show()
+            check('the Terrain301 conversion warning stays inside the dialog', Outside(B.dialog, B.controls(), 'Terrain301') == nil)
+        end
+        Dialog.Close()
+    end
+    -- the convert dialog: the options view of every shader and a long result report
+    do
+        local CD = import('/lua/editor/gui/convertdialog.lua')
+        local bad
+        for _, sh in Shaders.List() do
+            if sh.profile and sh.profile.supported then
+                local st = CD.Open(sh.id)
+                bad = bad or Outside(st.dialog, st.controls(), 'convert to ' .. sh.id) or ScanView(st.dialog, st.view, 'convert to ' .. sh.id)
+                if not st.plan.refused then
+                    local long = string.rep('This line of the report is long and has to wrap inside the dialog without leaving it. ', 4)
+                    st.ShowReport({ lines = { { kind = 'done', text = 'Shader: A -> B.' }, { kind = 'done', text = long }, { kind = 'warn', text = long },
+                        { kind = 'warn', text = long }, { kind = 'warn', text = long }, { kind = 'warn', text = long }, { kind = 'warn', text = long } }, status = 'x' })
+                    bad = bad or Outside(st.dialog, st.controls(), 'result of ' .. sh.id) or ScanView(st.dialog, st.view, 'result of ' .. sh.id)
+                    st.ShowReport(nil, long)
+                    bad = bad or Outside(st.dialog, st.controls(), 'failure of ' .. sh.id)
+                end
+                Dialog.Close()
+            end
+        end
+        check('the convert dialog fits for every shader (options, result, failure)', bad == nil, bad)
+    end
     -- map sizes
     local Maps = import('/lua/editor/maps.lua')
     local i5 = Maps.SizeForKm(5)
