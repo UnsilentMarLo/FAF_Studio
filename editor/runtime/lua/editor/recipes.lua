@@ -1,21 +1,24 @@
 -- Stratum recipes (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T2): a recipe paints the texture layers of the map with the eight kinds of ground a landscape is made of, from height, slope,
 -- curvature, water and noise rules. Apply fills the paint masks (and, if asked, the terrain-type grid) in one undo step. The rules are the mask generator's (maskgen.lua).
 --
--- THE EIGHT ROLES. Every role has a SELECTION rule (where this kind of ground belongs) built from the map's own numbers, never fixed heights:
---   grass     open ground: land above the beach, not steep, below the snow line (only drawn when grass is NOT the base layer: the base is what is left)
---   dirt      patches: noise whose threshold is calibrated so the patches cover Dirt coverage (a share) of the flat ground
---   wet       wet ground: the strip along the waterline and the concave drainage lines (gullies)
---   sand      beach: the shore band of Beach half width, on gentle ground (without water: the lowest 6% of the land)
---   rock      cliffs: slope from Rock slope on, broken up by noise, solid from Cliff slope on
---   darkrock  cavities: steep ground that is concave (ambient-occlusion like) or in the lowest quarter of the land
---   highrock  peaks: steep or convex ground above High rock starts at (a percentile of the land heights)
---   snow      the top Snow covers share of the land heights (a percentile), not steep, with a breakup
--- Heights are PERCENTILES of the land heights (the cells above the water level) read from the field engine (Stats), noise thresholds are percentiles of the noise itself (NoiseAt), so
--- "snow covers the top 8%" and "dirt covers 25%" mean that on any map.
+-- THE EIGHT ROLES. Every role has a SELECTION rule (where this kind of ground belongs) built from the map's own numbers, never fixed heights. Every selection is made of WIDE SMOOTH RAMPS (a
+-- height or slope ramp goes from 0 to 1 over 10 to 25 percent of the relief or 15 to 25 degrees) and a blur of 3 units or more; noise never cuts a shape out, it only wobbles the thresholds
+-- of the ramps by a few percent (fractal noise of 40 to 160 units) so that edges are ragged but soft. Secondary kinds stay below full opacity, so the kind below shows through.
+--   grass     open ground: gentle ground above the beach and below the snow line (only drawn when grass is NOT the base layer: the base is what is left). A second grass layer is a soft partial mix
+--   dirt      a low contrast patchwork on flat ground: a wide smoothstep of fractal noise calibrated so that it covers Dirt coverage of the map, at most 0.85 opacity
+--   wet       wet ground: concave drainage lines (gullies) and the strip along the waterline, at most 0.7 opacity
+--   sand      beach: the shore band of Beach half width on gentle ground (only when the map has water; a dry map only has it in the desert style: dry low basins)
+--   rock      slopes: opacity rises with the slope from Rock slope (0) to Cliff slope (1)
+--   darkrock  occlusion: concave ground on slopes (the foot of cliffs, gullies), wide and blurred, at most 0.15 + 0.4 * Dark rock opacity
+--   highrock  altitude: a ramp from High rock starts at (share of the height range) up, strongest on steep and convex ground, still 0.3 on flat high ground
+--   snow      altitude: a ramp around the snow line (the top Snow covers share of the land), reduced on steep ground (it does not stay on cliffs), ragged but soft at the edge
+--
+-- Heights are PERCENTILES of the land heights (the cells above the water level, read from the field engine, Stats), the relief is the span from the 3rd to the 99.5th percentile, the noise
+-- thresholds come from the noise itself (NoiseAt), so "snow covers the top 8%" and "dirt covers 32%" mean that on any map.
 --
 -- ROLE DETECTION, NOT LAYER NUMBERS. Which layer holds which role is found from the textures (roledetect.lua: file name words, then the colour of a 16 x 16 reduction), corrected by the user
 -- per texture (the table in the panel). Plan() lists, per role, the layers that hold it. A role with no layer is skipped (a layer is never painted with a texture of the wrong kind). Two layers of
--- one role: the lower one gets the role's region, the others get noise patches inside it (variants). The BASE layer (0) can be any role: it has no mask and is the default ground of its role,
+-- one role: the lower one gets the role's region, the others get soft partial mixes (at most 0.55 opacity) of fractal noise inside it (variants). The BASE layer (0) can be any role: it has no mask and is the default ground of its role,
 -- so the recipe drops that role's own rule and lets the other roles claim their places (base sand: no beach rule, grass covers the interior; base snow: no snow rule, grass and dirt stay
 -- below the snow line; base rock: cliffs are what is left). The result does not depend on which layer number holds what.
 --
@@ -57,18 +60,15 @@ local function Rule(type, values, op, invert)
     return r
 end
 
-local function Slope(lo, hi, soft, op) return Rule('slope', { lo = math.max(0, lo), hi = math.min(90, hi), soft = soft or 5 }, op) end
-local function Above(st, h, soft, op) return Rule('height', { lo = h, hi = st.hmax + 1000, soft = soft }, op) end
-local function Below(st, h, soft, op) return Rule('height', { lo = st.hmin - 1000, hi = h, soft = soft }, op) end
 
-Knobs = { cliff = 45, rock = 28, snow = 0.08, high = 0.62, beach = 3, wet = 1.5, dirt = 0.32, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
-KnobDefaults = { cliff = 45, rock = 28, snow = 0.08, high = 0.62, beach = 3, wet = 1.5, dirt = 0.32, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
+Knobs = { cliff = 45, rock = 28, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.32, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
+KnobDefaults = { cliff = 45, rock = 28, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.32, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
 
 KnobInfo = {
     { key = 'cliff', label = 'Cliff slope from (degrees)', min = 20, max = 85, step = 1, fmt = '%d' },
     { key = 'rock', label = 'Rock slope from (degrees)', min = 5, max = 80, step = 1, fmt = '%d' },
     { key = 'snow', label = 'Snow covers the top (share of land)', min = 0, max = 0.6, step = 0.01, fmt = '%.2f' },
-    { key = 'high', label = 'High rock starts at (share of land height)', min = 0.2, max = 0.95, step = 0.01, fmt = '%.2f' },
+    { key = 'high', label = 'High rock starts at (share of height range)', min = 0.2, max = 0.95, step = 0.01, fmt = '%.2f' },
     { key = 'beach', label = 'Beach half width (units)', min = 0, max = 20, step = 0.5, fmt = '%.1f' },
     { key = 'wet', label = 'Wet strip half width (units)', min = 0, max = 10, step = 0.5, fmt = '%.1f' },
     { key = 'dirt', label = 'Dirt coverage (share of flat ground)', min = 0, max = 0.8, step = 0.01, fmt = '%.2f' },
@@ -83,10 +83,10 @@ ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', '
 --- The styles. `knobs` replaces the settings when the style is chosen (SelectPreset); `off` lists roles the style does not paint.
 Presets = {
     { id = 'temperate', name = 'Natural (all eight kinds of ground)', uses = ALL_KNOBS, knobs = {}, off = {} },
-    { id = 'alpine', name = 'Alpine (more rock, high rock and snow)', uses = ALL_KNOBS, knobs = { snow = 0.18, high = 0.5, cliff = 42, rock = 24, dark = 0.6 }, off = {} },
-    { id = 'desert', name = 'Desert (dust and sand, no snow)', uses = ALL_KNOBS, knobs = { snow = 0, beach = 4, dirt = 0.35, dark = 0.4, wet = 1 }, off = { snow = true } },
-    { id = 'arctic', name = 'Arctic (snow and ice, rock)', uses = ALL_KNOBS, knobs = { snow = 0.4, high = 0.45, beach = 2, dirt = 0.15 }, off = {} },
-    { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 36, rock = 20, dirt = 0.4, dark = 0.8, high = 0.5, snow = 0.05 }, off = {} },
+    { id = 'alpine', name = 'Alpine (more rock, high rock and snow)', uses = ALL_KNOBS, knobs = { snow = 0.18, high = 0.4, cliff = 42, rock = 24, dark = 0.6 }, off = {} },
+    { id = 'desert', name = 'Desert (dust and sand, no snow)', uses = ALL_KNOBS, knobs = { snow = 0, beach = 4, dirt = 0.35, dark = 0.4, wet = 1 }, off = { snow = true }, drySand = true },
+    { id = 'arctic', name = 'Arctic (snow and ice, rock)', uses = ALL_KNOBS, knobs = { snow = 0.4, high = 0.35, beach = 2, dirt = 0.15 }, off = {} },
+    { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 36, rock = 20, dirt = 0.4, dark = 0.8, high = 0.4, snow = 0.05 }, off = {} },
     { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.3, snow = 0, rock = 34, cliff = 50 }, off = { snow = true } },
 }
 
@@ -202,7 +202,7 @@ function Stats()
 end
 
 noiseCache = {}
-local NOISE_OPS = { 'perlin', 'simplex', 'ridged', 'billow' }
+local NOISE_OPS = { 'perlin', 'simplex', 'ridged', 'billow', 'fractal' }
 
 --- The noise value (0..1) that a share p of the map lies BELOW, for the noise rule with these settings: a rule that smoothsteps around it covers 1 - p of the map. Read from the noise at
 --- the preview resolution (the noise depends on the world position only); cached.
@@ -215,7 +215,7 @@ function NoiseAt(kind, seed, size, octaves, p)
         if tsize > 0 and Fields.IsAvailable() then
             local ok, res = pcall(Fields.Run, function(S)
                 local H = S:Height(tsize > 1100 and 8 or 4)
-                local n = S:Op(NOISE_OPS[math.max(1, math.min(4, kind))], { like = H, seed = math.floor(seed), scale = size, octaves = math.floor(octaves) })
+                local n = S:Op(NOISE_OPS[math.max(1, math.min(5, kind))], { like = H, seed = math.floor(seed), scale = size, octaves = math.floor(octaves) })
                 local w, h = Fields.Info(n)
                 return (Percentiles(Fields.Read(n, 0, 0, w - 1, h - 1), nil))
             end)
@@ -286,19 +286,13 @@ function SnowLine(k, st)
     return math.max(HeightAt(st, 1 - k.snow), z0 + R * math.max(0, 0.45 - 1.2 * k.snow))
 end
 
---- The value a share p (0..1) of a fractal noise lies BELOW: the noise (mask generator kind 5) is close to normal with mean 0.5 and spread 0.155 at any feature size (measured on the field engine's
---- op `fractal`), so no map statistics are needed. Abramowitz and Stegun 26.2.23 for the normal quantile.
-local function NoiseValue(p)
-    p = math.max(0.01, math.min(0.99, p))
-    local q = p < 0.5 and p or (1 - p)
-    local t = math.sqrt(-2 * math.log(q))
-    local z = t - (2.515517 + 0.802853 * t + 0.010328 * t * t) / (1 + 1.432788 * t + 0.189269 * t * t + 0.001308 * t * t * t)
-    if p < 0.5 then z = -z end
-    return 0.5 + 0.155 * z
-end
---- A fractal noise as a gentle 0..1 mix: 0 at the noise value of percentile p0, 1 at p1.
+--- A fractal noise (kind 5 of the mask generator) as a gentle 0..1 mix: 0 at the noise value that a share p0 of the map lies below, 1 at the value of p1. The values come from the noise itself
+--- (NoiseAt), so a wide window around the share 1 - d makes patches that cover about d of the map, with edges as wide as the window.
 local function Mix(seed, size, p0, p1)
-    return Rule('noise', { kind = 5, seed = seed, size = size, octaves = 5, from = NoiseValue(p0), to = NoiseValue(p1) })
+    local from = NoiseAt(5, seed, size, 5, p0)
+    local to = NoiseAt(5, seed, size, 5, p1)
+    if to - from < 0.02 then to = from + 0.02 end
+    return Rule('noise', { kind = 5, seed = seed, size = size, octaves = 5, from = from, to = to })
 end
 
 Builders = {}           -- role id -> function(knobs, stats, context) -> rule list | {} (the base: no mask) | false (switched off)
@@ -352,8 +346,8 @@ Builders.sand = function(k, st, cx)
     end
     local p = Presets[State.preset]
     if not (p and p.drySand) then return false end                            -- sand lies along water; a dry map only has it when the style asks (desert: dry basins)
-    local z0, R = Zone(st)
-    return { FallTo(st, z0 + R * 0.04, z0 + R * 0.12, 0.08 * R * bk, size * 1.5, k.seed + 9), FlatTo(6, 18, 0, size, 1, 'mul'), Blur(4), AtMost(0.65) }
+    local h0, h1 = HeightAt(st, 0.04), HeightAt(st, 0.3)                     -- the lowest third of the land: dry basins
+    return { FallTo(st, h0, h1, 0.4 * (h1 - h0) * bk, size * 1.5, k.seed + 9), FlatTo(6, 18, 0, size, 1, 'mul'), Blur(4), AtMost(0.6) }
 end
 
 Builders.rock = function(k, st, cx)
@@ -366,7 +360,7 @@ Builders.darkrock = function(k, st, cx)
     if cx.base == 'darkrock' then return {} end
     if k.dark <= 0.01 then return false end
     local size, bk = Wob(k)
-    return { Rule('curvature', { radius = 6, gain = 18, lo = 0, hi = 0.42, soft = 0.1 }), SteepFrom(k.rock * 0.45, k.rock + 6, 3 * bk, size, k.seed + 31, 'mul'), Blur(6), AtMost(0.2 + 0.5 * k.dark) }
+    return { Rule('curvature', { radius = 6, gain = 18, lo = 0, hi = 0.42, soft = 0.1 }), SteepFrom(k.rock * 0.45, k.rock + 6, 3 * bk, size, k.seed + 31, 'mul'), Blur(6), AtMost(0.15 + 0.4 * k.dark) }
 end
 
 Builders.highrock = function(k, st, cx)
@@ -384,7 +378,7 @@ Builders.snow = function(k, st, cx)
     local _, R = Zone(st)
     local size, bk = Wob(k)
     local sl = SnowLine(k, st)
-    return { RiseFrom(st, sl - 0.1 * R, sl + 0.1 * R, 0.12 * R * bk, size, k.seed + 21), FlatTo(k.cliff - 8, k.cliff + 16, 4 * bk, size, k.seed + 22, 'mul'), Blur(4) }
+    return { RiseFrom(st, sl - 0.14 * R, sl + 0.06 * R, 0.08 * R * bk, size, k.seed + 21), FlatTo(k.cliff, k.cliff + 22, 4 * bk, size, k.seed + 22, 'mul'), Blur(4) }
 end
 
 -- ---- the layers of the map and their roles ---------------------------------------------------------------------------------------------------------------------
