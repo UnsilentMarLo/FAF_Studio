@@ -19,9 +19,11 @@ local Camera = import('/lua/editor/camera.lua')
 local Menu = import('/lua/editor/gui/menu.lua')
 local UserData = import('/lua/editor/userdata.lua')
 import('/lua/editor/gui/menus.lua')
+local Perf = import('/lua/editor/perf.lua')
 -- Every gui/panels_*.lua registers its panels when imported: a new panel file needs no edit here (builtin first, the rest by file name).
 -- A panel module may define a module-level Refresh(), which the tick below calls about four times a second (set NoAutoRefresh = true to opt out).
 PanelModules = {}
+PanelNames = {}       -- parallel to PanelModules: the file of each module (the timing report names the panel that costs)
 do
     local files = {}
     for _, file in DiskFindFiles('/lua/editor/gui', 'panels_*.lua') do table.insert(files, string.lower(file)) end
@@ -32,14 +34,20 @@ do
         if not seen[file] then
             seen[file] = true
             local mod = import(file)
-            if mod then table.insert(PanelModules, mod) end
+            if mod then
+                table.insert(PanelModules, mod)
+                PanelNames[table.getn(PanelModules)] = file
+            end
         end
     end
     -- gui/feature_*.lua register their own commands and menu items when imported (a feature that is not a panel: release, recent maps, ...)
     -- (a feature module may define a module-level Refresh() too: it is ticked like a panel module's)
     for _, file in DiskFindFiles('/lua/editor/gui', 'feature_*.lua') do
         local mod = import(string.lower(file))
-        if mod then table.insert(PanelModules, mod) end
+        if mod then
+            table.insert(PanelModules, mod)
+            PanelNames[table.getn(PanelModules)] = string.lower(file)
+        end
     end
 end
 local Hotkeys = import('/lua/editor/gui/hotkeys.lua')
@@ -486,37 +494,53 @@ end
 
 local function Tick()
     local frame = Frame()
+    Perf.Tick()
+    local tFrame = Perf.Begin()
     import('/lua/editor/gui/panels_builtin.lua').EnsureWorldView()
     if S.editor then
         -- held-key camera movement (only while editing; a test run uses the game's own camera keys)
         local ok, editing = pcall(function() return EditorUI().State.mode == 'edit' end)
-        if ok and editing then pcall(Camera.Update, Commands) end
+        if ok and editing then pcall(Perf.Time, 'shell: camera keys', Camera.Update, Commands) end
         S.sinceRefresh = S.sinceRefresh + 1
         if S.sinceRefresh >= 15 then
             S.sinceRefresh = 0
-            if ok and editing then pcall(function() import('/lua/editor/maps.lua').AutosaveTick() end) end
+            local tRefresh = Perf.Begin()
+            if ok and editing then pcall(Perf.Time, 'shell: autosave check', function() import('/lua/editor/maps.lua').AutosaveTick() end) end
             -- not during a test run: a refresh shows list rows again (VirtualList:Refresh calls Show), and the hidden editor panels leaked onto the game HUD
             if ok and editing then
-                local ok2, text = pcall(function() return EditorUI().StatusText() end)
-                if ok2 and S.statusText then S.statusText:SetText(text) end
-                for _, mod in PanelModules do
+                local ok2, text = pcall(Perf.Time, 'shell: status text', function() return EditorUI().StatusText() end)
+                if ok2 and S.statusText and text ~= S.statusShown then
+                    S.statusShown = text
+                    S.statusText:SetText(text)
+                end
+                local timing = Perf.Enabled
+                for i, mod in PanelModules do
                     local refresh = rawget(mod, 'Refresh')
-                    if refresh and not rawget(mod, 'NoAutoRefresh') then pcall(refresh) end
+                    if refresh and not rawget(mod, 'NoAutoRefresh') then
+                        if timing then pcall(Perf.Time, 'refresh ' .. tostring(PanelNames[i]), refresh) else pcall(refresh) end
+                    end
                 end
-                W.ScrollTick()
+                pcall(Perf.Time, 'shell: scroll tick', W.ScrollTick)
                 -- what the user arranged is kept: panel changes mark it, pop-out windows are compared here (moving a window is not a dock event)
-                local sig = ''
-                for id, _ in S.popouts do
-                    local x, y, w, h = ed_window_get_rect(id)
-                    sig = sig .. string.format('%d,%d,%d,%d;', x or 0, y or 0, w or 0, h or 0)
+                if next(S.popouts) ~= nil then
+                    local sig = ''
+                    for id, _ in S.popouts do
+                        local x, y, w, h = ed_window_get_rect(id)
+                        sig = sig .. string.format('%d,%d,%d,%d;', x or 0, y or 0, w or 0, h or 0)
+                    end
+                    if sig ~= S.popSig then S.popSig = sig S.layoutDirty = true end
+                elseif S.popSig ~= '' then
+                    S.popSig = ''
+                    S.layoutDirty = true
                 end
-                if sig ~= S.popSig then S.popSig = sig S.layoutDirty = true end
                 if S.layoutDirty then SaveKept() end
-                pcall(function() import('/lua/editor/persist.lua').Tick() end)
+                pcall(Perf.Time, 'shell: persist', function() import('/lua/editor/persist.lua').Tick() end)
                 UserData.Flush()
             end
+            Perf.End('shell: 4 Hz refresh (all)', tRefresh)
         end
     end
+    Perf.End('shell: tick (all)', tFrame)
     if S.main and (frame.Width() ~= S.frameW or frame.Height() ~= S.frameH) then
         S.frameW, S.frameH = frame.Width(), frame.Height()
         local x, y, w, h = MainRect(frame)
@@ -626,6 +650,10 @@ function Start(name, opts)
     Commands.Register{ id = 'help.hotkeys', title = 'Help: hotkeys...', run = function() ShowOrAdd('hotkeys') end }
     Commands.Register{ id = 'ui.scale.up', title = 'UI scale: larger', run = function() SetScale(Skin.scale + 0.25) end }
     Commands.Register{ id = 'ui.scale.down', title = 'UI scale: smaller', run = function() SetScale(Skin.scale - 0.25) end }
+    Commands.Register{ id = 'dev.perf', title = 'Performance timing: on / off (report every 5 s in the Console panel and the log; /perf starts it on)', run = function()
+        local on = Perf.Toggle()
+        Say('performance timing ' .. (on and 'on' or 'off'))
+    end }
     Commands.Register{ id = 'workspace.save', title = 'Workspace: save current layout', run = function() Workspace.Save(S.current, CaptureLayout()) Say('saved layout ' .. S.current) end }
     Commands.Register{ id = 'workspace.load', title = 'Workspace: load saved layout', run = function()
         local layout = Workspace.Load(S.current)

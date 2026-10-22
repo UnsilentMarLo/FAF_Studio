@@ -90,7 +90,8 @@ do
             end
         end
 
-        local props = GetReclaimablesInRect(rect)
+        -- the UI says when the map has no props at all (ed_prop_count() == 0, sim.lua): then the rectangle is not searched
+        local props = (not data.noProps) and GetReclaimablesInRect(rect) or nil
         if props then
             for _, e in props do
                 if e and not e:BeenDestroyed() then
@@ -181,6 +182,13 @@ do
         if ok and unit and data.group and data.group ~= 'INITIAL' and string.sub(data.group, 1, 8) ~= 'INITIAL/' then
             ScenarioInfo.EditorGroupUnits = ScenarioInfo.EditorGroupUnits or {}
             table.insert(ScenarioInfo.EditorGroupUnits, unit)
+        end
+    end
+
+    --- Map load: EdSpawnUnit for a list of units (data.list, each one the Args of an EdSpawnUnit call): one callback for a few hundred units instead of one each.
+    Callbacks.EdSpawnUnits = function(data)
+        for _, u in data.list or {} do
+            Callbacks.EdSpawnUnit(u)
         end
     end
 
@@ -345,6 +353,18 @@ do
                 ok = brain:CanBuildStructureAt(STRUCTURE[it.type], Vector(it.x, y, it.z)) and true or false
             end
             local reason = ''
+            if not ok then
+                -- a marker that already carries its extractor (Mass) or generator (Hydrocarbon) is in use, not blocked: the structure standing there is what makes the build check say no
+                local reach = (it.type == 'Hydrocarbon') and 4 or 2
+                local list = GetUnitsInRect(Rect(it.x - reach, it.z - reach, it.x + reach, it.z + reach))
+                local want = (it.type == 'Hydrocarbon') and categories.HYDROCARBON or categories.MASSEXTRACTION
+                for _, u in list or {} do
+                    if not u.Dead and EntityCategoryContains(want, u) then
+                        local p = u:GetPosition()
+                        if math.abs(p[1] - it.x) <= reach and math.abs(p[3] - it.z) <= reach then ok = true break end
+                    end
+                end
+            end
             if not ok then
                 local half = it.size / 2
                 local wet = false

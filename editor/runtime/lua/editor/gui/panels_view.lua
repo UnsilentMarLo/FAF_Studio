@@ -170,15 +170,20 @@ Panels.Register{
                 P:Layout(P.w)
             end
             P.legend:SetText(string.format('0          %.2f/2          %.2f          blocked', Slope.Limit, Slope.Limit))
-            -- the explanation wraps to the panel's width (text does not clip)
-            for _, l in P.noteLabels do l:Destroy() end
+            -- the explanation wraps to the panel's width (text does not clip). The labels are made again only when the text or the width changed: they were destroyed and
+            -- created anew on every tick (four times a second) while the panel was open.
             local text
             if Slope.Kind == 'path' then
                 text = 'Height change between neighbouring samples, per cell. Land, amphibious and hover units are blocked above 0.75; a footprint of N x N cells checks an N x N window.'
             else
                 text = 'Height range over the skirt must stay within the structure\'s MaxGroundVariation: 1.1 for most structures, 1.0 when unspecified; mass extractors and hydrocarbon plants allow 512 (no slope rule).'
             end
-            P.noteLabels = W.Paragraph(group, text, pad, P.noteY, math.max(Skin.S(80), P.w - 2 * pad), { color = Skin.color.textDim, size = 'small' })
+            local noteKey = text .. '|' .. tostring(P.w) .. '|' .. tostring(P.noteY)
+            if noteKey ~= P.noteKey then
+                P.noteKey = noteKey
+                for _, l in P.noteLabels do l:Destroy() end
+                P.noteLabels = W.Paragraph(group, text, pad, P.noteY, math.max(Skin.S(80), P.w - 2 * pad), { color = Skin.color.textDim, size = 'small' })
+            end
         end
         function P:OnResize(w, h)
             P.w, P.h = w, h

@@ -20,6 +20,9 @@ MarkerType = 'Blank Marker'
 Marquee = false
 --- Bumped by every change of the objects (overlays and marker visuals re-sync on it).
 Changed = 0
+--- Bumped when the hovered object changes. A hover is no change of the objects: it moved `Changed` before, and so rebuilt the outliner, the properties and the chain
+--- lines of the whole map each time the pointer crossed a marker. Only overlay.lua (the highlight) looks at this one.
+HoverRev = 0
 
 local function Bump()
     Changed = Changed + 1
@@ -165,8 +168,13 @@ end
 --- Replaces (or, with `additive`, extends) the selection with a list of { kind, name }.
 function SelectMany(list, additive)
     if not additive then Items = {} end
+    -- a set of what is selected: IsSelected scans the whole selection, which made a box over thousands of markers quadratic
+    local have = {}
+    for _, it in Items do have[it.kind .. '\1' .. it.name] = true end
     for _, it in list do
-        if not IsSelected(it.kind, it.name) then
+        local key = it.kind .. '\1' .. it.name
+        if not have[key] then
+            have[key] = true
             table.insert(Items, { kind = it.kind, name = it.name })
         end
     end
@@ -682,13 +690,23 @@ function Pick(wx, wz, mx, my, only)
 end
 
 --- Updates the hover highlight (call each frame with the world position under the pointer, or nil).
+local lastHoverQuery = { wx = false }
+
 function UpdateHover(wx, wz, mx, my, only)
-    local hit = wx and Pick(wx, wz, mx, my, only) or nil
+    -- called every frame: with the pointer at rest, over the same objects, the answer is the one of the frame before (Pick walks every marker and area)
+    local q = lastHoverQuery
+    local hit
+    if wx and q.wx == wx and q.wz == wz and q.mx == mx and q.my == my and q.only == only and q.changed == Changed and q.doc == Map.Doc then
+        hit = q.hit
+    else
+        hit = wx and Pick(wx, wz, mx, my, only) or nil
+        q.wx, q.wz, q.mx, q.my, q.only, q.changed, q.doc, q.hit = wx, wz, mx, my, only, Changed, Map.Doc, hit
+    end
     local kind, name = false, false
     if hit and not hit.handle then kind, name = hit.kind, hit.name end
     if Hover.kind ~= kind or Hover.name ~= name then
         Hover.kind, Hover.name = kind, name
-        Bump()
+        HoverRev = HoverRev + 1
     end
     return hit
 end

@@ -347,9 +347,8 @@ function SelectionCenter()
     local Units = import('/lua/editor/units.lua')
     if table.getn(Units.Selection) > 0 then
         for _, sel in Units.Selection do
-            for _, u in Units.All() do
-                if u.army == sel.army and u.name == sel.name then x, z, n = x + u.x, z + u.z, n + 1 end
-            end
+            local u = Units.Lookup(sel.army, sel.name)
+            if u then x, z, n = x + u.x, z + u.z, n + 1 end
         end
     end
     for _, list in { import('/lua/editor/props.lua').Selection, import('/lua/editor/decals.lua').Selection } do

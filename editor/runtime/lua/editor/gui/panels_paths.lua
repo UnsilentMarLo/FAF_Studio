@@ -476,9 +476,21 @@ Panels.Register{
 }
 
 --- Ticked about four times a second by the shell: the live preview follows the model.
+local shownSig, shownTicks = '', 0
+
 function Refresh()
     local pn = live.paths
-    if pn and pn.Refresh then pcall(function() pn:Refresh() end) end
+    -- The panel's own Refresh re-fits ~20 labels, refreshes 16 sliders and the list and works out the planned grade of the path (a terrain read per step along it): it runs when
+    -- the model, the selection, the mode or the tool changed, and every 2 seconds as a net, not four times a second.
+    shownTicks = shownTicks + 1
+    if pn and pn.Refresh then
+        local sig = string.format('%d|%d|%s|%s|%s|%s|%s|%s|%s|%s|%s', Paths.Revision, Paths.DataRevision, tostring(Paths.Current), tostring(Paths.Mode), tostring(UI.State.tool),
+            tostring(state.live), tostring(state.text), tostring(state.pathable), tostring(Tool.Show), tostring(Paths.HasPreview()), tostring(pn.w))
+        if sig ~= shownSig or shownTicks >= 8 then
+            shownSig, shownTicks = sig, 0
+            pcall(function() pn:Refresh() end)
+        end
+    end
     -- the preview follows the model and the selection: another path selected shows that path at once (no off and on again)
     if state.live and (Paths.DataRevision ~= state.lastPreview or PreviewKey() ~= state.lastKey) and Tick() - state.lastTime > 0.3 then
         state.lastTime = Tick()

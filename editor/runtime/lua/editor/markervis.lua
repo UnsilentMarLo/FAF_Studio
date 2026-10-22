@@ -26,6 +26,9 @@ local DEPOSITS = {
 local entries = {}      -- marker name -> { shape, x, y, z, yaw, prop = WorldMesh | false, deposit = WorldMesh | false }
 local lastDoc = false
 local syncFrame = 0
+local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
+local Tools = import('/lua/editor/tools.lua')
+local syncedEpoch, seenChanged = -1, -1      -- what the last height sync and the last walk over the markers were done for
 
 --- '/env/common/props/markers/M_Mass_prop.bp' -> '/env/common/props/markers/M_Mass_lod0.scm' (false for the mesh-less path marker).
 local function MeshOf(propBp)
@@ -51,7 +54,7 @@ local function Build(name, m)
     local x, y, z = MC.DisplayPos(m)
     local yaw = (m.orientation and m.orientation[2]) or 0
     local dep = DEPOSITS[m.type]
-    local e = { shape = (m.prop or '') .. '|' .. tostring(m.type), x = x, y = y, z = z, yaw = yaw, prop = false, deposit = false }
+    local e = { shapeProp = m.prop, shapeType = m.type, x = x, y = y, z = z, yaw = yaw, prop = false, deposit = false }
     local pos = Vector(x, y, z)
 
     local meshName = MeshOf(m.prop)
@@ -130,6 +133,7 @@ function Clear()
     end
     entries = {}
     lastDoc = false
+    syncedEpoch, seenChanged = -1, -1
     for i = 1, table.getn(ghosts) do ghosts[i]:Destroy() end
     ghosts, ghostMesh, ghostShown = {}, false, 0
 end
@@ -144,9 +148,13 @@ function Update()
         lastDoc = doc
     end
     local markers = doc.save.MasterChain._MASTERCHAIN_.Markers
-    -- a marker stands on the terrain: when the terrain under it changed (brush, undo) its stored height follows
+    -- a marker stands on the terrain: when the terrain under it changed (brush, undo) its stored height follows. That is one terrain read per marker, so it is done when the
+    -- ground may have changed (TerrainEpoch: a finished stroke, an undo; at the latest every 5 s) and every 2 s, not ten times a second.
     syncFrame = syncFrame + 1
-    if math.mod(syncFrame, 10) == 0 then
+    local synced = false
+    if syncedEpoch ~= TerrainEpoch.Epoch or math.mod(syncFrame, 120) == 0 then
+        syncedEpoch = TerrainEpoch.Epoch
+        synced = true
         for name, m in markers do
             local px, pz = m.position[1], m.position[3]
             if px and pz and px > -1e6 and px < 1e6 and pz > -1e6 and pz < 1e6 then      -- (NaN fails both tests)
@@ -155,12 +163,18 @@ function Update()
             end
         end
     end
+    -- The meshes are brought in line with the markers when the objects changed (Tools.Changed: a move, a type, a layer switch), when heights were synced, and about once a
+    -- second as a net for an edit that does not announce itself. A frame in which nothing happened costs nothing (it walked every marker and built a string for each, every frame).
+    local changed = Tools.Changed
+    if not synced and changed == seenChanged and math.mod(syncFrame, 60) ~= 0 then
+        return
+    end
+    seenChanged = changed
     local Filter = import('/lua/editor/markerfilter.lua')
     for name, m in markers do
         local e = entries[name]
         local hidden = Filter.IsHidden(m.type)       -- marker layers: a hidden category has no prop in the world
-        local shape = (m.prop or '') .. '|' .. tostring(m.type)
-        if e and (hidden or e.shape ~= shape) then
+        if e and (hidden or e.shapeProp ~= m.prop or e.shapeType ~= m.type) then
             Destroy(e)
             ed_overlay_remove('sp:' .. name)
             entries[name] = nil

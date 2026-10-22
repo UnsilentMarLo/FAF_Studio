@@ -42,13 +42,16 @@ local COLOR = { x = 'FFFF4040', z = 'FF4080FF', free = 'FF50E070', ring = 'FFFFE
 local LIT = { x = 'FFFFA0A0', z = 'FFA0C4FF', free = 'FFB8FFC4', ring = 'FFFFFFA0' }
 local NAME = { x = 'Move X', z = 'Move Z', free = 'Move on ground', ring = 'Rotate' }
 
+local providers = false      -- built once: Active() asks every frame, and the table is ~40 closures
+
 local function Providers()
+    if providers then return providers end
     local Tools = import('/lua/editor/tools.lua')
     local Props = import('/lua/editor/props.lua')
     local Decals = import('/lua/editor/decals.lua')
     local Units = import('/lua/editor/units.lua')
     local Paths = import('/lua/editor/paths.lua')
-    return {
+    providers = {
         paths = {
             live = true,
             yield = function(wx, wz)
@@ -103,9 +106,9 @@ local function Providers()
             center = function()
                 local sx, sz, n = 0, 0, 0
                 for _, sel in Units.Selection do
-                    for _, u in Units.All() do
-                        if u.army == sel.army and u.name == sel.name then sx, sz, n = sx + u.x, sz + u.z, n + 1 end
-                    end
+                    -- (every frame: a lookup in the cached list, not a pass over All() per selected unit)
+                    local u = Units.Lookup(sel.army, sel.name)
+                    if u then sx, sz, n = sx + u.x, sz + u.z, n + 1 end
                 end
                 if n == 0 then return nil end
                 return sx / n, sz / n
@@ -115,6 +118,7 @@ local function Providers()
             offset = function(o) Units.DragOffset = o end,
         },
     }
+    return providers
 end
 
 --- The provider of the active tool when it has a selection, with the gizmo's origin: provider, cx, cz.

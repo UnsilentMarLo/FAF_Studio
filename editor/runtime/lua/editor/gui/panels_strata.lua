@@ -258,9 +258,20 @@ Panels.Register{
         function P:Refresh()
             Reload()
             if not P.sel then P.sel = Strata.Active end
-            P.list:Refresh()
+            -- The list binds its rows again (a texture, a fitted name and two positions each) only when a layer, the chosen layer or the painting layer changed: the shell's tick
+            -- calls this four times a second.
+            local rowsKey = tostring(P.sel) .. '|' .. tostring(Strata.Active) .. '|' .. tostring(P.list.w) .. '|' .. tostring(P.list.h)
+            for _, r in P.rows do rowsKey = rowsKey .. ';' .. r.index .. ',' .. r.albedo .. ',' .. tostring(r.size) end
+            if rowsKey ~= P.rowsKey then
+                P.rowsKey = rowsKey
+                P.list:Refresh()
+            end
             local TS = import('/lua/editor/texsets.lua')
-            P.texset:SetText('Texture set: ' .. ((TS.Themes[TS.Theme] and TS.Themes[TS.Theme].label) or TS.Theme))
+            local texsetText = 'Texture set: ' .. ((TS.Themes[TS.Theme] and TS.Themes[TS.Theme].label) or TS.Theme)
+            if texsetText ~= P.texsetShown then
+                P.texsetShown = texsetText
+                P.texset:SetText(texsetText)
+            end
             local shaderName = import('/lua/editor/shaders.lua').Current() or '?'
             if P.shaderShown ~= shaderName then
                 P.shaderShown = shaderName

@@ -76,9 +76,9 @@ function Draw(ui)
     local picks = {}
     for _, sel in Units.Selection do
         if table.getn(picks) >= MAX_UNITS then break end
-        for _, u in Units.All() do
-            if u.army == sel.army and u.name == sel.name then table.insert(picks, u) end
-        end
+        -- (a lookup in the cached unit list: this runs every frame, and All() builds a table for each of the map's units)
+        local u = Units.Lookup(sel.army, sel.name)
+        if u then table.insert(picks, u) end
     end
     local key = ''
     for _, u in picks do key = key .. string.format('%s|%s|%.1f|%.1f;', u.army, u.name, u.x, u.z) end

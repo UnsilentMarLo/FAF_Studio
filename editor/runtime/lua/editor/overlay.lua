@@ -34,6 +34,17 @@ local markerIds = {}      -- marker name -> true for dots registered
 local selIds = {}         -- selected marker name -> true for highlight rings registered
 local fpIds = {}          -- resource marker name -> true for footprint boxes registered
 local lastRevision = -1   -- validation results the footprints were drawn for
+local lastHover = -1      -- Tools.HoverRev the highlights were drawn for
+local lastEpoch = -1      -- TerrainEpoch.Epoch the lines and icons were laid onto the terrain for
+-- What each registered object was last drawn for: a rebuild skips the objects whose key did not change (it used to lay every outline onto the terrain again, up to 480
+-- terrain reads per area, on every selection, hover and half second).
+local areaKeys = {}       -- area name -> key string
+local fpKeys = {}         -- resource marker name -> key string
+local iconKeys = {}       -- marker name -> { x, y, z, tint, path }
+local selKeys = {}        -- selected marker name -> { x, y, z }
+local handleKey = ''
+local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
+local Perf = import('/lua/editor/perf.lua')
 local gridIds = {}        -- build grid view: line id -> true
 local gridKey = ''        -- what the grid lines were built for
 
@@ -48,15 +59,35 @@ local ICON_SLUGS = {
 }
 local ICON_PX = 22
 
+local iconPathOfType = {}      -- marker type -> icon file (the slug work is done once per type)
+local ICON_ARMY = '/textures/editor/markers/army.dds'
+
 local function IconPath(name, m)
-    local slug = 'default'
-    if string.sub(name, 1, 5) == 'ARMY_' then
-        slug = 'army'
-    else
-        local candidate = string.gsub(string.lower(m.type or ''), ' ', '_')
+    if string.sub(name, 1, 5) == 'ARMY_' then return ICON_ARMY end
+    local t = m.type or ''
+    local path = iconPathOfType[t]
+    if not path then
+        local slug = 'default'
+        local candidate = string.gsub(string.lower(t), ' ', '_')
         if ICON_SLUGS[candidate] then slug = candidate end
+        path = '/textures/editor/markers/' .. slug .. '.dds'
+        iconPathOfType[t] = path
     end
-    return '/textures/editor/markers/' .. slug .. '.dds'
+    return path
+end
+
+-- The selected markers and areas as sets, rebuilt when Tools.Changed moved (Tools.IsSelected scans the whole selection: asking it for every marker is quadratic).
+local selMarkers, selAreas, selSetAt = {}, {}, -1
+
+local function SelectionSets()
+    if selSetAt ~= Tools.Changed then
+        selSetAt = Tools.Changed
+        selMarkers, selAreas = {}, {}
+        for _, it in Tools.Items do
+            if it.kind == 'marker' then selMarkers[it.name] = true else selAreas[it.name] = true end
+        end
+    end
+    return selMarkers, selAreas
 end
 local labelGroup = false
 local labels = {}
@@ -156,21 +187,29 @@ end
 
 local function RebuildAreas()
     local seen = {}
+    local _, selAreaSet = SelectionSets()
+    local epoch = TerrainEpoch.Epoch
     for name, a in Map.Doc.save.Areas do
         local r = a.rectangle
         if r then
-            local selected = Tools.IsSelected('area', name)
+            local selected = selAreaSet[name]
             local hover = Tools.Hover.kind == 'area' and Tools.Hover.name == name
             local color, minPx, width = COLOR_AREA, 2, 0.7
             if selected then color, minPx, width = COLOR_SELECT, 3, 1.1
             elseif hover then color = COLOR_AREA_HOVER end
-            Line(nil, 'area:' .. name, Box(r[1], r[2], r[3], r[4]), color, width, minPx, 10, true)
+            -- the outline follows the terrain (up to 480 terrain reads): drawn again only when its colour, its rectangle or the ground changed
+            local key = string.format('%s|%.2f|%.2f|%.2f|%.2f|%d', color, r[1], r[2], r[3], r[4], epoch)
+            if areaKeys[name] ~= key or not areaIds[name] then
+                areaKeys[name] = key
+                Line(nil, 'area:' .. name, Box(r[1], r[2], r[3], r[4]), color, width, minPx, 10, true)
+            end
             seen[name] = true
         end
     end
     for name, _ in areaIds do
         if not seen[name] then
             ed_overlay_remove('area:' .. name)
+            areaKeys[name] = nil
         end
     end
     areaIds = seen
@@ -205,16 +244,22 @@ end
 local function RebuildFootprints()
     local seen = {}
     local Filter = import('/lua/editor/markerfilter.lua')
+    local selMarkerSet = SelectionSets()
+    local epoch = TerrainEpoch.Epoch
     for name, m in Map.Doc.save.MasterChain._MASTERCHAIN_.Markers do
         local info = Grid.ResourceInfo(m.type)
         -- a hidden marker layer shows nothing of its markers: not the icon, the prop, the name or the footprint rectangles (a selected marker stays visible)
-        if info and (not Filter.IsHidden(m.type) or Tools.IsSelected('marker', name)) then
+        if info and (not Filter.IsHidden(m.type) or selMarkerSet[name]) then
             local x, z = m.position[1], m.position[3]
             local issue = Validate.ByName[name]
             local color = (issue and ISSUE_COLOR[issue]) or FOOTPRINT_COLOR[m.type] or 'FFFFFF'
             local fx, fz, sk = info.fx / 2, info.fz / 2, info.skirt / 2
-            Line(nil, 'fp:' .. name, Box(x - fx, z - fz, x + fx, z + fz), color, 0.15, issue and 2 or 1.5, 3, true)
-            Line(nil, 'sk:' .. name, Box(x - sk, z - sk, x + sk, z + sk), '70' .. color, 0.1, 1, 1, true)
+            local key = string.format('%s|%.3f|%.3f|%.2f|%.2f|%d|%d', color, x, z, fx, sk, issue and 1 or 0, epoch)
+            if fpKeys[name] ~= key then
+                fpKeys[name] = key
+                Line(nil, 'fp:' .. name, Box(x - fx, z - fz, x + fx, z + fz), color, 0.15, issue and 2 or 1.5, 3, true)
+                Line(nil, 'sk:' .. name, Box(x - sk, z - sk, x + sk, z + sk), '70' .. color, 0.1, 1, 1, true)
+            end
             seen[name] = true
         end
     end
@@ -222,6 +267,7 @@ local function RebuildFootprints()
         if not seen[name] then
             ed_overlay_remove('fp:' .. name)
             ed_overlay_remove('sk:' .. name)
+            fpKeys[name] = nil
         end
     end
     fpIds = seen
@@ -237,13 +283,24 @@ local function RebuildMarkerIcons()
     for name, m in Map.Doc.save.MasterChain._MASTERCHAIN_.Markers do
         if not Filter.IsHidden(m.type) then
             local x, y, z, tint = MarkerIcon(name, m, sx, sz, play)
-            ed_overlay_icon('mi:' .. name, x, y + LIFT, z, IconPath(name, m), ICON_PX, tint)
+            local path = IconPath(name, m)
+            -- only a changed icon is sent to the engine (3000 markers: 3000 native calls and a string per call on every rebuild)
+            local k = iconKeys[name]
+            if not k then
+                k = {}
+                iconKeys[name] = k
+            end
+            if k[1] ~= x or k[2] ~= y or k[3] ~= z or k[4] ~= tint or k[5] ~= path or not markerIds[name] then
+                k[1], k[2], k[3], k[4], k[5] = x, y, z, tint, path
+                ed_overlay_icon('mi:' .. name, x, y + LIFT, z, path, ICON_PX, tint)
+            end
             seen[name] = true
         end
     end
     for name, _ in markerIds do
         if not seen[name] then
             ed_overlay_remove('mi:' .. name)
+            iconKeys[name] = nil
         end
     end
     markerIds = seen
@@ -256,25 +313,52 @@ local function RebuildMarkerHighlights()
         local m = it.kind == 'marker' and markers[it.name]
         if m then
             local x, y, z = MC.DisplayPos(m)
-            ed_overlay_icon('ms:' .. it.name, x, y + LIFT, z, '/textures/editor/markers/_select.dds', ICON_PX + 12, 'FFFFFFFF')
+            local k = selKeys[it.name]
+            if not k then
+                k = {}
+                selKeys[it.name] = k
+            end
+            if k[1] ~= x or k[2] ~= y or k[3] ~= z or not selIds[it.name] then
+                k[1], k[2], k[3] = x, y, z
+                ed_overlay_icon('ms:' .. it.name, x, y + LIFT, z, '/textures/editor/markers/_select.dds', ICON_PX + 12, 'FFFFFFFF')
+            end
             seen[it.name] = true
         end
     end
     for name, _ in selIds do
         if not seen[name] then
             ed_overlay_remove('ms:' .. name)
+            selKeys[name] = nil
         end
     end
     selIds = seen
 
     local hov = Tools.Hover
-    local m = hov.kind == 'marker' and not Tools.IsSelected('marker', hov.name) and markers[hov.name]
+    local selMarkerSet = SelectionSets()
+    local m = hov.kind == 'marker' and not selMarkerSet[hov.name] and markers[hov.name]
     if m then
         local x, y, z = MC.DisplayPos(m)
         ed_overlay_icon('mhov', x, y + LIFT, z, '/textures/editor/markers/_hover.dds', ICON_PX + 10, 'FFFFFFFF')
     else
         ed_overlay_remove('mhov')
     end
+end
+
+--- The world rectangle { minx, maxx, minz, maxz } that holds the ground seen through the view, with a margin; nil when a corner of the view looks past the ground (the sky).
+local function LabelBounds(view)
+    local l, t = view.Left(), view.Top()
+    local r, b = l + view.Width(), t + view.Height()
+    local minx, maxx, minz, maxz
+    for i = 1, 4 do
+        local p = UnProject(view, Vector2((i == 1 or i == 3) and l or r, (i <= 2) and t or b))
+        if not p then return nil end
+        minx = minx and math.min(minx, p[1]) or p[1]
+        maxx = maxx and math.max(maxx, p[1]) or p[1]
+        minz = minz and math.min(minz, p[3]) or p[3]
+        maxz = maxz and math.max(maxz, p[3]) or p[3]
+    end
+    local padx, padz = 30 + 0.15 * (maxx - minx), 30 + 0.15 * (maxz - minz)
+    return minx - padx, maxx + padx, minz - padz, maxz + padz
 end
 
 --- Name labels: all markers when zoomed in, the hovered and selected one always.
@@ -291,25 +375,67 @@ local function UpdateLabels(view, px)
         if t.shownText ~= name then t:SetText(name) t.shownText = name end
         local color = extra and 'FFFFE040' or 'FFE8F0F8'
         if t.shownColor ~= color then t:SetColor(color) t.shownColor = color end
-        t.Left:Set(ox + p.x + 17)
-        t.Top:Set(oy + p.y - 7)
+        local lx, ly = ox + p.x + 17, oy + p.y - 7
+        if t.shownX ~= lx then t.Left:Set(lx) t.shownX = lx end
+        if t.shownY ~= ly then t.Top:Set(ly) t.shownY = ly end
         t:Show()
     end
-    for name, m in Map.Doc.save.MasterChain._MASTERCHAIN_.Markers do
-        local isSel = Tools.IsSelected('marker', name)
-        local isHov = Tools.Hover.kind == 'marker' and Tools.Hover.name == name
-        if (zoomedIn or isSel or isHov) and n < 150 and (isSel or not import('/lua/editor/markerfilter.lua').IsHidden(m.type)) then
+    local markers = Map.Doc.save.MasterChain._MASTERCHAIN_.Markers
+    local Filter = import('/lua/editor/markerfilter.lua')
+    local selMarkerSet, selAreaSet = SelectionSets()
+    local hov = Tools.Hover
+    -- Zoomed in every name on screen is shown: only the markers and areas inside the ground the camera sees (plus a margin) are projected, not all thousand of them. Zoomed
+    -- out only the selected and the hovered ones carry a name, and those are found without a walk over the whole map.
+    local bx0, bx1, bz0, bz1
+    if zoomedIn then bx0, bx1, bz0, bz1 = LabelBounds(view) end
+    if zoomedIn then
+        for name, m in markers do
+            if n >= 150 then break end
+            local isSel = selMarkerSet[name]
+            local isHov = hov.kind == 'marker' and hov.name == name
+            local pos = m.position
+            if isSel or isHov or not bx0 or (pos[1] >= bx0 and pos[1] <= bx1 and pos[3] >= bz0 and pos[3] <= bz1) then
+                if isSel or not Filter.IsHidden(m.type) then
+                    local x, y, z = MC.DisplayPos(m)
+                    Add(name, x, y, z, isSel)
+                end
+            end
+        end
+    else
+        for _, it in Tools.Items do
+            local m = it.kind == 'marker' and markers[it.name]
+            if m and n < 150 then
+                local x, y, z = MC.DisplayPos(m)
+                Add(it.name, x, y, z, true)
+            end
+        end
+        local m = hov.kind == 'marker' and not selMarkerSet[hov.name] and markers[hov.name]
+        if m and n < 150 and not Filter.IsHidden(m.type) then
             local x, y, z = MC.DisplayPos(m)
-            Add(name, x, y, z, isSel)
+            Add(hov.name, x, y, z, false)
         end
     end
-    for name, a in Map.Doc.save.Areas do
-        local r = a.rectangle
-        local isSel = Tools.IsSelected('area', name)
-        local isHov = Tools.Hover.kind == 'area' and Tools.Hover.name == name
-        if r and (zoomedIn or isSel or isHov) and n < 150 then
-            Add(name, r[1], GroundHeight(r[1], r[2]), r[2], isSel)
+    local areas = Map.Doc.save.Areas
+    if zoomedIn then
+        for name, a in areas do
+            local r = a.rectangle
+            if r and n < 150 then
+                local isSel = selAreaSet[name]
+                local isHov = hov.kind == 'area' and hov.name == name
+                if isSel or isHov or not bx0 or (r[1] >= bx0 and r[1] <= bx1 and r[2] >= bz0 and r[2] <= bz1) then
+                    Add(name, r[1], GroundHeight(r[1], r[2]), r[2], isSel)
+                end
+            end
         end
+    else
+        for _, it in Tools.Items do
+            local a = it.kind == 'area' and areas[it.name]
+            local r = a and a.rectangle
+            if r and n < 150 then Add(it.name, r[1], GroundHeight(r[1], r[2]), r[2], true) end
+        end
+        local a = hov.kind == 'area' and not selAreaSet[hov.name] and areas[hov.name]
+        local r = a and a.rectangle
+        if r and n < 150 then Add(hov.name, r[1], GroundHeight(r[1], r[2]), r[2], false) end
     end
     for _, g in ghostLabels do Add(g.name, g.x, g.y, g.z, true) end
     -- the ruler's result at its end point
@@ -431,13 +557,22 @@ local function Handles(view, px)
     local a = handleArea and Map.Doc.save.Areas[handleArea]
     local count = 0
     if a and a.rectangle then
+        local r = a.rectangle
         local s = 4 * px
-        for _, h in Tools.HandlesOf(a.rectangle) do
+        -- (8 squares of 4 terrain reads each, only when the rectangle, the zoom or the ground changed)
+        local key = string.format('%s|%.2f|%.2f|%.2f|%.2f|%.4f|%d', handleArea, r[1], r[2], r[3], r[4], s, TerrainEpoch.Epoch)
+        local same = (key == handleKey) and handleCount == 8
+        handleKey = key
+        for _, h in Tools.HandlesOf(r) do
             count = count + 1
-            local pts = {}
-            Push(pts, h.x - s, h.z - s) Push(pts, h.x + s, h.z - s) Push(pts, h.x + s, h.z + s) Push(pts, h.x - s, h.z + s)
-            Line(nil, 'ah' .. count, pts, 'FFFFFF', 0.2, 2, 4, true)
+            if not same then
+                local pts = {}
+                Push(pts, h.x - s, h.z - s) Push(pts, h.x + s, h.z - s) Push(pts, h.x + s, h.z + s) Push(pts, h.x - s, h.z + s)
+                Line(nil, 'ah' .. count, pts, 'FFFFFF', 0.2, 2, 4, true)
+            end
         end
+    else
+        handleKey = ''
     end
     for i = count + 1, handleCount do
         Remove('ah' .. i)
@@ -449,6 +584,7 @@ end
 -- (brighter = stronger), scaled by the strength setting; the ring marks the radius.
 local previewKey = ''
 local previewKeys = {}        -- per image of the brush under symmetry: slot -> key of what is drawn
+local previewValues = {}      -- slot -> { key, values } the table of weights of a round brush (BrushPreview)
 lastBrushPos = false
 
 local function BrushPreview(p, r, mode, slot)
@@ -467,24 +603,69 @@ local function BrushPreview(p, r, mode, slot)
         scale = 0.25 + 0.75 * math.min(1, St.strength / 100)
         extra = St.shape .. '|' .. St.rotation .. '|' .. St.falloff
     end
-    local key = string.format('%.2f|%.2f|%d|%.2f|%.2f|%s|%s|%d|%s', p[1], p[3], r, B.falloff, scale, mode, Brushes.Active, Brushes.Angle, extra)
+    -- A round brush's weights depend on the pointer only through its offset inside a sample cell: that is snapped to 1/4 unit, and the table of values is kept per radius /
+    -- falloff / strength / offset, so moving the pointer over the map rebuilds nothing but the position (the table used to be rebuilt, ~10000 weight calls for a radius of 50, on
+    -- every frame the pointer moved, also while a stroke was dragged).
+    local round = (Brushes.Active == 'round') and mode ~= 'stamp' and mode ~= 'stamp_paint'
+    local px, pz = p[1], p[3]
+    if round then
+        px = math.floor(px * 4 + 0.5) / 4
+        pz = math.floor(pz * 4 + 0.5) / 4
+    end
+    local key = string.format('%.2f|%.2f|%.2f|%.2f|%.2f|%s|%s|%d|%s', px, pz, r, B.falloff, scale, mode, Brushes.Active, Brushes.Angle, extra)
     if key == previewKeys[slot] then return end
     previewKeys[slot] = key
     previewKey = key
-    local x0, z0, x1, z1 = math.floor(p[1] - r), math.floor(p[3] - r), math.ceil(p[1] + r), math.ceil(p[3] + r)
+    local x0, z0, x1, z1 = math.floor(px - r), math.floor(pz - r), math.ceil(px + r), math.ceil(pz + r)
     local nw, nh = x1 - x0 + 1, z1 - z0 + 1
-    local values = {}
-    local n = 0
-    for z = z0, z1 do
-        for x = x0, x1 do
-            local dx, dz = x - p[1], z - p[3]
-            n = n + 1
-            local d = math.sqrt(dx * dx + dz * dz)
-            if mode == 'ttype' or mode == 'prop' or mode == 'prop_erase' or mode == 'decal' or mode == 'decal_erase' then
-                values[n] = (d <= r) and 120 or 0        -- hard discs: terrain type, props
-            else
-                values[n] = math.floor(255 * Terrain.BrushWeight(d, r, dx, dz) * scale)
+    local values
+    local valuesKey
+    if round then
+        valuesKey = string.format('%.2f|%.2f|%.2f|%s|%.2f|%.2f', r, B.falloff, scale, mode, px - math.floor(px), pz - math.floor(pz))
+        local cached = previewValues[slot]
+        if cached and cached.key == valuesKey then
+            values = cached.values
+        end
+    end
+    if not values then
+        values = {}
+        local n = 0
+        if round then
+            local disc = (mode == 'ttype' or mode == 'prop' or mode == 'prop_erase' or mode == 'decal' or mode == 'decal_erase')
+            local profile, steps = Terrain.RoundProfile(r)           -- the weight at k / steps units, cached for this radius and falloff
+            local sqrt, floor = math.sqrt, math.floor
+            local top = 255 * scale
+            for z = z0, z1 do
+                local dz = z - pz
+                local dz2 = dz * dz
+                for x = x0, x1 do
+                    local dx = x - px
+                    local d = sqrt(dx * dx + dz2)
+                    n = n + 1
+                    if disc then
+                        values[n] = (d <= r) and 120 or 0        -- hard discs: terrain type, props
+                    elseif d >= r then
+                        values[n] = 0
+                    else
+                        local f = d * steps
+                        local k = floor(f)
+                        local t = f - k
+                        values[n] = floor(top * (profile[k] * (1 - t) + profile[k + 1] * t))
+                    end
+                end
             end
+        else
+            for z = z0, z1 do
+                for x = x0, x1 do
+                    local dx, dz = x - p[1], z - p[3]
+                    n = n + 1
+                    local d = math.sqrt(dx * dx + dz * dz)
+                    values[n] = math.floor(255 * Terrain.BrushWeight(d, r, dx, dz) * scale)
+                end
+            end
+        end
+        if valuesKey then
+            previewValues[slot] = { key = valuesKey, values = values }
         end
     end
     ed_overlay_nodes('cur:brush' .. slot, x0, z0, nw, nh, values, 'FFFFFF', 190)
@@ -684,16 +865,21 @@ end
 
 local unitKey = ''
 local unitIds = {}
+local unitFrames = 0
 
 --- Rings at every unit of the map (a unit tool is active) and a brighter one for the selected units.
 local function DrawUnits(ui)
     local Units = import('/lua/editor/units.lua')
     local active = (ui.State.tool == 'unit_select')      -- (the Place unit tool shows a ghost instead of a ring on every unit)
-    local list = active and Units.All() or {}
     local off = Units.DragOffset
-    local key = string.format('%d|%d|%d|%s|%s|%s', table.getn(list), Units.SelRevision, table.getn(Units.Selection), tostring(off and off[1]), tostring(off and off[2]), tostring(active))
+    -- the key is made without looking at the units (All() builds a table for each of them: 2000 on a mission map, every frame): a stored / removed unit, a history step
+    -- and the selection move it, and the terrain epoch lays the rings onto the ground again
+    unitFrames = unitFrames + 1
+    local key = string.format('%s|%d|%d|%s|%s|%s|%d|%d', Units.Stamp(), Units.SelRevision, table.getn(Units.Selection), tostring(off and off[1]), tostring(off and off[2]), tostring(active),
+        TerrainEpoch.Epoch, math.floor(unitFrames / 120))
     if key == unitKey then return end
     unitKey = key
+    local list = active and Units.CachedAll() or {}
     local seen = {}
     local n = 0
     for _, u in list do
@@ -717,21 +903,34 @@ end
 -- ---- transform gizmo ---------------------------------------------------------------------------------------------------------------------
 
 local gizmoIds = {}
+local gizmoKeys = {}
 
 local function DrawGizmo()
     local shapes = import('/lua/editor/gizmo.lua').Shapes()
     local seen = {}
+    local epoch = TerrainEpoch.Epoch
     for _, s in shapes do
-        local pts = {}
-        for _, p in s.points do Push(pts, p[1], p[2]) end
-        if s.fill then
-            -- a filled square: one wide ribbon (world width), no halo, no vertex caps
-            ed_overlay_set(s.id, pts, s.color, s.width, 1, 800, false, false, false)
-        elseif s.px then
-            -- a line of constant width on screen (s.px pixels; the world width is far below that, so the pixel limits decide)
-            ed_overlay_set(s.id, pts, s.color, 0.02, s.px, s.px, s.closed and true or false, true)
-        else
-            ed_overlay_set(s.id, pts, s.color, 0.2, 2, 4, false, true)
+        -- the same shape as last frame (the pointer rests, the selection stands still) is not laid onto the terrain again: ~80 terrain reads and 10 engine calls per frame
+        local n, sx, sz = 0, 0, 0
+        for _, p in s.points do
+            n = n + 1
+            sx = sx + p[1] * n
+            sz = sz + p[2] * (n + 0.5)
+        end
+        local key = tostring(s.color) .. '|' .. tostring(s.px) .. '|' .. tostring(s.width) .. '|' .. tostring(s.closed) .. '|' .. tostring(s.fill) .. '|' .. n .. '|' .. sx .. '|' .. sz .. '|' .. epoch
+        if gizmoKeys[s.id] ~= key or not gizmoIds[s.id] then
+            gizmoKeys[s.id] = key
+            local pts = {}
+            for _, p in s.points do Push(pts, p[1], p[2]) end
+            if s.fill then
+                -- a filled square: one wide ribbon (world width), no halo, no vertex caps
+                ed_overlay_set(s.id, pts, s.color, s.width, 1, 800, false, false, false)
+            elseif s.px then
+                -- a line of constant width on screen (s.px pixels; the world width is far below that, so the pixel limits decide)
+                ed_overlay_set(s.id, pts, s.color, 0.02, s.px, s.px, s.closed and true or false, true)
+            else
+                ed_overlay_set(s.id, pts, s.color, 0.2, 2, 4, false, true)
+            end
         end
         seen[s.id] = true
         gizmoIds[s.id] = true
@@ -740,6 +939,7 @@ local function DrawGizmo()
         if not seen[id] then
             ed_overlay_remove(id)
             gizmoIds[id] = nil
+            gizmoKeys[id] = nil
         end
     end
 end
@@ -955,15 +1155,8 @@ end
 -- ---- entry points ------------------------------------------------------------------------------------------------------------------
 
 --- Removes every overlay line and label (play mode, shutdown).
-function Clear()
-    Cursors.Reset(View())
-    if Available() then ed_overlay_slope_off() end
-    slopeShown = false
-    MarkerVis.Clear()
-    Validate.Clear()
-    if Available() then
-        ed_overlay_clear()
-    end
+-- (Clear touches more module locals than one Lua 5.0 function may hold as upvalues, 32: the resets are split over two helpers.)
+local function ForgetIds()
     areaIds = {}
     markerIds = {}
     selIds = {}
@@ -974,11 +1167,13 @@ function Clear()
     axisKey = ''
     rulerKey = ''
     gizmoIds = {}
-    pcall(function() import('/lua/editor/pathtool.lua').Forget() end)
-    pcall(function() import('/lua/editor/chains.lua').Forget() end)
-    pcall(function() import('/lua/editor/unitrings.lua').Forget() end)
-    pcall(function() import('/lua/editor/gizmo.lua').Forget() end)
-    pcall(function() import('/lua/editor/placer.lua').Clear() end)
+    gizmoKeys = {}
+    areaKeys, fpKeys, iconKeys, selKeys, handleKey = {}, {}, {}, {}, ''
+    lastHover, lastEpoch = -1, -1
+    selSetAt = -1
+end
+
+local function ForgetObjects()
     unitIds = {}
     unitKey = ''
     decalSelIds = {}
@@ -988,11 +1183,107 @@ function Clear()
     propSelKey = ''
     typeIds = {}
     typeKey = ''
-    pcall(function() import('/lua/editor/maskgen.lua').OverlayReset() end)
     lastRevision = -1
     lastChanged = -1
     handleCount = 0
+end
+
+function Clear()
+    Cursors.Reset(View())
+    if Available() then ed_overlay_slope_off() end
+    slopeShown = false
+    MarkerVis.Clear()
+    Validate.Clear()
+    if Available() then
+        ed_overlay_clear()
+    end
+    ForgetIds()
+    TerrainEpoch.Bump()
+    pcall(function() import('/lua/editor/pathtool.lua').Forget() end)
+    pcall(function() import('/lua/editor/chains.lua').Forget() end)
+    pcall(function() import('/lua/editor/unitrings.lua').Forget() end)
+    pcall(function() import('/lua/editor/gizmo.lua').Forget() end)
+    pcall(function() import('/lua/editor/placer.lua').Clear() end)
+    ForgetObjects()
+    pcall(function() import('/lua/editor/maskgen.lua').OverlayReset() end)
     HideLabelsFrom(1)
+end
+
+--- The layers that do not need the map document (grid, slope, axes, ruler, gizmo, rings, paths, chains, ghosts, terrain types). Split from Update: Lua 5.0 refuses a function with more than 32 upvalues.
+local function DrawLayers(ui, view, px)
+    local t0
+    t0 = Perf.Begin()
+    GridView(view, px)
+    SlopeView(view)
+    DrawAxes()
+    DrawRuler()
+    Perf.End('overlay: grid, slope, axes, ruler', t0)
+    t0 = Perf.Begin()
+    DrawGizmo()
+    Perf.End('overlay: gizmo', t0)
+    t0 = Perf.Begin()
+    DrawUnits(ui)
+    DrawDecalSelection(ui)
+    DrawRamp()
+    Perf.End('overlay: unit rings, decal sel, ramp', t0)
+    t0 = Perf.Begin()
+    pcall(function() import('/lua/editor/unitview.lua').OnFrame() end)       -- the unit viewer's bones follow the animation every frame
+    Perf.End('overlay: unitview', t0)
+    t0 = Perf.Begin()
+    pcall(function() import('/lua/editor/pathtool.lua').Draw(ui) end)      -- spline paths (stage T4)
+    Perf.End('overlay: pathtool', t0)
+    t0 = Perf.Begin()
+    pcall(function() import('/lua/editor/chains.lua').Draw(ui) end)        -- marker chains (parity audit)
+    Perf.End('overlay: chains', t0)
+    t0 = Perf.Begin()
+    pcall(function() import('/lua/editor/unitrings.lua').Draw(ui) end)     -- range rings of the selected units
+    DrawPropSelection(ui)
+    Perf.End('overlay: range rings, prop sel', t0)
+    t0 = Perf.Begin()
+    pcall(function() import('/lua/editor/placer.lua').Update(ui, view) end)      -- the ghost of what the Place tools put down
+    pcall(function() import('/lua/editor/placer.lua').UpdateMoves(ui) end)        -- the ghosts of what the select tools drag
+    Perf.End('overlay: placer', t0)
+    t0 = Perf.Begin()
+    DrawTypes(view)
+    pcall(function() import('/lua/editor/maskgen.lua').DrawOverlay(view) end)       -- the mask generator's preview
+    Perf.End('overlay: terrain types, maskgen', t0)
+
+end
+
+--- The document's objects: validation, marker meshes, outlines, icons, handles, labels (see DrawLayers for why this is a function of its own).
+local function UpdateObjects(view, px)
+    local t0
+    t0 = Perf.Begin()
+    Validate.Update()
+    Perf.End('overlay: validate', t0)
+    -- (before the rebuild below: the meshes sync the markers' heights to the terrain, and the icons are drawn at those heights)
+    t0 = Perf.Begin()
+    MarkerVis.Update()
+    Perf.End('overlay: marker meshes', t0)
+    -- The objects are laid onto the terrain again only when something changed: an edit of the objects (Tools.Changed), the validation, or the ground (TerrainEpoch). A hover alone
+    -- touches the area outlines and the hovered marker only. (It used to rebuild everything on every change and every half second.)
+    t0 = Perf.Begin()
+    if lastChanged ~= Tools.Changed or lastRevision ~= Validate.Revision or lastEpoch ~= TerrainEpoch.Epoch then
+        lastChanged = Tools.Changed
+        lastRevision = Validate.Revision
+        lastEpoch = TerrainEpoch.Epoch
+        lastHover = Tools.HoverRev
+        RebuildFootprints()
+        RebuildAreas()
+        RebuildMarkerIcons()
+        RebuildMarkerHighlights()
+    elseif lastHover ~= Tools.HoverRev then
+        lastHover = Tools.HoverRev
+        RebuildAreas()
+        RebuildMarkerHighlights()
+    end
+    Perf.End('overlay: rebuild objects', t0)
+    t0 = Perf.Begin()
+    Handles(view, px)
+    Perf.End('overlay: area handles', t0)
+    t0 = Perf.Begin()
+    UpdateLabels(view, px)      -- every frame: the names follow a moving marker or camera without lag (only the position is set per frame, text and colour when they change)
+    Perf.End('overlay: labels', t0)
 end
 
 --- Per-frame update while editing. `ui` is the ui.lua module. Returns false when the engine has no overlay natives (the old dots
@@ -1017,49 +1308,30 @@ function Update(ui)
         lastDoc = Map.Doc
     end
 
+    local tAll = Perf.Begin()
+    TerrainEpoch.Step(ui.State.dragPointer ~= nil and ui.State.dragPointer ~= false)
     local pos = GetMouseScreenPos()
     local mx, my = (pos and (pos[1] or pos.x)) or 0, (pos and (pos[2] or pos.y)) or 0
+    local t0 = Perf.Begin()
     local px = Pointer(view, ui, mx, my)
-    GridView(view, px)
-    SlopeView(view)
-    DrawAxes()
-    DrawRuler()
-    DrawGizmo()
-    DrawUnits(ui)
-    DrawDecalSelection(ui)
-    DrawRamp()
-    pcall(function() import('/lua/editor/unitview.lua').OnFrame() end)       -- the unit viewer's bones follow the animation every frame
-    pcall(function() import('/lua/editor/pathtool.lua').Draw(ui) end)      -- spline paths (stage T4)
-    pcall(function() import('/lua/editor/chains.lua').Draw(ui) end)        -- marker chains (parity audit)
-    pcall(function() import('/lua/editor/unitrings.lua').Draw(ui) end)     -- range rings of the selected units
-    DrawPropSelection(ui)
-    pcall(function() import('/lua/editor/placer.lua').Update(ui, view) end)      -- the ghost of what the Place tools put down
-    pcall(function() import('/lua/editor/placer.lua').UpdateMoves(ui) end)        -- the ghosts of what the select tools drag
-    DrawTypes(view)
-    pcall(function() import('/lua/editor/maskgen.lua').DrawOverlay(view) end)       -- the mask generator's preview
+    Perf.End('overlay: pointer', t0)
+    DrawLayers(ui, view, px)
 
     -- hover feedback for the select tool
+    t0 = Perf.Begin()
     local tool = ui.ActiveTool()
     local p = view.CursorOverWorld and tool and tool.kind == 'select' and GetMouseWorldPos() or nil
     local hit = Tools.UpdateHover(p and p[1], p and p[3], mx, my, tool and tool.pick)       -- (Select marker only hovers markers, Select area only areas)
     Cursors.Update(view, tool, hit)
+    Perf.End('overlay: hover pick + cursor', t0)
 
     -- everything above works without a map document (the build grid, the slope view, the pointer); the rest draws the document's objects
     if not Map.Doc then
+        Perf.End('overlay: update (all)', tAll)
         return true
     end
 
-    Validate.Update()
-    if lastChanged ~= Tools.Changed or lastRevision ~= Validate.Revision or math.mod(frameCount, 30) == 0 then
-        lastChanged = Tools.Changed
-        lastRevision = Validate.Revision
-        RebuildFootprints()
-        RebuildAreas()
-        RebuildMarkerIcons()
-        RebuildMarkerHighlights()
-    end
-    Handles(view, px)
-    MarkerVis.Update()
-    UpdateLabels(view, px)      -- every frame: the names follow a moving marker or camera without lag (only the position is set per frame, text and colour when they change)
+    UpdateObjects(view, px)
+    Perf.End('overlay: update (all)', tAll)
     return true
 end

@@ -90,8 +90,11 @@ end
 --- The unitfit context (water, playable area, the structures of the map) for `name`, re-read every 15 frames or when the selection changed (rev); skip: units left out.
 local function Ctx(name, rev, skip)
     local c = ctxs[name]
-    if not c or frame - c.frame >= 15 or c.rev ~= rev then
-        c = { frame = frame, rev = rev, ctx = Fit().Context(skip) }
+    -- Context() reads every unit of the map and works out the footprint of each structure: with the pointer moving over a mission map it ran four times a second. It is read
+    -- again when a unit was stored or removed or the history moved (Units.Stamp), when the selection changed (rev), and every 2 seconds as a net.
+    local stamp = Units().Stamp()
+    if not c or frame - c.frame >= 120 or c.rev ~= rev or c.stamp ~= stamp then
+        c = { frame = frame, rev = rev, stamp = stamp, ctx = Fit().Context(skip) }
         ctxs[name] = c
     end
     return c.ctx
@@ -263,7 +266,10 @@ end
 
 -- ---- ghosts ---------------------------------------------------------------------------------------------------------------------------------
 
+local lastDrawSig = false      -- what the ghosts were last drawn for (Update draws again only when it changed)
+
 function Clear()
+    lastDrawSig = false
     for _, g in ghosts do g:SetHidden(true) end
     for id in decalIds do ed_overlay_remove(id) end
     decalIds = {}
@@ -482,6 +488,16 @@ function Update(ui, view)
         if not cx then Clear() return end
         verts = { { cx, cz } }
     end
+    -- With the pointer at rest over the same thing nothing needs to be worked out or sent to the engine again (a line of units was snapped step by step, and every footprint was
+    -- laid onto the terrain, on every frame).
+    local Sym = Symmetry()
+    local cs = ''
+    for _, c in corners do cs = cs .. string.format('%.2f,%.2f;', c[1], c[2]) end
+    local scx, scz = Sym.Centre()
+    local sig = string.format('%s|%s|%s|%.2f|%.2f|%s|%.1f|%.1f|%s|%d|%s', info.id, cs, tostring(dragging), cx or 0, cz or 0, tostring(Sym.Mode), scx or 0, scz or 0, Units().Stamp(),
+        math.floor(frame / 120), tostring(info.decal and Decals().Settings.size))
+    if sig == lastDrawSig and anyShown then return end
+    lastDrawSig = sig
     Draw(info, Positions(info, verts))
 end
 
@@ -556,15 +572,14 @@ function UpdateMoves(ui)
         end
     elseif tool == 'unit_select' then
         local off = Units().DragOffset
+        if off then off = { Units().SnapDelta(off[1], off[2]) } end        -- the preview stands where the unit will land: on the build grid
         if off or turn then
             skip = {}
-            local want = {}
             for _, sel in Units().Selection do
-                want[sel.army .. '|' .. sel.name] = true
                 skip[sel.army .. '|' .. sel.name] = true
-            end
-            for _, u in Units().All() do
-                if want[u.army .. '|' .. u.name] then
+                -- (every frame while dragging: the cached lookup, not a pass over every unit of the map)
+                local u = Units().Lookup(sel.army, sel.name)
+                if u then
                     table.insert(list, { id = u.bp, unit = true, x = u.x + (off and off[1] or 0), z = u.z + (off and off[2] or 0), heading = u.heading + math.rad(-(turn or 0)) })
                 end
             end

@@ -24,6 +24,9 @@ DragOffset = false
 
 local catalog = false
 
+--- Bumped by every store / unstore of a unit (Add, Remove and so every edit, paste, undo and redo): the cached list of All() and the overlay's rings compare it.
+Rev = 0
+
 local function Say(text)
     pcall(function() import('/lua/editor/ui.lua').Say(text) end)
 end
@@ -142,13 +145,43 @@ function All()
     return list
 end
 
-local function NewName()
-    local max = 0
-    for _, u in All() do
-        local n = tonumber(string.sub(u.name, 6))
-        if string.find(u.name, '^UNIT_%d+$') and n and n > max then max = n end
+-- All() builds a table per unit (2100 on a mission map) and walks and sorts every group: per-frame callers (the overlay's rings, the gizmo, range rings, hover) and the
+-- loops that look up each selected unit use this cached copy instead. It is rebuilt when a unit was stored or removed here (Rev), when the history moved (an edit made
+-- elsewhere), when another document was opened, and at the latest after 1.5 s (a writer that bypasses all three). The entries are shared: read them, do not change them.
+local cache = { doc = false, rev = -1, hist = -1, at = -100, list = false, index = false }
+
+local function CacheFresh()
+    local now = GetSystemTimeSeconds()
+    local hist = History.Version
+    if cache.list and cache.doc == Map.Doc and cache.rev == Rev and cache.hist == hist and now - cache.at < 1.5 then return end
+    cache.list, cache.index = All(), false
+    cache.doc, cache.rev, cache.hist, cache.at = Map.Doc, Rev, hist, now
+end
+
+--- All() from the cache (see above).
+function CachedAll()
+    CacheFresh()
+    return cache.list
+end
+
+--- The unit { army, name } of a selection entry (the first in the order of All()), from the cache; nil when there is none.
+function Lookup(army, name)
+    CacheFresh()
+    local index = cache.index
+    if not index then
+        index = {}
+        for _, u in cache.list do
+            local key = u.army .. '\1' .. u.name
+            if index[key] == nil then index[key] = u end
+        end
+        cache.index = index
     end
-    return 'UNIT_' .. (max + 1)
+    return index[army .. '\1' .. name]
+end
+
+--- A stamp that changes whenever the cached list would be rebuilt for another reason than its age: for callers that want to skip their own work (the overlay's key).
+function Stamp()
+    return Rev .. ':' .. History.Version
 end
 
 -- ---- the sim's entity ----------------------------------------------------------------------------------------------------------------------
@@ -164,12 +197,14 @@ end
 local function Store(u)
     local tbl = UnitTable(u.army, true, u.group)
     if not tbl then return false end
+    Rev = Rev + 1
     tbl[u.name] = { type = u.bp, orders = '', platoon = '', Position = Vec3(u.x, u.y, u.z), Orientation = Vec3(0, u.heading, 0) }
     return true
 end
 
 local function Unstore(u)
     local tbl = UnitTable(u.army, false, u.group)
+    Rev = Rev + 1
     if tbl then tbl[u.name] = nil end
 end
 
@@ -211,8 +246,9 @@ function Place(x, z)
         return 0
     end
     local placed = {}
+    local names = NameCounter()
     for _, p in Symmetry.Points(x, z) do
-        local u = { army = ArmyName, group = Group, name = NewName(), bp = Active, x = p.x, z = p.z, y = Ground(p.x, p.z), heading = Symmetry.Heading(0, p) }
+        local u = { army = ArmyName, group = Group, name = names(), bp = Active, x = p.x, z = p.z, y = Ground(p.x, p.z), heading = Symmetry.Heading(0, p) }
         if Add(u) then table.insert(placed, u) end
     end
     if table.getn(placed) == 0 then return 0 end
@@ -230,11 +266,17 @@ local function Same(a, b)
     return a.army == b.army and a.name == b.name
 end
 
+-- the selection as a set (army, name), rebuilt when the list, its length or SelRevision changed: IsSelected is asked for many units in a row
+local selSet, selSetOf, selSetN, selSetRev = {}, false, -1, -1
+
 function IsSelected(u)
-    for _, q in Selection do
-        if Same(u, q) then return true end
+    local n = table.getn(Selection)
+    if selSetOf ~= Selection or selSetN ~= n or selSetRev ~= SelRevision then
+        selSet = {}
+        for _, q in Selection do selSet[q.army .. '\1' .. q.name] = true end
+        selSetOf, selSetN, selSetRev = Selection, n, SelRevision
     end
-    return false
+    return selSet[u.army .. '\1' .. u.name] == true
 end
 
 function ClearSelection()
@@ -248,7 +290,7 @@ end
 function Pick(wx, wz, radius)
     radius = radius or 3
     local best, bestD
-    for _, u in All() do
+    for _, u in CachedAll() do
         local dx, dz = u.x - wx, u.z - wz
         local d = dx * dx + dz * dz
         if d <= radius * radius and (not bestD or d < bestD) then best, bestD = u, d end
@@ -275,10 +317,7 @@ function Select(u, mode)
 end
 
 local function Find(sel)
-    for _, u in All() do
-        if Same(u, sel) then return u end
-    end
-    return nil
+    return Lookup(sel.army, sel.name)
 end
 
 --- Data of the single selected unit, or nil.
@@ -295,8 +334,11 @@ end
 
 local function Transform(label, change)
     local pairsList = {}
-    for _, sel in Selection do
-        local old = Find(sel)
+    -- every selected unit is looked up before the first one changes (a change makes the cache rebuild: once per unit would be one All() each)
+    local olds = {}
+    for i, sel in Selection do olds[i] = Find(sel) end
+    for i, sel in Selection do
+        local old = olds[i]
         if old then
             local new = change(Copy(old))
             if new then
@@ -322,7 +364,25 @@ local function Transform(label, change)
     return true
 end
 
+--- A move of the selection by (dx, dz) put on the build grid: the first selected unit goes to the nearest grid spot of its footprint (unitfit.Snap: odd footprints on a cell centre, even
+--- ones on a corner) and the others move by the same amount, so a group keeps its layout. Without a selection, or when the blueprint is unknown, the delta is kept.
+function SnapDelta(dx, dz)
+    for _, sel in Selection do
+        local u = Find(sel)
+        if u then
+            local ok, sx, sz = pcall(function()
+                local Fit = import('/lua/editor/unitfit.lua')
+                return Fit.Snap(Fit.Blueprint(u.bp), u.x + dx, u.z + dz, u.heading)
+            end)
+            if ok and sx then return sx - u.x, sz - u.z end
+            return dx, dz
+        end
+    end
+    return dx, dz
+end
+
 local function MoveSelectedOnly(dx, dz)
+    dx, dz = SnapDelta(dx, dz)
     return Transform('move units', function(u) u.x, u.z = u.x + dx, u.z + dz return u end)
 end
 
@@ -402,9 +462,22 @@ end
 --- At map load: the units of the groups the script does not spawn by itself (everything but INITIAL and WRECKAGE) get their editor entities, so they can be seen and edited.
 function SpawnGroupEntities()
     local n = 0
-    for _, u in All() do
-        if not GameSpawns(u.group) and u.group ~= 'WRECKAGE' and string.sub(u.group or '', 1, 9) ~= 'WRECKAGE/' then SpawnEntity(u) n = n + 1 end
+    -- a hundred units per callback (EdSpawnUnits in schook/lua/simcallbacks.lua): a mission map has ~2000 of them, and one callback each cost seconds at load
+    local batch = {}
+    local function Flush()
+        if table.getn(batch) > 0 then
+            SimCallback({ Func = 'EdSpawnUnits', Args = { list = batch } }, false)
+            batch = {}
+        end
     end
+    for _, u in All() do
+        if not GameSpawns(u.group) and u.group ~= 'WRECKAGE' and string.sub(u.group or '', 1, 9) ~= 'WRECKAGE/' then
+            table.insert(batch, { bp = u.bp, army = u.army, x = u.x, y = u.y, z = u.z, heading = u.heading, group = u.group or 'INITIAL' })
+            n = n + 1
+            if table.getn(batch) >= 100 then Flush() end
+        end
+    end
+    Flush()
     return n
 end
 
@@ -447,8 +520,12 @@ function SelectBox(box, additive)
     local minx, maxx = math.min(box[1], box[3]), math.max(box[1], box[3])
     local minz, maxz = math.min(box[2], box[4]), math.max(box[2], box[4])
     if not additive then Selection = {} end
-    for _, u in All() do
-        if u.x >= minx and u.x <= maxx and u.z >= minz and u.z <= maxz and not IsSelected(u) then
+    local have = {}          -- (the selection grows in the loop: IsSelected would rebuild its set for every unit)
+    for _, q in Selection do have[q.army .. '\1' .. q.name] = true end
+    for _, u in CachedAll() do
+        local key = u.army .. '\1' .. u.name
+        if u.x >= minx and u.x <= maxx and u.z >= minz and u.z <= maxz and not have[key] then
+            have[key] = true
             table.insert(Selection, { army = u.army, name = u.name })
         end
     end
@@ -500,11 +577,12 @@ end
 --- Adds copies of `list` moved by (dx, dz) (same army, new names) as one undo entry and selects them. Returns the number added.
 function Paste(list, dx, dz)
     local added = {}
+    local names = NameCounter()          -- (NewName per unit would look at every unit of the map again each time)
     for _, d in list do
         local u = Copy(d)
         u.x, u.z = d.x + dx, d.z + dz
         u.y = Ground(u.x, u.z)
-        u.name = NewName()
+        u.name = names()
         if Add(u) then table.insert(added, u) end
     end
     if table.getn(added) == 0 then return 0 end

@@ -337,6 +337,15 @@ CRI. The old local snapshot (`faf-re-master`) is superseded.
   through a gap wall edited via the commit path PASS). Still M1: snapshot play / stop, autosave and crash recovery,
   `Map.SaveAs` should call `ed_doc_mark_clean` only for user saves (play and mod-reload autosaves must not), non-height
   edits (markers, areas, props) are not commands yet (M2).
+  **Native brush dab:** `ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed)` (`moho/editor/EdBrush.cpp`, math in the
+  header-only `EdBrush.h`) does one round-brush dab of raise / lower / plateau / flatten / smooth / noise in a single call (read the window from
+  the document, the brush math, `MapDocument::EditHeights`) and returns `changed, x0, z0, x1, z1, level`; `terrain.lua DabOne` uses it for the round
+  brush when the exe has it (`Terrain.NativeBrush = false` forces the Lua loop, which stays for shaped brushes and as the fallback). The math keeps the
+  game's float-per-operation rounding so both paths give the same words; test: `EdBrushTest` (`python scripts/ed_native_tests.py`, also builds with
+  g++: compares against a line-by-line transliteration of the Lua, a plain double reference and the document write path) and the `native ... dab`
+  checks of `selftest_terrain.lua`. A stroke's re-snap of units is coalesced (`sim.lua ResnapLater`: one `EdResnap` per ~0.15 s, flushed at the
+  stroke's end) and `ui.lua PumpStroke` lays the dabs within a ~6 ms budget per frame. The noise brush's hash was replaced (the old one was -1 nearly
+  everywhere in 32-bit float Lua numbers).
   Open: no marker / area selection, move or delete by mouse yet; no prop / decal tool; the Save button writes to
   `mapout/editor_map.v0001` next to the exe (no folder picker).
   Next: selection / move / delete for markers and areas, prop and decal tools,

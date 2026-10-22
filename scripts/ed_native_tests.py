@@ -16,7 +16,8 @@ VCVARS = r"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Bu
 
 # test name -> engine sources it links (paths under src/sdk)
 TESTS = {"MapDocumentTest": ["moho/editor/MapDocument.cpp"], "EdFieldTest": ["moho/editor/EdFieldCore.cpp"],
-         "EdErosionTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdErosion.cpp"]}
+         "EdErosionTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdErosion.cpp"],
+         "EdBrushTest": ["moho/editor/MapDocument.cpp"]}
 # command line arguments per test (paths under the repository root, or under $ED_EDITOR_ROOT: the git worktree of a feature branch); extra arguments of this script are passed on to every test
 ARGS = {"EdFieldTest": ["editor/runtime/lua/editor/selftest_fields_cases.lua"],
         "EdErosionTest": ["editor/runtime/lua/editor/selftest_erosion_cases.lua"]}
