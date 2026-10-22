@@ -11,12 +11,14 @@ import os
 
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'editor', 'runtime', 'lua', 'editor', 'graphpresets')
 
-# erosion presets of erosion.lua (the values that differ from the solver defaults)
-DROPLET_MOUNTAIN = dict(density=4, lifetime=70, inertia=0.3, capacity=8, erode=0.6, deposit=0.15, gravity=6, thermal=0.4, thermal_steps=3, talus=0.9)
-HYDRAULIC_HILLS = dict(iterations=150, rain=0.004, erosion=0.08, deposition=0.08, thermal=0.3, talus=0.6)
-HYDRAULIC_DESERT = dict(iterations=120, rain=0.002, evaporation=0.05, capacity=0.5, deposition=0.2, thermal=0.6, talus=0.35)
-STREAM_CANYON = dict(iterations=14, k=1.5, max_cut=0.7, diffusion=0.05, widen=2, talus=1.2, area_min=40)
-STREAM_RIVER = dict(iterations=20, k=0.5, m=0.5, diffusion=0.3, widen=2, area_min=60, talus=0.5)
+# erosion presets of erosion.lua (the values that differ from the solver defaults; the shipped graph nodes use the same numbers, see TERRAIN_GEN_DESIGN.md)
+DROPLET_MOUNTAIN = dict(density=3, lifetime=60, inertia=0.3, capacity=8, erode=0.45, deposit=0.15, gravity=5, thermal=0.4, thermal_steps=3, talus=0.9, vary=0.55, protect=0.7, drop_vary=0.6, max_change=25)
+HYDRAULIC_HILLS = dict(deposition=0.08, thermal=0.3, talus=0.6)
+HYDRAULIC_ISLAND = dict(erosion=0.06, deposition=0.08, thermal=0.3, talus=0.6, vary=0.3, rain_vary=0.4, protect=0.3)
+HYDRAULIC_DESERT = dict(iterations=120, rain=0.002, evaporation=0.05, capacity=0.5, deposition=0.2, thermal=0.7, thermal_every=1, talus=0.35, vary=0.3, rain_vary=0.7, protect=0.3)
+STREAM_CANYON = dict(iterations=14, k=1.5, max_cut=0.7, diffusion=0.05, widen=2, talus=1.2, area_min=40, jitter=0.3, protect=0.6, vary=0.5)
+STREAM_BADLANDS = dict(iterations=20, k=0.8, diffusion=0.15, widen=2, area_min=60, talus=0.7, jitter=0.5, vary=0.6, vary_scale=40, protect=0.4)
+DROPLET_CRATER = dict(lifetime=50, erode=0.2, thermal=0.5, thermal_steps=3, talus=0.8, protect=0.8, vary=0.3)
 
 
 def lua(v, indent=0):
@@ -99,7 +101,7 @@ def island():
     g.n('ss', 'smoothstep', 1, 1, edge0=0.12, edge1=0.7)
     g.n('m', 'mul', 2, 0)
     g.n('h', 'range', 3, 0, lo=8, hi=78)
-    g.n('e', 'erode_hydraulic', 4, 0, **HYDRAULIC_HILLS)
+    g.n('e', 'erode_hydraulic', 4, 0, **HYDRAULIC_ISLAND)
     g.n('o', 'out_height', 5, 0)
     g.n('sh', 'shore', 5, 1, width=4, soft=3)
     g.n('l', 'out_layer', 6, 1, layer=2)
@@ -221,7 +223,7 @@ def crater():
     g.n('p', 'perlin', 0, 1, scale=70, octaves=4)
     g.n('bl', 'blend', 2, 0, mode='add', opacity=0.14)
     g.n('h', 'range', 3, 0, lo=14, hi=92)
-    g.n('e', 'erode_droplet', 4, 0, density=2, lifetime=50, thermal=0.5, thermal_steps=3, talus=0.8)
+    g.n('e', 'erode_droplet', 4, 0, **DROPLET_CRATER)
     g.n('o', 'out_height', 5, 0)
     g.chain('rad', 'cv', 'bl', 'h', 'e', 'o')
     g.w('p', 'bl', port='b')
@@ -234,7 +236,7 @@ def badlands():
     g.n('t', 'terrace', 1, 0, steps=7, sharpness=0.55)
     g.n('h', 'range', 2, 0, lo=22, hi=74)
     g.n('th', 'thermal', 3, 0, iterations=40, talus=0.7)
-    g.n('e', 'erode_stream', 4, 0, **STREAM_RIVER)
+    g.n('e', 'erode_stream', 4, 0, **STREAM_BADLANDS)
     g.n('o', 'out_height', 5, 0)
     g.n('mp', 'mask_preset', 5, 1, preset='gullies')
     g.n('l', 'out_layer', 6, 1, layer=2)

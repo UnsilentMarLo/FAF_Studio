@@ -20,6 +20,7 @@
 
 local Fields = import('/lua/editor/fields.lua')
 local World = import('/lua/editor/world.lua')
+local Strata = import('/lua/editor/strata.lua')
 
 -- ---- the catalogue ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -441,6 +442,9 @@ end
 --- Writes mask `m` (a field on any grid) into texture layer `layer` (1..8). target.mode 1 replace, 2 add to (the larger), 3 subtract from; target.strength 0..1 blends old and new;
 --- target.takeAway keeps the mask to the ground the layers above leave free. Returns the undo entry (pushed unless noPush) and the cells changed.
 function WriteLayer(c, m, layer, target, noPush)
+    -- a layer the map's shader does not paint (layer 8 of the numbered shaders is the roughness multiplier or map-wide data, layers 5-8 of TTerrainGlow are not drawn): refused, as in recipes.lua
+    local why = Strata.WhyNotPaintable(layer)
+    if why then return nil, why end
     EnsureShader(layer)
     local S = c.S
     if target.takeAway then m = Op(c, 'mul', { a = m, b = FreeAbove(c, layer) }) end
@@ -457,6 +461,8 @@ end
 function ApplyToLayer(def, target)
     target = target or Target
     if not ed_stratum_info() then return nil, 'the map has no paint masks' end
+    local why = Strata.WhyNotPaintable(target.layer)
+    if why then return nil, why end
     return Fields.Run(function(S)
         local c = NewContext(S, { step = 1 })
         local m, err = Evaluate(c, def)

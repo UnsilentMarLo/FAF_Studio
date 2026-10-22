@@ -283,6 +283,8 @@ Panels.Register{
         Pn.bMask = Btn('Commit to layer', 100, function()
             local f = state.result or Work()
             if not f then Say('no field to commit') return end
+            local why = import('/lua/editor/strata.lua').WhyNotPaintable(state.layer)
+            if why then state.text = 'mask not changed: ' .. why Say(state.text) Sync() return end
             local entry, n = Fields.CommitMask(f, state.layer, { label = 'Field to layer ' .. state.layer })
             state.text = entry and (n .. ' mask cells changed (layer ' .. state.layer .. ')') or ('mask not changed: ' .. tostring(n))
             Say(state.text)

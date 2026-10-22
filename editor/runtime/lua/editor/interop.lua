@@ -378,6 +378,10 @@ function ApplyMasks(ms)
     end
     table.sort(layerItems, function(a, b) return a.layer > b.layer end)
     if table.getn(layerItems) > 0 and not ed_stratum_info() then return nil, 'the map has no paint masks' end
+    for _, item in layerItems do
+        local why = import('/lua/editor/strata.lua').WhyNotPaintable(item.layer)      -- a layer the map's shader does not paint: refused before anything is written
+        if why then return nil, item.file .. ': ' .. why end
+    end
     if table.getn(typeItems) > 0 and not (rawget(_G, 'ed_tt_info') and ed_tt_info()) then return nil, 'the map has no terrain type grid' end
     local out, err = Fields.Run(function(S)
         local c = MaskGen.NewContext(S, { step = 1 })

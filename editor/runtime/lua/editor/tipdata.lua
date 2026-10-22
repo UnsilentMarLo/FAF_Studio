@@ -870,6 +870,10 @@ Widget = {
     ["watermotion/move z"] = "How fast the pattern moves from north to south.",
     ["watermotion/ocean swell"] = "Big, slow, long waves.",
     ["watermotion/scale"] = "The size of the wave pattern of the selected layer.",
+    ["properties/rotate +#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
+    ["properties/rotate -#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
+    ["properties/rotate +#.#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
+    ["properties/rotate -#.#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
 }
 
 Command = {

@@ -362,9 +362,7 @@ function Run:EvaluateNode(graph, node, wanted, report, live, baseKey)
     local v = {}
     for _, p in def.params do
         local val = node.params[p.key]
-        if val == nil then
-            if p.legacy ~= nil then val = p.legacy else val = p.default end
-        end
+        if val == nil then val = p.default end
         if p.kind == 'number' and p.wire and type(ins[p.key]) == 'number' then val = ins[p.key] end
         v[p.key] = val
     end
@@ -487,9 +485,7 @@ local function V(run, node, key)
     local val = node.params[key]
     if val == nil then
         for _, p in def.params do
-            if p.key == key then
-                if p.legacy ~= nil then val = p.legacy else val = p.default end
-            end
+            if p.key == key then val = p.default end
         end
     end
     local wire = Graph.WireInto(node.id, key)
@@ -822,6 +818,14 @@ function Build()
             local msg = e and e.err or 'not evaluated'
             DropBuild(run)
             return nil, 'output node ' .. id .. ': ' .. tostring(msg)
+        end
+    end
+    -- an output into a layer the map's shader does not paint (strata.lua WhyNotPaintable) refuses the whole build before anything is written
+    for _, node in OutputNodes(graph, 'layer') do
+        local why = import('/lua/editor/strata.lua').WhyNotPaintable(math.floor(V(run, node, 'layer') + 0.5))
+        if why then
+            DropBuild(run)
+            return nil, 'output node ' .. node.id .. ': ' .. why
         end
     end
     local result = { changed = 0, layers = 0, types = 0, props = 0 }

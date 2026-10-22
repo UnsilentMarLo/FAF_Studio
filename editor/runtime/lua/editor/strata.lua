@@ -17,6 +17,7 @@
 --   BeginStroke() / Dab(cx, cz, brush, weight) / EndStroke()      painting; TakeEntry() returns the undo entry of the finished stroke
 --   Range()                                'half' | 'full': how the map's shader reads a mask byte (shaders.lua RangeOf); every brush and mask tool stores bytes that way
 --   Profile()                              shaders.lua Profile of the map's shader (painted layers, what layer 8 is ...)
+--   PaintCap()                             the highest layer the shader paints with a mask      WhyNotPaintable(i) -> nil | reason: the check of every tool that writes a layer mask
 --
 -- Undo entries are plain { label, undo, redo } like the object edits (history.lua keeps one order for everything).
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
@@ -103,6 +104,25 @@ local function Unpaintable(i)
     if p.l8 == 'rough' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': its mask is the roughness multiplier' end
     if p.l8 == 'data' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': it only holds map-wide data' end
     return nil
+end
+
+--- The highest layer the map's shader draws with a paint mask: 8 for TTerrainXP and for TTerrain (writing layers 5-8 switches it to TTerrainXP), 7 for the numbered shaders (their 8th mask is the
+--- roughness multiplier or map-wide data), 4 for TTerrainGlow; 8 without a terrain. recipes.lua Cap() is this function.
+function PaintCap()
+    if not rawget(_G, 'ed_stratum_shader') then return 8 end
+    local name = ed_stratum_shader()
+    if not name or name == 'TTerrain' then return 8 end
+    return Profile().painted or 8
+end
+
+--- nil when layer i (1..8) can be written with a mask tool (mask generator, graph outputs, field commit, mask import, recipes), else the reason as a sentence. Every tool that writes a layer's mask
+--- calls this first so none of them paints a layer the map's shader reads as something else.
+function WhyNotPaintable(i)
+    i = math.floor((i or 0) + 0.5)
+    if i < 1 or i > 8 then return 'Layer ' .. tostring(i) .. ' does not exist (1 to 8)' end
+    local cap = PaintCap()
+    if i <= cap then return nil end
+    return Unpaintable(i) or ('Layer ' .. i .. ' is not drawn with ' .. tostring(ed_stratum_shader()) .. ': it paints layers 1 to ' .. cap .. ' only')
 end
 
 --- Mask size in cells and the world size of one cell (nil without a terrain).

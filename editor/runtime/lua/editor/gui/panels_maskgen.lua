@@ -14,6 +14,7 @@ local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local Fields = import('/lua/editor/fields.lua')
 local MaskGen = import('/lua/editor/maskgen.lua')
+local Strata = import('/lua/editor/strata.lua')
 
 NoAutoRefresh = true       -- the sliders would lose what is being typed
 live = {}
@@ -70,6 +71,7 @@ Panels.Register{
         Pn.ruleLabel = W.Label(group, '', 0, 0, { color = c.text })
         Pn.outLabel = W.Label(group, 'Output', 0, 0, { color = c.text })
         Pn.typeLabel = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
+        Pn.layerNote = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })      -- why the Texture layer slider stops below 8 (the map's shader)
 
         -- ---- evaluation and thumbnail -------------------------------------------------------------------------------------------------------------
 
@@ -348,6 +350,16 @@ Panels.Register{
             self.bTexture:SetText(self.TextureText())
             self.bAway:SetOn(T.takeAway)
             self.bWKind:SetText('Water mask: ' .. Fields.WATER_MASKS[T.wmask])
+            -- only the layers the map's shader paints with a mask can be chosen (strata.lua PaintCap, as in recipes.lua)
+            local cap = Strata.PaintCap()
+            if cap ~= self.cap then
+                self.cap = cap
+                self.out.layer:SetRange(1, cap, 1)
+                self.out.layer.drawnKey = nil
+            end
+            if T.layer > cap then T.layer = cap end
+            local why = Strata.WhyNotPaintable(cap + 1)
+            W.Fit(self.layerNote, cap < 8 and why and ('Layers above ' .. cap .. ' cannot be chosen. ' .. why .. '.') or '', (self.w or 300) - Skin.S(16))
             for _, s in self.sliders do s:Refresh() end
             for _, s in self.out do s:Refresh() end
             local TT = import('/lua/editor/terraintype.lua')
@@ -424,6 +436,8 @@ Panels.Register{
             W.Place(self.outLabel, group, pad, y)
             y = y + Skin.S(22)
             Sliders({ self.out.layer, self.out.strength })
+            W.Place(self.layerNote, group, pad, y)
+            y = y + Skin.S(16)
             Flow({ self.bMode, self.bAway, self.bTexture, self.bApplyLayer })
             Sliders({ self.out.code, self.out.threshold })
             W.Place(self.typeLabel, group, pad, y)

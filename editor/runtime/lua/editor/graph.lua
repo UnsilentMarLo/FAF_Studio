@@ -528,7 +528,7 @@ function Normalize(data)
     for _, n in (data.nodes or {}) do
         local c = { id = n.id, type = n.type, x = n.x or 0, y = n.y or 0, params = Copy(n.params or {}), label = n.label, off = n.off }
         if Nodes.Defs[c.type] then
-            for k, v in Nodes.LegacyParams(c.type) do      -- (a setting added after the graph was saved gets the value that keeps its old result)
+            for k, v in Nodes.DefaultParams(c.type) do
                 if c.params[k] == nil then c.params[k] = v end
             end
         end

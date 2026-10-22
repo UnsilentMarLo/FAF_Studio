@@ -28,7 +28,15 @@ Graph = {
         { ['id'] = 5, ['params'] = { ['hi'] = 92, ['lo'] = 14 }, ['type'] = 'range', ['x'] = 672, ['y'] = 0 },
         {
             ['id'] = 6,
-            ['params'] = { ['density'] = 2, ['lifetime'] = 50, ['talus'] = 0.8, ['thermal'] = 0.5, ['thermal_steps'] = 3 },
+            ['params'] = {
+                ['erode'] = 0.2,
+                ['lifetime'] = 50,
+                ['protect'] = 0.8,
+                ['talus'] = 0.8,
+                ['thermal'] = 0.5,
+                ['thermal_steps'] = 3,
+                ['vary'] = 0.3,
+            },
             ['type'] = 'erode_droplet',
             ['x'] = 896,
             ['y'] = 0,

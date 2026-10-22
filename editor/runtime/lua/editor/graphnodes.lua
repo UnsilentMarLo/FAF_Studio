@@ -113,18 +113,6 @@ function DefaultParams(id)
     return params
 end
 
---- The values a saved graph gets for parameters it does not have: a setting added after the graph was saved takes its `legacy` value (the one that reproduces the old result), else its default.
-function LegacyParams(id)
-    local params = {}
-    local d = Defs[id]
-    if d then
-        for _, p in d.params do
-            if p.legacy ~= nil then params[p.key] = p.legacy else params[p.key] = CopyValue(p.default) end
-        end
-    end
-    return params
-end
-
 function ParamInfo(id, key)
     local d = Defs[id]
     if not d then return nil end
@@ -378,7 +366,6 @@ local function ErodeNode(solver, label, kw, desc, presetsOf)
     for _, p in def.params do
         local c = N(p.key, p.label, p.min, p.max, p.step, p.fmt, p.default)
         if p.key == 'seed' then c.seed = true end
-        c.legacy = p.legacy      -- the value of a setting added later, for graphs saved before it existed (LegacyParams)
         c.tip = p.tip
         table.insert(params, c)
     end
@@ -386,6 +373,9 @@ local function ErodeNode(solver, label, kw, desc, presetsOf)
     for _, pr in Erosion.Presets do
         if pr.solver == solver then
             local values = {}
+            for _, p in def.params do      -- (a preset is complete: the settings it does not name go back to the defaults, except the seed)
+                if p.key ~= 'seed' then values[p.key] = p.default end
+            end
             for k, x in pr.values do values[k] = x end
             table.insert(presets, { id = pr.id, label = pr.label, values = values })
         end
@@ -773,7 +763,7 @@ Def('out_height', { label = 'Output: heights', cat = 'outputs', kw = 'output hei
 local TextureRoleIds, TextureRoleLabels = import('/lua/editor/texsets.lua').RoleChoices()
 
 Def('out_layer', { label = 'Output: texture layer', cat = 'outputs', kw = 'output layer stratum texture paint mask write',
-    desc = 'Writes a mask into the paint mask of a texture layer (1..8). The Layer texture setting also gives the layer a texture of a kind (grass, rock, sand ...) from the map\'s texture set; Keep leaves the layer\'s own texture.',
+    desc = 'Writes a mask into the paint mask of a texture layer (1..8; a layer the map\'s shader does not paint, such as layer 8 of the numbered shaders, refuses the build). The Layer texture setting also gives the layer a texture of a kind (grass, rock, sand ...) from the map\'s texture set; Keep leaves the layer\'s own texture.',
     inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'layer',
     params = { N('layer', 'Layer', 1, 8, 1, '%d', 2), C('mode', 'Mode', { 'replace', 'add', 'subtract' }, { 'Replace', 'Add to (the larger)', 'Subtract from' }, 'replace'),
                N('strength', 'Strength', 0, 1, 0.05, '%.2f', 1, { wire = true }), B('takeAway', 'Layers above take away', false),

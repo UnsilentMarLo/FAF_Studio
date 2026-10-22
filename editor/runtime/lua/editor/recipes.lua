@@ -140,10 +140,7 @@ end
 --- The highest painted layer the shader of the map draws with a mask: 8 for TTerrainXP and for TTerrain (writing layers 5-8 switches it to TTerrainXP, as it always did), 7 for the numbered
 --- shaders, 4 for TTerrainGlow. Without a terrain: 8.
 function Cap()
-    if not rawget(_G, 'ed_stratum_shader') then return 8 end
-    local name = ed_stratum_shader()
-    if not name or name == 'TTerrain' then return 8 end
-    return Strata.Profile().painted or 8
+    return Strata.PaintCap()
 end
 
 --- The layers the roles really get: a role on a layer the shader cannot paint takes the highest free layer it can, or shares the top layer when none is free (Apply merges the masks).

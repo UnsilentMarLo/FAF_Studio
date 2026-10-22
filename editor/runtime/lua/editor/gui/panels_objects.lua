@@ -15,6 +15,7 @@ local UI = import('/lua/editor/ui.lua')
 local Terrain = import('/lua/editor/terrain.lua')
 local Tools = import('/lua/editor/tools.lua')
 local Map = import('/lua/editor/map.lua')
+local ToolOpts = import('/lua/editor/toolopts.lua')
 
 live = {}      -- panel id -> instance, for Refresh
 
@@ -289,7 +290,8 @@ Panels.Register{
             local function Bump(dir)
                 local v = tonumber(f:GetText())
                 if not v then f:SetText(get()) return end
-                f:SetText(string.format(fmt, v + dir * step))
+                local st = type(step) == 'function' and step() or step      -- a function: the amount follows a setting (the rotation step of Tool Settings)
+                f:SetText(string.format(fmt, v + dir * st))
                 apply(f:GetText())
             end
             table.insert(P.items, W.Button(group, '-', fx, y, bw, Skin.S(22), function() Bump(-1) end))
@@ -313,6 +315,25 @@ Panels.Register{
         local function Action(text, onClick)
             local b = W.Button(group, text, Skin.S(10), y, math.max(Skin.S(60), P.w - Skin.S(20)), Skin.S(26), onClick)
             table.insert(P.items, b)
+            y = y + Skin.S(34)
+        end
+        --- The turn of a selection of this kind ('units' | 'props' | 'decals'): the rotation step of the Tool Settings panel when stepped rotation is on, else 15 degrees.
+        local function TurnStep(kind)
+            local s = ToolOpts.RotationStep(kind)
+            if s and s > 0 then return s end
+            return 15
+        end
+        --- A "Rotate -n" and a "Rotate +n" button side by side; n follows the step above and the labels follow it when Tool Settings change.
+        local function TurnRow(kind, rotate)
+            local half = math.floor((math.max(Skin.S(120), P.w - Skin.S(20)) - Skin.S(4)) / 2)
+            local function Make(sign, x)
+                local function Text() return 'Rotate ' .. (sign > 0 and '+' or '-') .. string.format('%g', TurnStep(kind)) end
+                local b = W.Button(group, Text(), x, y, half, Skin.S(26), function() rotate(sign * TurnStep(kind)) end)
+                table.insert(P.items, b)
+                table.insert(P.updaters, function() b:SetText(Text()) end)
+            end
+            Make(-1, Skin.S(10))
+            Make(1, Skin.S(14) + half)
             y = y + Skin.S(34)
         end
 
@@ -520,8 +541,8 @@ Panels.Register{
                 fz = Stepper('Z', function() local i = Props.Info() return i and string.format('%.2f', i.z) or '' end,
                     function(t) local x, z = tonumber(fx:GetText()), tonumber(t) if x and z then Props.MoveTo(x, z) end end, 1, '%.2f')
                 ReadOnly('Height', function() local i = Props.Info() return i and string.format('%.2f', i.y) or '' end)
-                Stepper('Rotation', function() local i = Props.Info() return i and string.format('%.0f', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
-                    function(t) local d = tonumber(t) if d then Props.SetHeading(d) end end, 15, '%.0f')
+                Stepper('Rotation', function() local i = Props.Info() return i and string.format('%g', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
+                    function(t) local d = tonumber(t) if d then Props.SetHeading(d) end end, function() return TurnStep('props') end, '%g')
                 Stepper('Scale %', function() local i = Props.Info() return i and string.format('%.0f', i.sx * 100) or '' end,
                     function(t)
                         local v = tonumber(t)
@@ -531,7 +552,7 @@ Panels.Register{
             else
                 Gap(2)
                 Info('Rotate / scale the whole selection:')
-                Action('Rotate +15', function() Props.RotateSelected(15) end)
+                TurnRow('props', function(deg) Props.RotateSelected(deg) end)
                 Action('Scale +10 %', function() Props.ScaleSelected(1.1) end)
                 Action('Scale -10 %', function() Props.ScaleSelected(1 / 1.1) end)
             end
@@ -552,8 +573,8 @@ Panels.Register{
                     function(t) local x, z = tonumber(t), tonumber(fz:GetText()) if x and z then Decals.MoveTo(x, z) end end, 1, '%.2f')
                 fz = Stepper('Z', function() local i = Decals.Info() return i and string.format('%.2f', i.z) or '' end,
                     function(t) local x, z = tonumber(fx:GetText()), tonumber(t) if x and z then Decals.MoveTo(x, z) end end, 1, '%.2f')
-                Stepper('Rotation', function() local i = Decals.Info() return i and string.format('%.0f', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
-                    function(t) local d = tonumber(t) if d then Decals.SetHeading(d) end end, 15, '%.0f')
+                Stepper('Rotation', function() local i = Decals.Info() return i and string.format('%g', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
+                    function(t) local d = tonumber(t) if d then Decals.SetHeading(d) end end, function() return TurnStep('decals') end, '%g')
                 Stepper('Size', function() local i = Decals.Info() return i and string.format('%.1f', i.size) or '' end,
                     function(t) local v = tonumber(t) if v and v > 0 then Decals.SetSize(v) end end, 1, '%.1f')
             end
@@ -575,10 +596,10 @@ Panels.Register{
                     function(t) local x, z = tonumber(t), tonumber(fz:GetText()) if x and z then Units.MoveTo(x, z) end end, 1, '%.2f')
                 fz = Stepper('Z', function() local i = Units.Info() return i and string.format('%.2f', i.z) or '' end,
                     function(t) local x, z = tonumber(fx:GetText()), tonumber(t) if x and z then Units.MoveTo(x, z) end end, 1, '%.2f')
-                Stepper('Rotation', function() local i = Units.Info() return i and string.format('%.0f', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
-                    function(t) local d = tonumber(t) if d then Units.SetHeading(d) end end, 15, '%.0f')
+                Stepper('Rotation', function() local i = Units.Info() return i and string.format('%g', math.mod(math.deg(i.heading) + 360, 360)) or '' end,
+                    function(t) local d = tonumber(t) if d then Units.SetHeading(d) end end, function() return TurnStep('units') end, '%g')
             else
-                Action('Rotate +15', function() Units.RotateSelected(15) end)
+                TurnRow('units', function(deg) Units.RotateSelected(deg) end)
             end
             Action('Give to the army of the Units panel', function() Units.SetArmy(Units.ArmyName) end)
             Gap(6)
