@@ -12,7 +12,7 @@ import os
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'editor', 'runtime', 'lua', 'editor', 'graphpresets')
 
 # erosion presets of erosion.lua (the values that differ from the solver defaults; the shipped graph nodes use the same numbers, see TERRAIN_GEN_DESIGN.md)
-DROPLET_MOUNTAIN = dict(density=3, lifetime=60, inertia=0.3, capacity=8, erode=0.45, deposit=0.15, gravity=5, thermal=0.4, thermal_steps=3, talus=0.9, vary=0.55, protect=0.7, drop_vary=0.6, max_change=25)
+DROPLET_MOUNTAIN = dict(density=3, lifetime=60, inertia=0.3, capacity=8, erode=0.45, deposit=0.15, gravity=5, thermal=0.4, thermal_steps=3, talus=0.9, vary=0.55, protect=0.7, drop_vary=0.6, creep=1, max_change=25)
 HYDRAULIC_HILLS = dict(iterations=100, rain=0.006, deposition=0.08, thermal=0.25, talus=0.9)
 DROPLET_ISLAND = dict(density=2, lifetime=50, radius=4, drop_vary=0.8, thermal=0.3, thermal_steps=2, talus=0.8, vary=0.3, rain_vary=0.4, protect=0.3, max_change=12)
 DROPLET_DESERT = dict(density=0.6, lifetime=60, capacity=6, erode=0.4, deposit=0.2, thermal=0.6, thermal_steps=6, talus=0.7, vary=0.3, rain_vary=0.8, protect=0.3, drop_vary=0.8)

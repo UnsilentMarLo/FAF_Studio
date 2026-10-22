@@ -22,6 +22,7 @@ Graph = {
             ['id'] = 4,
             ['params'] = {
                 ['capacity'] = 8,
+                ['creep'] = 1,
                 ['density'] = 3,
                 ['deposit'] = 0.15,
                 ['drop_vary'] = 0.6,
