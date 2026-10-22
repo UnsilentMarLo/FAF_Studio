@@ -119,7 +119,8 @@ function Pure()
         local _, _, mean0 = Fields.Stats(H)
         local rep = Mix({ mode = 'replace', strength = 1 })
         local _, _, repMean = Fields.Stats(rep)
-        check('replace keeps the average height', math.abs(repMean - mean0) < 0.1, repMean .. ' vs ' .. mean0)
+        local _, _, relMean = Fields.Stats(G)
+        check('replace: the average height of the map plus the mean of the relief', math.abs(repMean - (mean0 + relMean)) < 0.05, repMean .. ' vs ' .. (mean0 + relMean))
         local mul = Mix({ mode = 'multiply', strength = 1 })
         check('multiply leaves the lowest ground alone', math.abs(Read(mul, 0, 32) - Read(H, 0, 32)) < 1e-3)
 
@@ -204,7 +205,7 @@ function Run()
     Terrain.ClearHistory()
     local before = Fields.Run(function(S) return Fields.Checksum(S:Height()) end)
     local p = Copy(Gen.Settings)
-    p.preset, p.amplitude, p.strength, p.gullies, p.mask, p.keepWater = 'hills', 12, 1, 0, 1, false
+    p.preset, p.amplitude, p.strength, p.gullies, p.mask, p.keepWater, p.keepFlat = 'hills', 12, 1, 0, 1, false, false      -- (the test map's markers would protect part of it)
     local result, why = Gen.Build(p)
     check('Build makes a result', result ~= nil, why)
     if result then
@@ -236,7 +237,7 @@ function Run()
     local r0 = Gen.Build(p0)
     check('strength 0: no change', r0 and r0.stats.max == 0, r0 and r0.stats.max)
     if r0 then
-        check('strength 0: nothing to commit', Gen.Commit(r0) == nil)
+        check('strength 0: nothing to commit', (Gen.Commit(r0) or 0) == 0)
         Gen.Free(r0)
     end
     check('every undo entry was used', Fields.Run(function(S) return Fields.Checksum(S:Height()) end) == before)
@@ -244,6 +245,9 @@ function Run()
     local startFields = ed_field_count and ed_field_count() or 0
     if ed_field_count then check('no field leaks', startFields == startCount, tostring(startCount) .. ' -> ' .. tostring(startFields)) end
     local rest = string.gsub(pure, '^[^\n]*\n?', '')
-    local failed = string.find(pure, '^FAIL') ~= nil or table.getn(R.failures) > 0
-    return (failed and 'FAIL' or 'PASS') .. '\n' .. rest .. '\n' .. table.concat(R.lines, '\n')
+    local count = table.getn(R.failures)
+    for _ in string.gfind(pure, '\n  FAIL ') do count = count + 1 end
+    local head = 'PASS'
+    if count > 0 then head = 'FAIL (' .. count .. ')' end
+    return head .. '\n' .. rest .. '\n' .. table.concat(R.lines, '\n')
 end

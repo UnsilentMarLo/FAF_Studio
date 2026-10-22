@@ -43,6 +43,15 @@ local function Run1(check)
                 W.EndLayout(content)
                 local what = op .. ' at ' .. sz[1] .. 'x' .. sz[2]
                 local controls = { Pn.bMap, Pn.bApply, Pn.bPreview, Pn.bBack, Pn.bClear, Pn.bLive, Pn.bRamp, Pn.bCommit, Pn.bMask, Pn.pic, Pn.frame, Pn.list.root, Pn.info, Pn.status, Pn.opLabel }
+                -- the Generate section above the field operations: picture, statistics, presets, choices and its sliders
+                for _, b in { Pn.gpic, Pn.gframe, Pn.gHead, Pn.gMsg, Pn.oHead, Pn.bBlend, Pn.bMaskSel, Pn.bFlat, Pn.bWater, Pn.bRandom, Pn.bRefresh, Pn.bShowGen, Pn.bGApply,
+                              Pn.gLines[1], Pn.gLines[2], Pn.gLines[3] } do
+                    table.insert(controls, b)
+                end
+                for _, e in Pn.gPresets do table.insert(controls, e.button) end
+                for _, s in Pn.gSliders do
+                    for _, part in { s.label, s.track, s.fill, s.thumb, s.minus, s.plus, s.field.frame } do table.insert(controls, part) end
+                end
                 local sliders = {}
                 for _, s in Pn.sliders do table.insert(sliders, s) end
                 table.insert(sliders, Pn.sLayer)

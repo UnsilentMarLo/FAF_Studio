@@ -6,6 +6,8 @@
 --   OpNames()                         the ops: generators const white perlin simplex ridged billow voronoi gradient radial;
 --                                     filters blur box clamp invert abs gamma affine smoothstep threshold normalize quantize remap levels terrace warp offset rotate scale mirror crop resize
 --                                     min max add sub mul blend resample; analysis slope height_band curvature water_below water_above water_depth shore distance aspect flow; erosion thermal
+--                                     Generate section (fieldgen.lua): fractal (natural gradient noise), amplitude (zero-mean relief of an exact size), terrain_mix (blend into the map), keep_side (water level);
+--                                     rotate = 1 on perlin simplex ridged billow musgrave fbm_damped: every octave in its own frame, no lattice seams
 --   Op(name, params)                  -> f      (raises on a bad op or parameter; TryOp returns nil, message). params: numbers, strings, number lists, and the input fields
 --                                     a, b, mask, dx, dz, like. A generator without `like` / width / height takes the map's size.
 --   Height([step]) Stratum(layer[, raw]) New(w, h, value) Image(path[, opts]) Table(w, h, values)       sources

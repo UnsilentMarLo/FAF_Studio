@@ -70,7 +70,10 @@ Presets = {
       tip = 'Mountain ranges: ridged multifractal with sharp crests, finer detail on the steep ground, weathered by gullies.',
       build = function(S, like, p)
           local r = Fractal(S, like, p, 0, { scale = p.scale, kind = 'ridged', persistence = 0.5, sharpness = 2.2, warp = p.warp * 0.2 * p.scale, slope_detail = 0.5 })
-          return S:Op('gamma', { a = r, gamma = 1.3 })
+          local peaks = S:Op('gamma', { a = r, gamma = 1.3 })
+          -- a broad, smooth massif under the crests: ridged noise alone makes rings and loops around its own bumps
+          local massif = Fractal(S, like, p, 1, { scale = p.scale * 1.35, kind = 'fbm', persistence = 0.5, warp = p.warp * 0.2 * p.scale })
+          return S:Op('blend', { a = peaks, b = massif, mode = 'normal', opacity = 0.4 })
       end },
     { id = 'badlands', label = 'Badlands', scale = 200, amplitude = 35, gullies = 0.3, warp = 0.4, detail = 0.5,
       tip = 'Flat topped mesas with steep stepped sides and rough cliffs.',
@@ -91,11 +94,11 @@ Presets = {
       tip = 'Sand dunes: long crests with a gentle windward and a steep lee side, meandering and uneven.',
       build = function(S, like, p)
           local d = S:Op('dunes', { like = like, seed = Seed(p, 0), wavelength = p.scale, angle = math.mod(math.floor(p.seed) * 47, 180), asym = 0.9, warp = p.warp * 0.5 * p.scale,
-                                    warp_size = p.scale * 2, variation = 0.6, ripples = 0.03 })
+                                    warp_size = p.scale * 2, variation = 0.6, ripples = 0 })
           -- some stretches carry big dunes, some are flat
           local patchy = S:Op('smoothstep', { a = Fractal(S, like, p, 1, { scale = p.scale * 2.5, octaves = 2, finest = p.scale }), edge0 = 0.35, edge1 = 0.65 })
           local big = S:Op('blend', { a = d, b = patchy, mode = 'mul', opacity = 0.8 })
-          return S:Op('blend', { a = big, b = Fractal(S, like, p, 2, { scale = p.scale * 0.75, persistence = 0.45 }), mode = 'normal', opacity = 0.2 })
+          return S:Op('blend', { a = big, b = Fractal(S, like, p, 2, { scale = p.scale * 0.75, persistence = 0.45 }), mode = 'normal', opacity = 0.25 })
       end },
     { id = 'plains', label = 'Plains detail', scale = 90, amplitude = 4, gullies = 0, warp = 0.3, detail = 0.8,
       tip = 'Small, soft relief for flat ground: gentle swells and a little roughness, so open ground does not look ironed.',
