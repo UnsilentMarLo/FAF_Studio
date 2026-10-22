@@ -1004,7 +1004,7 @@ local function ArmyGhost(p)
         Remove('cur:armyr' .. i)
     end
     armyGhosts = count
-    MarkerVis.Ghost(spots, tpl and tpl.prop)
+    MarkerVis.Ghost(spots, tpl and tpl.prop, 'Blank Marker', 'ARMY_1')
 end
 
 --- The Draw chain tool's preview: the ring and cross of a marker at the pointer, and a line from the end of the chain being drawn (chains.lua DrawTail) to it.

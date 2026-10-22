@@ -152,7 +152,7 @@ end
 local function Sample(ctx, x, z)
     if x < 0 then x = 0 elseif x > ctx.w then x = ctx.w end
     if z < 0 then z = 0 elseif z > ctx.h then z = ctx.h end
-    return ed_terrain_get(x, z) or 0
+    return (ctx.height or ed_terrain_get)(x, z) or 0       -- ctx.height(x, z): a stand-in for the terrain (the self test)
 end
 
 --- Lowest and highest sample of the cells x0..x1 / z0..z1 (inclusive).

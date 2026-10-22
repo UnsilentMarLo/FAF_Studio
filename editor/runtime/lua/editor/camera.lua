@@ -104,11 +104,36 @@ function TopDown()
 end
 
 --- Moves the view over a world point (and optionally to a zoom), orientation kept.
+-- The move is made here, one SnapTo per frame, and not with the engine's cam:MoveTo: MoveTo blends the orientation as a quaternion and does not take the short way round, so
+-- a target with the same heading and pitch (what a focus keeps) made the view turn a full circle once and the position never settled. Heading and pitch stay as they are.
+local focusAnim = false
+local FOCUS_SECONDS = 0.25
+
+--- One frame of the focus move (Update calls it); false when there is none.
+local function StepFocus()
+    local a = focusAnim
+    if not a then return false end
+    local t = (GetSystemTimeSeconds() - a.t0) / FOCUS_SECONDS
+    if t > 1 then t = 1 end
+    local e = t * t * (3 - 2 * t)
+    local f0, f1 = a.from, a.to
+    Cam():SnapTo(Vector(f0[1] + (f1[1] - f0[1]) * e, f0[2] + (f1[2] - f0[2]) * e, f0[3] + (f1[3] - f0[3]) * e), { a.heading, a.pitch, 0 }, a.z0 + (a.z1 - a.z0) * e)
+    if t >= 1 then focusAnim = false end
+    return true
+end
+
+--- Stops a focus move under way (the user took the camera over).
+function CancelFocus()
+    focusAnim = false
+end
+
 function FocusOn(x, z, zoom)
     local cam = Cam()
     local s = cam:SaveSettings()
     local y = ed_terrain_get(math.floor(x + 0.5), math.floor(z + 0.5)) or 0
-    cam:MoveTo(Vector(x, y, z), { s.Heading, s.Pitch, 0 }, zoom or s.Zoom, 0.25)
+    focusAnim = { t0 = GetSystemTimeSeconds(), from = { s.Focus[1], s.Focus[2], s.Focus[3] }, to = { x, y, z },
+                  z0 = s.Zoom, z1 = zoom or s.Zoom, heading = NormalizeHeading(s.Heading), pitch = s.Pitch }
+    StepFocus()
 end
 
 -- ---- bookmarks -------------------------------------------------------------------------------------------------------------------------------
@@ -153,6 +178,7 @@ end
 OnClick = false
 
 local function StartDrag(event, onMove, onRelease)
+    CancelFocus()
     local dragger = Dragger()
     dragger.OnMove = function(self, x, y) onMove(x, y) end
     dragger.OnRelease = function(self, x, y)
@@ -280,6 +306,7 @@ local lastTime = false
 
 --- Per frame: moves the camera for the held movement keys. `commands` is the command registry (gui/commands.lua).
 function Update(commands)
+    StepFocus()
     local now = GetSystemTimeSeconds()
     local dt = lastTime and math.min(0.1, now - lastTime) or 0
     lastTime = now
@@ -300,6 +327,7 @@ function Update(commands)
         end
     end
     if not any then return end
+    CancelFocus()
 
     local cam = Cam()
     local view = import('/lua/ui/game/worldview.lua').viewLeft

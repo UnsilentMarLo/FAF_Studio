@@ -31,3 +31,4 @@ selftest_texscale
 selftest_brushshape
 selftest_normalpreview
 selftest_texbrowser
+selftest_unitfit

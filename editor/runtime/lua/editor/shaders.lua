@@ -12,7 +12,12 @@
 --                          upper = 'overlay' | 'specular' | 'atlas', alpha = 'spec' | 'matte' | 'glow' | 'unused' (the albedo alpha of the layers), supported, reason,
 --                          class = 'legacy' | 'ext' | 'spec' | 'pbr' | 'splat' | 'old301' | 'other' (the family of texture layouts), maps = { normal, light, macro, specular } the map-wide
 --                          pictures the shader reads and from which layer slot (maptextures.lua; a kind the shader does not use is missing) }
+--                        more fields: baseAlpha = 'opacity' (the alpha of the base layer's albedo is read as the opacity of a macrotexture laid over the map: Terrain001 / 051 always, Terrain1xx / 2xx with a last digit
+--                          of 1 or 2), biplanar = true (the B shaders), need = { light = true, normal = true } (the map-wide pictures in layer 8 the shader always reads; see maptextures.lua)
 --   ClassOf(id)          the class of a shader ('legacy' for the empty name, as for a map without a shader)      MapSlots(class) -> the maps table of a class
+--   SpecColor() / SetSpecColor(t)   the map's SpecularColor as a table (for undo)
+--   SPLAT_LIGHT, SplatLighting(mode)   the Terrain2xx shaders read their settings from the map's SpecularColor (r = softness of the splat transitions, g = height contrast, b / a = cos / sin of the
+--                          rotation of every second layer): an all-zero colour (every map made for another shader) gives flat colours and hard edges. mode 'enter' | 'fix' | 'leave' -> before, after | nil
 --   RangeOf(id)          'half' or 'full': the encoding of the paint masks a shader reads (strata.lua uses it for every mask it reads or writes)
 --   Mismatch()           nil, or { range, shader, now, current } when the paint masks are still in the range of `shader` (they were written for it) while the map's shader reads the range `now`: a plain
 --                          Set(id) changes the technique only, so the paint looks different until Convert layers (stratumconv.lua) re-encodes the masks. Saved with the map (SidecarText / LoadSidecar,
@@ -76,14 +81,16 @@ local ROWS_301 = MakeRows{ base = { RGB, XYZ }, p = { RGB, XYZ },
     upper = { 'B = water depth', UNUSED } }
 
 local function RowsPbr(macro, biplanar, splat)
-    local cliff = biplanar and { 'RGB, also mapped from the side (cliffs)', 'XYZ, also mapped from the side' } or nil
+    local cliff = biplanar and { 'RGB, mapped only from the side (cliffs)', 'XYZ, mapped only from the side' } or nil
     return MakeRows{ base = { macro and 'RGB, alpha = macrotexture opacity' or RGB, XYZ }, p = { RGB, XYZ },
         at = cliff and { [3] = cliff, [4] = cliff } or nil,
-        l8 = biplanar and { 'R = water depth (map-wide data)', 'terrain normal Z / X (map-wide data)' } or { UNUSED, UNUSED },
+        l8 = biplanar and { 'R = water depth (map-wide data, always read)', 'A = terrain normal x, G = z (map-wide data, always read)' }
+                       or { 'map-wide data only when its tile size is above the map size (R water depth, G occlusion, A shadow)', 'map-wide normal map when its tile size is above the map size' },
         upper = { splat and 'roughness and height atlas' or 'roughness atlas', UNUSED } }
 end
 
-local NOTE_ATLAS = 'Upper atlas: 2 x 2 tiles. The tile of the Base layer and layers 1-3 (top left, top right, bottom left, bottom right) hold their roughness in R and their height in G; layers 4-7 use the same tiles in B (roughness) and A (height).'
+local NOTE_ATLAS = 'Upper atlas: 2 x 2 tiles. The tile of the Base layer and layers 1-3 (top left, top right, bottom left, bottom right) hold their roughness in R and their height in G; layers 4-7 use the same tiles in B (roughness) and A (height). ' ..
+                  'The shader reads only the middle half of a tile, so a tile holds its picture twice in each direction.'
 local NOTE_ROUGH = 'Layer 8 has no paint: its mask is a roughness multiplier (128 = neutral, lower = shinier, higher = rougher).'
 
 -- The map-wide pictures (maptextures.lua) by class: the layer slot (an index of ed_stratum_layer: 0..9 albedo, 10..19 normal) the shader reads each kind from, how the editor packs the channels
@@ -106,8 +113,12 @@ function MapSlots(class)
     return MAPS[class] or MAPS.other
 end
 
-local function Prof(range, painted, l8, upper, alpha, class)
-    return { range = range, painted = painted, l8 = l8, upper = upper, alpha = alpha, supported = true, class = class, maps = MapSlots(class) }
+local function Prof(range, painted, l8, upper, alpha, class, extra)
+    local p = { range = range, painted = painted, l8 = l8, upper = upper, alpha = alpha, supported = true, class = class, maps = MapSlots(class) }
+    if extra then
+        for k, v in extra do p[k] = v end
+    end
+    return p
 end
 
 local LAYOUT_OLD = 'Layers: Base, painted layers 1-4, Upper. Albedo RGB plus an alpha that sets the specular amount; normals X Y Z.'
@@ -148,11 +159,11 @@ local Info = {
         notes = { 'Layer 8 has no paint. Masks use the half range: a byte up to 127 means "none".' } },
     Terrain001 = { family = 'ext', summary = 'UDN normal blending and a specularity texture on the upper layer.', mask = 'full',
         instructions = 'Normals are blended with UDN blending. The base layer\'s albedo is drawn first and blended over everything again by its alpha. The upper layer is not a macrotexture: its RGB is the specular colour and its alpha the specular sharpness, which gives fine control over the shine of the whole map.',
-        layout = LAYOUT_SPEC, rows = ROWS_SPEC, profile = Prof('full', 7, 'data', 'specular', 'unused', 'spec'),
+        layout = LAYOUT_SPEC, rows = ROWS_SPEC, profile = Prof('full', 7, 'data', 'specular', 'unused', 'spec', { baseAlpha = 'opacity', need = { light = true } }),
         notes = { 'Layer 8 has no paint. Masks use the full range.' } },
     Terrain051 = { family = 'ext', summary = 'Terrain001 with only the upper half of the mask range.', mask = 'half',
         instructions = 'As Terrain001, but only the upper half of the mask range counts (maps converted from TTerrainXP).',
-        layout = LAYOUT_SPEC, rows = ROWS_SPEC, profile = Prof('half', 7, 'data', 'specular', 'unused', 'spec'),
+        layout = LAYOUT_SPEC, rows = ROWS_SPEC, profile = Prof('half', 7, 'data', 'specular', 'unused', 'spec', { baseAlpha = 'opacity', need = { light = true } }),
         notes = { 'Layer 8 has no paint. Masks use the half range.' } },
     Terrain301 = { family = 'old', summary = 'Height splatting, the first version (kept for old maps).', mask = 'half',
         instructions = 'The earlier form of the splatting of the 2xx shaders. Prefer Terrain200 / Terrain250 for new maps. It uses an older texture layout (the roughness atlas is in the normal map of layer 8, the water depth in the Upper layer), so the editor does not convert layers to or from it.',
@@ -173,14 +184,23 @@ local function PbrInfo(name)
     local text = (splat and 'PBR lighting with height-based splatting: layers are mixed by comparing heights (from the Upper atlas), so ground shows through rock and mud collects in dips. ' or
                   'PBR lighting (roughness from the Upper atlas) with UDN normal blending. ') ..
                  (half and 'Only the upper half of the mask range counts. ' or 'Full mask range. ') ..
-                 (biplanar and 'Biplanar mapping: steep ground is textured from the side, so cliffs are not stretched. Put the cliff textures on layers 3 and 4. ' or '') ..
+                 (biplanar and 'Biplanar mapping: layers 3 and 4 are textured only from the side (never from above, also on flat ground), so cliffs are not stretched: put cliff textures on them and paint them on steep ground only. ' ..
+                               'The shader also always reads the map-wide normal map and water depth in layer 8 (the editor makes them when you convert layers). ' or '') ..
                  (macro and ('Macrotexture: ' .. macro .. '.') or '')
     local notes = { half and 'Masks use the half range: a byte up to 127 means "none".' or 'Masks use the full range: the byte is the share of the layer.', NOTE_ROUGH, NOTE_ATLAS }
+    if splat then
+        table.insert(notes, 'The map\'s SpecularColor holds the splat settings: r = softness of the transitions, g = height contrast, b / a = cos / sin of the rotation (0.2, 0.6, 0.866, 0.5 are good values). All zero gives flat colours.')
+    end
+    if biplanar then
+        table.insert(notes, 'Layers 3 and 4 are textured only from the side, even on flat ground: use them for cliff textures and paint them on steep ground. Layer 8 holds the map-wide normal map and water depth, which this shader always reads.')
+    end
     return { family = splat and 'splat' or 'pbr', mask = half and 'half' or 'full',
              summary = (splat and 'Height splatting' or 'PBR') .. (biplanar and ', biplanar' or '') .. (half and ', half mask range' or ', full mask range') .. (macro and ('; ' .. macro) or ''),
-             instructions = text .. (splat and ' SpecularColor.r (the map\'s specular colour, Lighting panel) sets how soft the splat transitions are; SpecularColor.g raises the contrast of the height texture. Loading the same texture into two neighbouring layers lets the shader rotate every second one and hides tiling.' or ''),
+             instructions = text .. (splat and ' The settings of the splatting are the map\'s SpecularColor (lighting): r = how soft the transitions are (0.06 = sharp, 1 = plain blending), g = contrast of the heights, b and a = cosine and sine of the rotation of every second layer (0.866 and 0.5 = 30 degrees). ' ..
+                                    'All four at 0, as in a map made for another shader, draw those layers as flat colours: the editor sets them when you switch to or convert to a 2xx shader. Loading the same texture into two neighbouring layers lets the shader rotate every second one and hides tiling.' or ''),
              layout = splat and LAYOUT_SPLAT or LAYOUT_PBR, rows = RowsPbr(tail ~= '0', biplanar, splat), notes = notes,
-             profile = Prof(half and 'half' or 'full', 7, 'rough', 'atlas', 'unused', splat and 'splat' or (digit == '1' and 'pbr' or 'other')) }
+             profile = Prof(half and 'half' or 'full', 7, 'rough', 'atlas', 'unused', splat and 'splat' or (digit == '1' and 'pbr' or 'other'),
+                            { baseAlpha = (tail ~= '0') and 'opacity' or nil, biplanar = biplanar or nil, need = biplanar and { light = true, normal = true } or nil }) }
 end
 
 --- The terrain techniques with usage "composite" of the shader file the game loads: { name = normals technique }.
@@ -302,15 +322,81 @@ function Current()
     return nil
 end
 
---- Changes the terrain shader. The names are techniques of effects/terrain.fx; one the file does not have is refused (the terrain would be drawn with nothing).
-function Set(id)
+--- Changes the terrain shader. The names are techniques of effects/terrain.fx; one the file does not have is refused (the terrain would be drawn with nothing). A Terrain2xx shader also gets usable
+--- splat settings in the map's lighting when it has none (SplatLighting('fix')); `quiet` leaves the lighting alone (Convert layers does it itself).
+function Set(id, quiet)
     if not rawget(_G, 'ed_stratum_shader') then return nil, 'no terrain' end
     local found = Discover()
     if next(found) and not found[id] then return nil, 'the shader file of this game version has no terrain shader named ' .. tostring(id) end
     local old = ed_stratum_shader()
     ed_stratum_shader(id)
     NoteSwitch(old, id)
+    if not quiet and ClassOf(id) == 'splat' then SplatLighting('fix') end
     return true
+end
+
+-- ---- the splat settings of the Terrain2xx shaders -----------------------------------------------------------------------------------------------------
+-- effects/terrain.fx (Terrain200AlbedoPS and its siblings): SpecularColor.r is the softness of splatLerp (divided by: 0 gives a hard 0 / 1 switch), SpecularColor.g the contrast of the heights, and
+-- SpecularColor.b / .a the cosine / sine of the rotation matrix every second layer (strata 0, 2, 4, 6 = layers 1, 3, 5, 7) is sampled with. A map made for another shader has SpecularColor 0 0 0 0 (the
+-- legacy shaders use it as the colour and strength of the specular highlight), which makes rotated_pos = (0, 0): those layers are drawn as one texel (flat colours).
+
+SPLAT_LIGHT = { spec_r = 0.2, spec_g = 0.6, spec_b = 0.866, spec_a = 0.5 }
+
+--- The four numbers of the map's SpecularColor as { spec_r, spec_g, spec_b, spec_a } (nil without a map).      SetSpecColor(t): puts them back (undo of a conversion).
+function SpecColor()
+    local now = rawget(_G, 'ed_world_get') and ed_world_get()
+    if not now then return nil end
+    return { spec_r = now.spec_r or 0, spec_g = now.spec_g or 0, spec_b = now.spec_b or 0, spec_a = now.spec_a or 0 }
+end
+
+function SetSpecColor(t)
+    if not t or not rawget(_G, 'ed_world_set') then return end
+    ed_world_set({ spec_r = t.spec_r, spec_g = t.spec_g, spec_b = t.spec_b, spec_a = t.spec_a }, false)
+    pcall(function() import('/lua/editor/world.lua').Invalidate() end)
+end
+
+local lightStash = false          -- the SpecularColor the map had before 'enter'
+
+local SPEC_NAMES = { 'spec_r', 'spec_g', 'spec_b', 'spec_a' }
+
+--- Puts the splat settings into the map's lighting. mode 'enter': all four become SPLAT_LIGHT (the old colour is remembered); 'fix': only what is unusable is replaced (all zero: as 'enter'; softness 0, or a
+--- rotation that is not about a unit vector: those lanes); 'leave': the colour from before 'enter' comes back (zeros without one). Returns the numbers before and after, or nil when nothing changed.
+function SplatLighting(mode)
+    if not rawget(_G, 'ed_world_get') or not rawget(_G, 'ed_world_set') then return nil end
+    local now = ed_world_get()
+    if not now then return nil end
+    local before = {}
+    for _, k in SPEC_NAMES do before[k] = now[k] or 0 end
+    local after = {}
+    for _, k in SPEC_NAMES do after[k] = before[k] end
+    if mode == 'enter' then
+        lightStash = { spec_r = before.spec_r, spec_g = before.spec_g, spec_b = before.spec_b, spec_a = before.spec_a }
+        for k, v in SPLAT_LIGHT do after[k] = v end
+    elseif mode == 'fix' then
+        if before.spec_r == 0 and before.spec_g == 0 and before.spec_b == 0 and before.spec_a == 0 then
+            for k, v in SPLAT_LIGHT do after[k] = v end
+        else
+            if before.spec_r < 0.001 then after.spec_r = SPLAT_LIGHT.spec_r end
+            local len = before.spec_b * before.spec_b + before.spec_a * before.spec_a
+            if len < 0.25 then
+                after.spec_b, after.spec_a = SPLAT_LIGHT.spec_b, SPLAT_LIGHT.spec_a
+            end
+        end
+    elseif mode == 'leave' then
+        local old = lightStash or { spec_r = 0, spec_g = 0, spec_b = 0, spec_a = 0 }
+        for _, k in SPEC_NAMES do after[k] = old[k] end
+        lightStash = false
+    else
+        return nil
+    end
+    local same = true
+    for _, k in SPEC_NAMES do
+        if math.abs(after[k] - before[k]) > 0.00001 then same = false end
+    end
+    if same then return nil end
+    ed_world_set(after, false)
+    pcall(function() import('/lua/editor/world.lua').Invalidate() end)
+    return before, after
 end
 
 -- ---- the range the paint masks were written for ----------------------------------------------------------------------------------------------------

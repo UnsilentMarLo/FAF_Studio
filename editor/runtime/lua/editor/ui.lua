@@ -1121,6 +1121,11 @@ function StatusText()
     if sel ~= '' then
         brush = brush .. '   |   ' .. sel
     end
+    -- why the preview of a unit being placed or moved is red (placer.lua)
+    local why = import('/lua/editor/placer.lua').Hint()
+    if why ~= '' then
+        brush = brush .. '   |   ' .. why
+    end
     return string.format('%s   |   %s%s   |   undo %d redo %d   |   %s', pos, tool and tool.label or '?',
         brush, undo, redo, State.message)
 end
