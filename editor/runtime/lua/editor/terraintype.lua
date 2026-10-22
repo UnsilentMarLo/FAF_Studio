@@ -95,7 +95,7 @@ function TakeDirty()
     if Revision ~= knownRev then d = 'all' end
     dirty = false
     knownRev = Revision
-    return d
+    return d or nil
 end
 
 --- World units per grid cell (the grid spans the whole map, whatever its resolution): csx, csz.

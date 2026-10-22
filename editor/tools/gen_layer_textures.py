@@ -16,7 +16,6 @@ with open(os.path.join(root, 'clear_albedo.dds'), 'wb') as f:
     f.write(header + b'\0' * 64)
 
 rough, height = 166, 128
-pixel = struct.pack('4B', rough, height, rough, height)        # memory order B G R A: B = roughness (layers 4-7), G = height (Base, 1-3), R = roughness (Base, 1-3), A = height (4-7)
-# the file's masks say R = 0x00FF0000 ...: bytes are stored B, G, R, A, so the four values above are written as (B, G, R, A) = (rough, height, rough, height) -> R = rough, G = height, B = rough, A = height
+pixel = struct.pack('4B', rough, height, rough, height)        # stored B, G, R, A: R and B = roughness, G and A = height
 with open(os.path.join(root, 'pbr_atlas_neutral.dds'), 'wb') as f:
     f.write(header + pixel * 16)
