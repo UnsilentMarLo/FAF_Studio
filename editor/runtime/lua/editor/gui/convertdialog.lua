@@ -84,6 +84,7 @@ function Open(targetId, done)
     local K = plan.refused == nil and plan.toP and plan.toP.painted or 0
     local hasExtra = plan.refused == nil and table.getn(plan.extra) > 0
     local hasUpper = plan.refused == nil and plan.upperAction and not (plan.upperAction == 'atlas' and plan.atlasMissing)
+    local hasTex = plan.refused == nil and plan.tex and plan.tex.available and plan.tex.any      -- the option "Also convert textures" (stratumconv.lua plan.tex)
 
     -- sizes: the options block under the text has a known height; the text gets the rest
     local CHOICES = { { 'move', 'Move to a free layer', 170 }, { 'merge', 'Merge into one layer', 170 }, { 'drop', 'Drop the paint', 140 } }
@@ -93,6 +94,7 @@ function Open(targetId, done)
     local optH = 0
     if hasExtra then optH = optH + 22 + choiceH + 8 + 44 + 10 end
     if hasUpper then optH = optH + 24 + 10 end
+    if hasTex then optH = optH + 24 + 10 end
     local texts = {}
     if plan.refused then
         table.insert(texts, plan.refused)
@@ -104,7 +106,7 @@ function Open(targetId, done)
     local height = math.max(260, math.min(maxHeight, 130 + optH + textH))
     local buttonsY = height - 40
     local d = Dialog.Open('Convert layers to ' .. tostring(targetId) .. '  (one undo step)', WIDTH, height)
-    local state = { plan = plan, dyn = {}, sliders = {}, choice = plan.default, mergeInto = 1, upper = true, dialog = d, width = WIDTH, height = height }
+    local state = { plan = plan, dyn = {}, sliders = {}, choice = plan.default, mergeInto = 1, upper = true, textures = true, dialog = d, width = WIDTH, height = height }
     last = state
 
     local view = TextView.New(d, 14, TOP, INNER, buttonsY - 8 - optH - TOP)
@@ -201,11 +203,18 @@ function Open(targetId, done)
         end
         if hasUpper then
             local atlas = plan.upperAction == 'atlas'
-            local b = Keep(d:Button(atlas and 'Replace Upper layer with a neutral roughness atlas' or 'Replace Upper layer with a transparent texture', 14, y, math.min(440, INNER), 24,
+            local b = Keep(d:Button(atlas and 'Replace Upper layer with a roughness atlas' or 'Replace Upper layer with a transparent texture', 14, y, math.min(440, INNER), 24,
                 function(self) state.upper = self.on end, { toggle = true,
                 tip = atlas and 'The PBR shaders read roughness (and, in the 2xx, heights) for every layer from the Upper layer. Off keeps your Upper texture.' or
                                 'The new shader would draw your Upper texture in a way it was not made for. Off keeps it.' }))
             b:SetOn(state.upper)
+            y = y + 24 + 10
+        end
+        if hasTex then
+            local tb = Keep(d:Button('Also convert textures (new files)', 14, y, math.min(440, INNER), 24,
+                function(self) state.textures = self.on end, { toggle = true,
+                tip = 'Write new texture files for the layers where the new shader reads them differently (albedo alpha, the roughness / height atlas of the Upper layer, the map normal map and water depth in layer 8). The old files stay and undo points the layers back. Off converts the paint masks only; a note lists what is left undone.' }))
+            tb:SetOn(state.textures)
         end
         Keep(d:Button('Convert', 14, buttonsY, 110, BUTTON_H, function() state.Run() end,
             { tip = 'Convert the layers of the map to the format of ' .. tostring(targetId) .. ' as listed above. One undo step undoes all of it.' }))
@@ -235,7 +244,7 @@ function Open(targetId, done)
     end
 
     function state.Run()
-        local report, why = Conv.Run(plan, { layer8 = state.choice, mergeInto = state.mergeInto, upper = state.upper })
+        local report, why = Conv.Run(plan, { layer8 = state.choice, mergeInto = state.mergeInto, upper = state.upper, textures = state.textures })
         state.ShowReport(report, why)
         if not report then
             Say('conversion failed: ' .. tostring(why))

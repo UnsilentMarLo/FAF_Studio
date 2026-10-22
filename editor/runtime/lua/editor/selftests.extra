@@ -32,3 +32,4 @@ selftest_brushshape
 selftest_normalpreview
 selftest_texbrowser
 selftest_unitfit
+selftest_camframe
