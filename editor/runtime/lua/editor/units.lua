@@ -65,6 +65,151 @@ function Catalog()
     return list
 end
 
+-- ---- unit icons -------------------------------------------------------------------------------------------------------------------------
+-- The game finds a unit's icon by its id: /textures/ui/common/icons/units/<ID>_icon.dds. A mod ships its icons in its OWN folder (/mods/<name>/textures/ui/common/icons/units/<ID>_icon.dds, or
+-- /mods/<name>/icons/units/ like UIUtil.UIFile(..., true) looks), and only a mod's hooks and blueprints are in the game's file tree, not its textures: the global path never finds them. So the
+-- icon of a unit is searched in the folder the blueprint came from (bp.Source) first, then in the global path, then in the icon folders of all mods that are mounted.
+
+local ICON_DIR = '/textures/ui/common/icons/units/'
+local GENERIC_ICONS = { land = true, air = true, sea = true, amph = true, naval = true, default = true }
+local iconCache = {}            -- id -> { path | false, at }
+local meshCache = {}            -- id -> vfs path | false
+local iconMods = false          -- { at, files = { lower file name -> vfs path } }: the icon files of every mod
+local ICON_MISS_TTL = 6         -- seconds a "no icon" answer is trusted (a project can write one while the editor runs)
+local ICON_MODS_TTL = 30
+
+local function IconExists(path)
+    return path and DiskGetFileInfo(path) and true or false
+end
+
+local function Blueprint(id)
+    return __blueprints and (__blueprints[id] or __blueprints[string.lower(id)])
+end
+
+--- The folder a blueprint was loaded from and the root of its mod / map: '/mods/<name>/units/abc/abc_unit.bp' -> '/mods/<name>/units/abc', '/mods/<name>'; the root is nil for the game's own units.
+function SourceFolders(bp)
+    local src = bp and bp.Source
+    if type(src) ~= 'string' or src == '' then return nil, nil end
+    local dir = string.gsub(src, '/[^/]*$', '')
+    local _, _, root = string.find(src, '^(/mods/[^/]+)')
+    if not root then _, _, root = string.find(src, '^(/maps/[^/]+)') end
+    if not root then
+        local at = string.find(string.lower(src), '/units/', 1, true)
+        if at and at > 1 then root = string.sub(src, 1, at - 1) end
+    end
+    return dir, root
+end
+
+--- lower case file name -> vfs path of the unit icons in the icon folders of the mods (all mods on disk and in the mod projects: the active set decides what is in the session, the files of the others cost nothing).
+local function ModIcons(force)
+    local now = GetSystemTimeSeconds()
+    if iconMods and not force and now - iconMods.at < ICON_MODS_TTL then return iconMods.files end
+    local files = {}
+    local ok, err = pcall(function()
+        for _, mod in import('/lua/editor/mods.lua').All() do
+            local loc = mod.location
+            if type(loc) == 'string' then
+                for _, sub in { loc .. ICON_DIR, loc .. '/icons/units/' } do
+                    local found = DiskFindFiles(sub, '*_icon.dds')
+                    for _, path in found or {} do
+                        local base = string.gsub(path, '^.*/', '')
+                        local key = string.lower(base)
+                        if not files[key] then files[key] = path end
+                    end
+                end
+            end
+        end
+    end)
+    if not ok then LOG('EDITOR units: icon search in the mods failed: ' .. tostring(err)) end
+    iconMods = { at = now, files = files }
+    return files
+end
+
+--- The icon file of a unit, a vfs path | nil. Looks in the folder of the blueprint's mod, the global icon folder, the icon the blueprint names, then in every mod. Answers are cached (a miss for a few seconds).
+function IconPath(id)
+    if type(id) ~= 'string' or id == '' then return nil end
+    local c = iconCache[id]
+    local now = GetSystemTimeSeconds()
+    if c and (c[1] or now - c[2] < ICON_MISS_TTL) then return c[1] or nil end
+    local bp = Blueprint(id)
+    local names = { string.upper(id) .. '_icon.dds', string.lower(id) .. '_icon.dds' }
+    if id ~= string.upper(id) and id ~= string.lower(id) then table.insert(names, id .. '_icon.dds') end
+    -- an icon the blueprint names (Display.IconName, General.Icon) when it is not one of the generic class pictures
+    for _, name in { bp and bp.Display and bp.Display.IconName, bp and bp.General and bp.General.Icon } do
+        if type(name) == 'string' and name ~= '' and not GENERIC_ICONS[string.lower(name)] then
+            table.insert(names, string.upper(name) .. '_icon.dds')
+            table.insert(names, string.lower(name) .. '_icon.dds')
+        end
+    end
+    local dirs = {}
+    local dir, root = SourceFolders(bp)
+    if root then
+        table.insert(dirs, root .. ICON_DIR)
+        table.insert(dirs, root .. '/icons/units/')
+    end
+    table.insert(dirs, ICON_DIR)
+    if dir then table.insert(dirs, dir .. '/') end
+    local found
+    for _, d in dirs do
+        for _, name in names do
+            if IconExists(d .. name) then found = d .. name break end
+        end
+        if found then break end
+    end
+    if not found then
+        local files = ModIcons(false)
+        for _, name in names do
+            found = files[string.lower(name)]
+            if found then break end
+        end
+    end
+    iconCache[id] = { found or false, now }
+    return found
+end
+
+--- The game's own placeholder (default_icon.dds, what the build menu shows for a unit without an icon), a vfs path | nil. Only a last resort: it says nothing about the unit.
+function GenericIconPath(id)
+    local path = ICON_DIR .. 'default_icon.dds'
+    if IconExists(path) then return path end
+    return nil
+end
+
+--- The mesh file of a unit's first level of detail, a vfs path | nil (the icon fallback renders it). Relative names are read from the folder of the blueprint.
+function MeshFile(id)
+    local cached = meshCache[id]
+    if cached ~= nil then return cached or nil end
+    local path = FindMeshFile(id)
+    meshCache[id] = path or false
+    return path
+end
+
+function FindMeshFile(id)
+    local bp = Blueprint(id)
+    local display = bp and bp.Display
+    if not display then return nil end
+    local lod
+    local ref = display.MeshBlueprint
+    local mb = ref and ref ~= '' and __blueprints and (__blueprints[ref] or __blueprints[string.lower(ref)])
+    if mb and mb.LODs then lod = mb.LODs[1] end
+    if not lod and display.Mesh and display.Mesh.LODs then lod = display.Mesh.LODs[1] end
+    local name = lod and lod.MeshName
+    if type(name) ~= 'string' or name == '' then return nil end
+    local dir = SourceFolders(bp)
+    local candidates = { name, string.lower(name) }
+    if string.sub(name, 1, 1) ~= '/' and dir then candidates = { dir .. '/' .. name, string.lower(dir .. '/' .. name), '/' .. name } end
+    for _, path in candidates do
+        if IconExists(path) then return path end
+    end
+    return nil
+end
+
+--- Forgets the icon answers (an icon was written, a mod was loaded).
+function IconRefresh()
+    iconCache = {}
+    meshCache = {}
+    iconMods = false
+end
+
 function Armies()
     local names = {}
     if Map.Doc then
@@ -516,20 +661,20 @@ local function ScreenToWorld(x, y)
     return nil
 end
 
---- Selects every unit inside the world box { x0, z0, x1, z1 } (replacing the selection, or adding to it); nil box = a click on empty ground.
+--- Selects every unit inside the selection box (tools.lua BoxHas: a rectangle on the screen, or the world box { x0, z0, x1, z1 }; replacing the selection, or adding to it);
+--- nil box = a click on empty ground.
 function SelectBox(box, additive)
     if not box then
         if not additive then ClearSelection() end
         return
     end
-    local minx, maxx = math.min(box[1], box[3]), math.max(box[1], box[3])
-    local minz, maxz = math.min(box[2], box[4]), math.max(box[2], box[4])
+    local BoxHas = import('/lua/editor/tools.lua').BoxHas
     if not additive then Selection = {} end
     local have = {}          -- (the selection grows in the loop: IsSelected would rebuild its set for every unit)
     for _, q in Selection do have[q.army .. '\1' .. q.name] = true end
     for _, u in CachedAll() do
         local key = u.army .. '\1' .. u.name
-        if u.x >= minx and u.x <= maxx and u.z >= minz and u.z <= maxz and not have[key] then
+        if not have[key] and BoxHas(box, u.x, u.z, u.y) then
             have[key] = true
             table.insert(Selection, { army = u.army, name = u.name })
         end

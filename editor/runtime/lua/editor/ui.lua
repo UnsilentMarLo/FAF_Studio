@@ -1029,7 +1029,9 @@ local function Line(first, view, ax, az, bx, bz)
     return first + EDGE_SAMPLES
 end
 
-local overlayBroken = false
+-- One failing frame no longer ends the engine overlay for the whole session: it is skipped for 3 seconds (the dots below stand in) and tried again; the same error text is logged once.
+local overlayBrokenUntil = 0
+local overlayLastError = false
 
 local function UpdateOverlay()
     local worldView = import('/lua/ui/game/worldview.lua').viewLeft
@@ -1039,11 +1041,14 @@ local function UpdateOverlay()
 
     -- the engine's line overlay (overlay.lua) draws markers' highlights, areas and the pointer; the pooled dots below are the
     -- fallback for an engine without it
-    if not overlayBroken then
+    if GetSystemTimeSeconds() >= overlayBrokenUntil then
         local ok, handled = pcall(Overlay.Update, import('/lua/editor/ui.lua'))
         if not ok then
-            overlayBroken = true
-            LOG('EDITOR overlay failed: ' .. tostring(handled))
+            overlayBrokenUntil = GetSystemTimeSeconds() + 3
+            if tostring(handled) ~= overlayLastError then
+                overlayLastError = tostring(handled)
+                LOG('EDITOR overlay failed (tried again in 3 s): ' .. overlayLastError)
+            end
         elseif handled then
             for _, d in dots do
                 d.dot:Hide()

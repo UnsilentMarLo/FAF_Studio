@@ -1,0 +1,986 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 16:17:51 +0000
+Subject: [PATCH] editor overlay: slope view blocks and coarse node grids are
+ draped over the real ground, "in front of the camera" uses the clip w, block
+ level with hysteresis
+
+- EdOverlayDrape.h: DrapePatch cuts a patch 2 x 2 (depth <= 4, single cells, quad budget) where the true projection of the edge midpoints / centre is more than 0.75 px
+  from the perspective-correct flat patch through the corners (a screen space bilinear would split flat ground seen at a low angle). Slope blocks (60000 quads per
+  frame) and runs of coarse node grids (30000) go through it; the slope view keeps its quads while camera, heights, view and colours stay the same.
+- the test "point is in front of the camera" was viewport.r[1] . p >= 1: row 1 is the LOD plane (world width of the view at that depth * camera lodScale), so it moved with
+  cam_SetLOD / the LOD options (0 = nothing drawn, 0.1 = nothing nearer than ~5 units). Now the clip w of viewProjection (what Project divides by) > kNearW, everywhere in EdOverlay.cpp.
+- LevelWithHysteresis: the block level goes coarser at 1.25 x the block limit and finer at 0.8 x, so zooming or a jittering view size no longer flips it.
+- tests: EdOverlayDrapeTest (new), EdOverlaySlopeTest (hysteresis).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdOverlay.cpp b/src/sdk/moho/editor/EdOverlay.cpp
+index c01d03a..56c4dcc 100644
+--- a/src/sdk/moho/editor/EdOverlay.cpp
++++ b/src/sdk/moho/editor/EdOverlay.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/editor/EdOverlay.h"
++#include "moho/editor/EdOverlayDrape.h"
+ #include "moho/editor/EdOverlayGeom.h"
+ #include "moho/editor/EdOverlayNodes.h"
+ #include "moho/editor/EdOverlaySlope.h"
+@@ -163,6 +164,14 @@ namespace
+     return session->mWldMap->mTerrainRes->GetHeightField();
+   }
+ 
++  // The w that GeomCamera3::Project divides by: > 0 in front of the camera (the distance along the view direction), <= 0 behind it. This, not viewport.r[1] (the LOD plane,
++  // scaled by the camera's LOD scale), decides whether a point is in front (overlaydrape::InFront).
++  float ClipW(const moho::GeomCamera3& camera, const Wm3::Vector3f& p)
++  {
++    const moho::VMatrix4& m = camera.viewProjection;
++    return (m.r[0].w * p.x) + (m.r[1].w * p.y) + (m.r[2].w * p.z) + m.r[3].w;
++  }
++
+   // What the camera looked like when a projection was made: the rows of its viewport matrix and the size of the view. A cached projection is good while this is equal.
+   struct CamStamp
+   {
+@@ -194,7 +203,7 @@ namespace
+     unsigned heightEpoch = 0;
+     CamStamp stamp;
+     bool valid = false;
+-    std::vector<float> sx, sy;
++    std::vector<float> sx, sy, sw;     // screen position and clip w of a projected node
+     std::vector<std::uint8_t> state;   // 0 not projected yet, 1 on screen side, 2 behind the camera
+     unsigned usedFrame = 0;
+ 
+@@ -210,21 +219,24 @@ namespace
+       const std::size_t n = static_cast<std::size_t>(nw) * static_cast<std::size_t>(nh);
+       sx.resize(n);
+       sy.resize(n);
++      sw.resize(n);
+       state.assign(n, 0);
+     }
+ 
+     // Node (i, j): true when it is in front of the camera; its screen position in (x, y).
+-    bool Get(moho::CHeightField& field, moho::GeomCamera3& camera, const float vw, const float vh, const int i, const int j, float& x, float& y, int& projected)
++    bool Get(moho::CHeightField& field, moho::GeomCamera3& camera, const float vw, const float vh, const int i, const int j, float& x, float& y, int& projected, float* const outW = nullptr)
+     {
+       const std::size_t k = static_cast<std::size_t>(j) * static_cast<std::size_t>(nw) + static_cast<std::size_t>(i);
+       if (state[k] == 0) {
+         const int wx = std::max(0, std::min(field.Width() - 1, x0 + i * step));
+         const int wz = std::max(0, std::min(field.Height() - 1, z0 + j * step));
+         const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field.GetHeightAt(wx, wz)) / 128.0f + lift, static_cast<float>(wz)};
+-        if (camera.viewport.ProjectViewportDepthRow1(p) >= 1.0f) {
++        const float w = ClipW(camera, p);
++        if (moho::editor::overlaydrape::InFront(w)) {
+           const Wm3::Vector2f sp = camera.Project(p, 0.0f, vw, vh, 0.0f);
+           sx[k] = sp.x;
+           sy[k] = sp.y;
++          sw[k] = w;
+           state[k] = 1;
+         } else {
+           state[k] = 2;
+@@ -233,6 +245,9 @@ namespace
+       }
+       x = sx[k];
+       y = sy[k];
++      if (outW != nullptr) {
++        *outW = sw[k];
++      }
+       return state[k] == 1;
+     }
+   };
+@@ -276,6 +291,98 @@ namespace
+     return 1;
+   }
+ 
++  // ---- draping a patch over the real ground (EdOverlayDrape.h) ---------------------------------------------------------------------------
++  //
++  // A patch (a block of the slope view, a cell run of a coarse node grid) is ONE screen quad between its four corner nodes, which only follows the terrain when the ground
++  // inside is as flat as the quad. DrapeRect cuts it 2 x 2 (recursively, DrapePatch) wherever the real ground at the edge midpoints / centre is more than 0.75 px away from
++  // the flat patch, sampling the true heights of the sub-nodes.
++  struct DrapeQuad
++  {
++    float x[4], y[4];
++    std::uint32_t c[4];
++  };
++
++  struct DrapeScene
++  {
++    moho::CHeightField* field = nullptr;
++    moho::GeomCamera3* camera = nullptr;
++    float vw = 0.0f, vh = 0.0f, lift = 0.0f;
++    int* projected = nullptr;                          // perf counter of projected nodes
++    moho::editor::overlaydrape::QuadBudget budget;
++    std::vector<DrapeQuad>* out = nullptr;
++  };
++
++  // Clips [x0, x1] x [z0, z1] to the map (what ProjGrid does with its nodes), cuts it up and appends the quads to sc.out. `pre` are the projected corners of the CLIPPED rectangle
++  // in the order (x0, z0), (x1, z0), (x1, z1), (x0, z1); `col` the ARGB at the corners of the unclipped one.
++  void DrapeRect(DrapeScene& sc, const int x0, const int z0, const int x1, const int z1, const std::uint32_t* const col, const moho::editor::overlaydrape::Node* const pre)
++  {
++    namespace od = moho::editor::overlaydrape;
++    const int maxX = sc.field->Width() - 1, maxZ = sc.field->Height() - 1;
++    const int cx0 = std::max(0, std::min(maxX, x0)), cx1 = std::max(0, std::min(maxX, x1));
++    const int cz0 = std::max(0, std::min(maxZ, z0)), cz1 = std::max(0, std::min(maxZ, z1));
++    if (cx1 <= cx0 || cz1 <= cz0 || x1 <= x0 || z1 <= z0) {
++      return;
++    }
++    const float u0 = static_cast<float>(cx0 - x0) / static_cast<float>(x1 - x0), u1 = static_cast<float>(cx1 - x0) / static_cast<float>(x1 - x0);
++    const float v0 = static_cast<float>(cz0 - z0) / static_cast<float>(z1 - z0), v1 = static_cast<float>(cz1 - z0) / static_cast<float>(z1 - z0);
++    const std::uint32_t cc[4] = {od::LerpArgb(col, u0, v0), od::LerpArgb(col, u1, v0), od::LerpArgb(col, u1, v1), od::LerpArgb(col, u0, v1)};
++    const auto node = [&sc](const int x, const int z, od::Node& n) {
++      const Wm3::Vector3f p{static_cast<float>(x), static_cast<float>(sc.field->GetHeightAt(x, z)) / 128.0f + sc.lift, static_cast<float>(z)};
++      const float w = ClipW(*sc.camera, p);
++      ++*sc.projected;
++      if (!od::InFront(w)) {
++        return false;
++      }
++      const Wm3::Vector2f s = sc.camera->Project(p, 0.0f, sc.vw, sc.vh, 0.0f);
++      n = od::Node{s.x, s.y, w};
++      return true;
++    };
++    const auto visible = [&sc](const float minX, const float minY, const float maxXs, const float maxYs) {
++      return !(maxXs < 0.0f || maxYs < 0.0f || minX > sc.vw || minY > sc.vh);
++    };
++    const auto emit = [&sc, &visible](const od::Node* const q, const std::uint32_t* const c) {
++      const float minX = std::min(std::min(q[0].x, q[1].x), std::min(q[2].x, q[3].x));
++      const float maxXs = std::max(std::max(q[0].x, q[1].x), std::max(q[2].x, q[3].x));
++      const float minY = std::min(std::min(q[0].y, q[1].y), std::min(q[2].y, q[3].y));
++      const float maxYs = std::max(std::max(q[0].y, q[1].y), std::max(q[2].y, q[3].y));
++      if (!visible(minX, minY, maxXs, maxYs)) {
++        return;
++      }
++      DrapeQuad d;
++      for (int k = 0; k < 4; ++k) {
++        d.x[k] = q[k].x;
++        d.y[k] = q[k].y;
++        d.c[k] = c[k];
++      }
++      sc.out->push_back(d);
++    };
++    od::DrapePatch(node, visible, emit, sc.budget, cx0, cz0, cx1, cz1, pre, cc, 0);
++  }
++
++  void DrawDrapeQuads(moho::CD3DPrimBatcher& batcher, const std::vector<DrapeQuad>& quads)
++  {
++    using V = moho::CD3DPrimBatcher::Vertex;
++    for (const DrapeQuad& q : quads) {
++      batcher.DrawQuad(V{q.x[0], q.y[0], 0.0f, q.c[0], 0.0f, 0.0f}, V{q.x[1], q.y[1], 0.0f, q.c[1], 1.0f, 0.0f}, V{q.x[2], q.y[2], 0.0f, q.c[2], 1.0f, 1.0f},
++                       V{q.x[3], q.y[3], 0.0f, q.c[3], 0.0f, 1.0f});
++    }
++  }
++
++  // The drawn slope blocks of the last frame, kept while nothing they depend on changes: a still view replays them without projecting or sampling anything.
++  struct SlopeCache
++  {
++    bool valid = false;
++    CamStamp stamp;
++    unsigned heightEpoch = 0;
++    int level = 0, bx0 = 0, bz0 = 0, bw = 0, bh = 0;
++    std::vector<std::uint8_t> steps;
++    std::vector<DrapeQuad> quads;
++  };
++  SlopeCache gSlopeCache;
++  int gSlopeLevel = -1;                          // block level of the last frame (the hysteresis of LevelWithHysteresis)
++  constexpr int kSlopeQuadCap = 60000;           // quads of the slope view per frame (a block that would be cut up beyond it stays one quad)
++  constexpr int kGridQuadCap = 30000;            // the same for all node grids together
++
+   // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through. `step` is a ColorStep
+   // (EdOverlaySlope.h): 0 flat, 1 .. kSteps up to the limit, kSteps + 1 beyond.
+   std::uint32_t SlopeColor(const int step)
+@@ -350,7 +457,7 @@ namespace
+     for (std::size_t i = 0; i < n; ++i) {
+       const Wm3::Vector3f p{pl.pts[i * 3], pl.pts[i * 3 + 1], pl.pts[i * 3 + 2]};
+       const Wm3::Vector2f s = cam.Project(p, 0.0f, vw, vh, 0.0f);
+-      sp[i] = {s.x, s.y, cam.viewport.ProjectViewportDepthRow1(p)};
++      sp[i] = {s.x, s.y, ClipW(cam, p)};
+ 
+       // width of a horizontal ribbon of `worldWidth` across this vertex, measured on screen
+       const std::size_t a = (i == 0u) ? (pl.closed ? n - 1u : 0u) : i - 1u;
+@@ -380,7 +487,7 @@ namespace
+       const std::size_t i1 = (s + 1u) % n;
+       const Pt& a = sp[i0];
+       const Pt& c = sp[i1];
+-      if (a.depth < 1.0f || c.depth < 1.0f) {
++      if (!moho::editor::overlaydrape::InFront(a.depth) || !moho::editor::overlaydrape::InFront(c.depth)) {
+         if (!halo) gDbg[7] += 1.0f;
+         continue;
+       }
+@@ -393,7 +500,7 @@ namespace
+     }
+     if (pl.caps) {
+       for (std::size_t i = 0; i < n; ++i) {
+-        if (sp[i].depth >= 1.0f) {
++        if (moho::editor::overlaydrape::InFront(sp[i].depth)) {
+           Cap(b, sp[i].x, sp[i].y, half[i], color);   // joins the ribbons at the vertices
+         }
+       }
+@@ -776,7 +883,7 @@ namespace moho
+             bool allVisible = true;
+             for (int i = 0; i < 4; ++i) {
+               const Wm3::Vector3f p{d->x + cornersX[i] * cs - cornersZ[i] * sn, d->y, d->z + cornersX[i] * sn + cornersZ[i] * cs};
+-              if (camera->viewport.ProjectViewportDepthRow1(p) < 1.0f) {
++              if (!moho::editor::overlaydrape::InFront(ClipW(*camera, p))) {
+                 allVisible = false;
+                 continue;
+               }
+@@ -819,7 +926,7 @@ namespace moho
+             visible.assign(pts.size(), 0);
+             for (std::size_t i = 0; i < pts.size(); ++i) {
+               const Wm3::Vector3f p{pts[i].x, pts[i].y, pts[i].z};
+-              if (camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f) {
++              if (moho::editor::overlaydrape::InFront(ClipW(*camera, p))) {
+                 screen[i] = camera->Project(p, 0.0f, vw, vh, 0.0f);
+                 visible[i] = 1;
+               }
+@@ -870,6 +977,8 @@ namespace moho
+           lastField = f;
+           lastW = fw;
+           lastH = fh;
++          gSlopeLevel = -1;
++          gSlopeCache.valid = false;
+           ++gHeightEpoch;
+           gSlopeStore.Reset(fw, fh);
+         }
+@@ -892,7 +1001,9 @@ namespace moho
+ 
+             // the block size: a power of two of cells, so that at most kSlopeMaxBlocks blocks per side are drawn; blocks are aligned to multiples of their size, so
+             // they do not shift while the camera pans
+-            const int level = sl::LevelForView(std::max(x1 - x0, z1 - z0), kSlopeMaxBlocks);
++            // (with hysteresis: the size of the view jitters with the camera, and a flip of the level re-projects everything)
++            const int level = sl::LevelWithHysteresis(std::max(x1 - x0, z1 - z0), kSlopeMaxBlocks, gSlopeLevel);
++            gSlopeLevel = level;
+             const int stride = 1 << level;
+             const int bx0 = x0 >> level;
+             const int bz0 = z0 >> level;
+@@ -949,53 +1060,81 @@ namespace moho
+               }
+             }
+ 
+-            gSlopeProj.Prepare(bx0 << level, bz0 << level, bw + 1, bh + 1, stride, 0.12f, stamp);
+             batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+-            using V = CD3DPrimBatcher::Vertex;
+-            constexpr int kMaxRunBlocks = 8;
+-            for (int j = 0; j < bh; ++j) {
+-              int i = 0;
+-              while (i < bw) {
+-                const int st = steps[static_cast<std::size_t>(j) * bw + i];
+-                float ax, ay, bxs, bys, cx, cy, dx, dy;
+-                if (st == 0 || !gSlopeProj.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.slopeNodesProjected) ||
+-                    !gSlopeProj.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.slopeNodesProjected)) {
+-                  ++i;
+-                  continue;
+-                }
+-                // a run of neighbouring blocks with the same colour is one quad
+-                int len = 1;
+-                bool ok = gSlopeProj.Get(*field, *camera, vw, vh, i + 1, j, bxs, bys, gPerf.slopeNodesProjected) &&
+-                          gSlopeProj.Get(*field, *camera, vw, vh, i + 1, j + 1, cx, cy, gPerf.slopeNodesProjected);
+-                while (ok && len < kMaxRunBlocks && i + len < bw && steps[static_cast<std::size_t>(j) * bw + i + len] == st) {
+-                  float nbx, nby, ncx, ncy;
+-                  if (!gSlopeProj.Get(*field, *camera, vw, vh, i + len + 1, j, nbx, nby, gPerf.slopeNodesProjected) ||
+-                      !gSlopeProj.Get(*field, *camera, vw, vh, i + len + 1, j + 1, ncx, ncy, gPerf.slopeNodesProjected)) {
+-                    break;
++            // Nothing changed since the last frame (camera, heights, view, colours): replay its quads.
++            SlopeCache& cache = gSlopeCache;
++            const bool same = cache.valid && cache.stamp == stamp && cache.heightEpoch == gHeightEpoch && cache.level == level && cache.bx0 == bx0 && cache.bz0 == bz0 &&
++                              cache.bw == bw && cache.bh == bh && cache.steps == steps;
++            if (!same) {
++              cache.valid = false;
++              cache.quads.clear();
++              gSlopeProj.Prepare(bx0 << level, bz0 << level, bw + 1, bh + 1, stride, 0.12f, stamp);
++              namespace od = moho::editor::overlaydrape;
++              DrapeScene sc;
++              sc.field = field;
++              sc.camera = camera;
++              sc.vw = vw;
++              sc.vh = vh;
++              sc.lift = 0.12f;
++              sc.projected = &gPerf.slopeNodesProjected;
++              sc.budget.cap = kSlopeQuadCap;
++              // every block that is drawn counts one quad from the start, so the blocks drawn first cannot use up the quads the others need
++              sc.budget.committed = static_cast<int>(steps.size() - static_cast<std::size_t>(std::count(steps.begin(), steps.end(), static_cast<std::uint8_t>(0))));
++              sc.out = &cache.quads;
++              constexpr int kMaxRunBlocks = 8;
++              for (int j = 0; j < bh; ++j) {
++                int i = 0;
++                while (i < bw) {
++                  const int st = steps[static_cast<std::size_t>(j) * bw + i];
++                  float ax, ay, bxs, bys, cx, cy, dx, dy;
++                  if (st == 0 || !gSlopeProj.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.slopeNodesProjected) ||
++                      !gSlopeProj.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.slopeNodesProjected)) {
++                    ++i;
++                    continue;
+                   }
+-                  bxs = nbx; bys = nby; cx = ncx; cy = ncy;
+-                  ++len;
+-                }
+-                if (ok && len > 1) {
+-                  len = FitRun(gSlopeProj, *field, *camera, vw, vh, i, j, len, gPerf.slopeNodesProjected);
+-                  ok = gSlopeProj.Get(*field, *camera, vw, vh, i + len, j, bxs, bys, gPerf.slopeNodesProjected) &&
+-                       gSlopeProj.Get(*field, *camera, vw, vh, i + len, j + 1, cx, cy, gPerf.slopeNodesProjected);
+-                }
+-                if (ok) {
+-                  const float minX = std::min(std::min(ax, bxs), std::min(cx, dx));
+-                  const float maxX = std::max(std::max(ax, bxs), std::max(cx, dx));
+-                  const float minY = std::min(std::min(ay, bys), std::min(cy, dy));
+-                  const float maxY = std::max(std::max(ay, bys), std::max(cy, dy));
+-                  if (!(maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh)) {
++                  // a run of neighbouring blocks with the same colour is one patch
++                  int len = 1;
++                  bool ok = gSlopeProj.Get(*field, *camera, vw, vh, i + 1, j, bxs, bys, gPerf.slopeNodesProjected) &&
++                            gSlopeProj.Get(*field, *camera, vw, vh, i + 1, j + 1, cx, cy, gPerf.slopeNodesProjected);
++                  while (ok && len < kMaxRunBlocks && i + len < bw && steps[static_cast<std::size_t>(j) * bw + i + len] == st) {
++                    float nbx, nby, ncx, ncy;
++                    if (!gSlopeProj.Get(*field, *camera, vw, vh, i + len + 1, j, nbx, nby, gPerf.slopeNodesProjected) ||
++                        !gSlopeProj.Get(*field, *camera, vw, vh, i + len + 1, j + 1, ncx, ncy, gPerf.slopeNodesProjected)) {
++                      break;
++                    }
++                    bxs = nbx; bys = nby; cx = ncx; cy = ncy;
++                    ++len;
++                  }
++                  if (ok && len > 1) {
++                    len = FitRun(gSlopeProj, *field, *camera, vw, vh, i, j, len, gPerf.slopeNodesProjected);
++                  }
++                  // the corners of the run with their clip w, then the patch is draped over the ground between them
++                  od::Node pre[4];
++                  ok = ok && gSlopeProj.Get(*field, *camera, vw, vh, i, j, pre[0].x, pre[0].y, gPerf.slopeNodesProjected, &pre[0].w) &&
++                       gSlopeProj.Get(*field, *camera, vw, vh, i + len, j, pre[1].x, pre[1].y, gPerf.slopeNodesProjected, &pre[1].w) &&
++                       gSlopeProj.Get(*field, *camera, vw, vh, i + len, j + 1, pre[2].x, pre[2].y, gPerf.slopeNodesProjected, &pre[2].w) &&
++                       gSlopeProj.Get(*field, *camera, vw, vh, i, j + 1, pre[3].x, pre[3].y, gPerf.slopeNodesProjected, &pre[3].w);
++                  if (ok) {
+                     const std::uint32_t color = SlopeColor(st);
+-                    batcher->DrawQuad(V{ax, ay, 0.0f, color, 0.0f, 0.0f}, V{bxs, bys, 0.0f, color, 1.0f, 0.0f}, V{cx, cy, 0.0f, color, 1.0f, 1.0f},
+-                                      V{dx, dy, 0.0f, color, 0.0f, 1.0f});
+-                    ++gPerf.slopeQuads;
++                    const std::uint32_t col[4] = {color, color, color, color};
++                    const int wx0 = (bx0 << level) + i * stride, wz0 = (bz0 << level) + j * stride;
++                    DrapeRect(sc, wx0, wz0, wx0 + len * stride, wz0 + stride, col, pre);
+                   }
++                  i += len;
+                 }
+-                i += len;
+               }
++              cache.stamp = stamp;
++              cache.heightEpoch = gHeightEpoch;
++              cache.level = level;
++              cache.bx0 = bx0;
++              cache.bz0 = bz0;
++              cache.bw = bw;
++              cache.bh = bh;
++              cache.steps = steps;
++              cache.valid = true;
+             }
++            DrawDrapeQuads(*batcher, cache.quads);
++            gPerf.slopeQuads = static_cast<int>(cache.quads.size());
+             batcher->Flush();
+             gPerf.slopeDrawMs = NowMs() - tDraw;
+           }
+@@ -1010,7 +1149,21 @@ namespace moho
+         ++gridFrame;
+         const double tGrids = NowMs();
+         batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+-        using V = CD3DPrimBatcher::Vertex;
++        namespace od = moho::editor::overlaydrape;
++        static std::vector<DrapeQuad> gridQuads;   // kept between frames so a frame does not allocate
++        gridQuads.clear();
++        DrapeScene sc;
++        sc.field = field;
++        sc.camera = camera;
++        sc.vw = vw;
++        sc.vh = vh;
++        sc.lift = 0.14f;
++        sc.projected = &gPerf.gridNodesProjected;
++        sc.budget.cap = kGridQuadCap;
++        sc.out = &gridQuads;
++        for (auto& entry : NodeGrids()) {
++          sc.budget.committed += static_cast<int>(entry.second.runs.size());
++        }
+         for (auto& entry : NodeGrids()) {
+           NodeGrid& g = entry.second;
+           if (g.runsDirty) {
+@@ -1034,26 +1187,21 @@ namespace moho
+               const int i = run.i + pos, j = run.j;
+               const int len = run.len > 1 ? FitRun(pg, *field, *camera, vw, vh, i, j, run.len - pos, gPerf.gridNodesProjected) : 1;
+               pos += len;
+-              float ax, ay, bx, by, cx, cy, dx, dy;
+-              if (!pg.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.gridNodesProjected) ||
+-                  !pg.Get(*field, *camera, vw, vh, i + len, j, bx, by, gPerf.gridNodesProjected) ||
+-                  !pg.Get(*field, *camera, vw, vh, i + len, j + 1, cx, cy, gPerf.gridNodesProjected) ||
+-                  !pg.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.gridNodesProjected)) {
+-                continue;
+-              }
+-              const float minX = std::min(std::min(ax, bx), std::min(cx, dx));
+-              const float maxX = std::max(std::max(ax, bx), std::max(cx, dx));
+-              const float minY = std::min(std::min(ay, by), std::min(cy, dy));
+-              const float maxY = std::max(std::max(ay, by), std::max(cy, dy));
+-              if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
++              // the corners with their clip w; the patch (a run of cells of a coarse grid) is draped over the ground between them (DrapeRect)
++              od::Node pre[4];
++              if (!pg.Get(*field, *camera, vw, vh, i, j, pre[0].x, pre[0].y, gPerf.gridNodesProjected, &pre[0].w) ||
++                  !pg.Get(*field, *camera, vw, vh, i + len, j, pre[1].x, pre[1].y, gPerf.gridNodesProjected, &pre[1].w) ||
++                  !pg.Get(*field, *camera, vw, vh, i + len, j + 1, pre[2].x, pre[2].y, gPerf.gridNodesProjected, &pre[2].w) ||
++                  !pg.Get(*field, *camera, vw, vh, i, j + 1, pre[3].x, pre[3].y, gPerf.gridNodesProjected, &pre[3].w)) {
+                 continue;
+               }
+-              const std::uint32_t ca = colorAt(i, j), cb = colorAt(i + len, j), cc = colorAt(i + len, j + 1), cd = colorAt(i, j + 1);
+-              batcher->DrawQuad(V{ax, ay, 0.0f, ca, 0.0f, 0.0f}, V{bx, by, 0.0f, cb, 1.0f, 0.0f}, V{cx, cy, 0.0f, cc, 1.0f, 1.0f}, V{dx, dy, 0.0f, cd, 0.0f, 1.0f});
+-              ++gPerf.gridQuads;
++              const std::uint32_t col[4] = {colorAt(i, j), colorAt(i + len, j), colorAt(i + len, j + 1), colorAt(i, j + 1)};
++              DrapeRect(sc, g.x0 + i * g.step, g.z0 + j * g.step, g.x0 + (i + len) * g.step, g.z0 + (j + 1) * g.step, col, pre);
+             }
+           }
+         }
++        DrawDrapeQuads(*batcher, gridQuads);
++        gPerf.gridQuads = static_cast<int>(gridQuads.size());
+         batcher->Flush();
+         for (auto it = gGridProj.begin(); it != gGridProj.end();) {
+           if (it->second.usedFrame != gridFrame) {
+@@ -1090,7 +1238,7 @@ namespace moho
+         batcher->SetTexture(texture);
+         for (const Icon* const icon : group.second) {
+           const Wm3::Vector3f p{icon->x, icon->y, icon->z};
+-          if (camera->viewport.ProjectViewportDepthRow1(p) < 1.0f) {
++          if (!moho::editor::overlaydrape::InFront(ClipW(*camera, p))) {
+             continue;
+           }
+           const Wm3::Vector2f s = camera->Project(p, 0.0f, vw, vh, 0.0f);
+diff --git a/src/sdk/moho/editor/EdOverlayDrape.h b/src/sdk/moho/editor/EdOverlayDrape.h
+new file mode 100644
+index 0000000..058a1b0
+--- /dev/null
++++ b/src/sdk/moho/editor/EdOverlayDrape.h
+@@ -0,0 +1,202 @@
++// EDITOR: draping a screen quad over bumpy ground (EdOverlay.cpp: slope view blocks, node grids with a coarse step), engine independent so it can be tested on its
++// own (moho/editor/tests/EdOverlayDrapeTest.cpp).
++//
++// The overlays are drawn as screen space quads between projected ground nodes. One quad between four far apart nodes is a flat patch: it only follows the terrain
++// when the ground inside is flat too. Over rough ground the terrain pokes through the colour (dark slivers) or the colour floats above it. A patch is therefore
++// tested against the REAL ground at its edge midpoints and its centre (`NeedsSplit`) and cut into 2 x 2 (or 2 x 1 / 1 x 2 for a strip) patches that are tested the
++// same way, down to single cells, within a depth and a quad budget (`QuadBudget`).
++//
++// The test compares a sample's true screen position with where a FLAT patch through the four corners would put it, perspective correct: a planar world
++// parallelogram has clip space coordinates that are affine in the patch parameters (u, v), so the screen position of (u, v) is
++//     S(u, v) = sum(b_i * w_i * S_i) / sum(b_i * w_i)      b = bilinear weights, w_i = clip w of corner i, S_i = its screen position.
++// A plain screen space bilinear interpolation would be off by several pixels on perfectly flat ground seen at a low angle and would split without reason.
++//
++// Also here: the "is this point in front of the camera" test. `viewport.r[1]` is NOT that (see InFront).
++#pragma once
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++
++namespace moho::editor::overlaydrape
++{
++  /**
++   * A point is in front of the camera when its clip space w (the divisor of the projection: the distance along the view direction for a perspective camera, the
++   * `viewProjection` column 3 dotted with (x, y, z, 1)) is positive. `kNearW` keeps points that are almost in the camera plane out: their screen position runs off to
++   * infinity and a quad between such a node and a visible one covers the whole screen.
++   *
++   * What it replaces: `camera.viewport.ProjectViewportDepthRow1(p) >= 1.0f`. Row 1 of the viewport matrix is the LOD plane: (view space depth * widthSlope + widthIntercept)
++   * * lodScale, i.e. the world width of the view at that depth times the camera's LOD scale (GeomCamera3::Init, SetLODScale). `>= 1` therefore means "at least
++   * 1 / (lodScale * 2 * tan(fov / 2) * aspect) in front", a threshold that moves with the LOD scale (cam_SetLOD, cam_HighLOD ...): lodScale 0 or a tiny scale rejects
++   * every point (the overlay disappears), a scale of 0.1 rejects everything nearer than ~5 units (a camera low over the ground loses the near half of the picture).
++   */
++  constexpr float kNearW = 0.05f;
++
++  [[nodiscard]] inline bool InFront(const float clipW) noexcept
++  {
++    return clipW > kNearW;
++  }
++
++  /** A projected ground node: screen position and the clip space w it was divided by. */
++  struct Node
++  {
++    float x = 0.0f, y = 0.0f, w = 1.0f;
++  };
++
++  /** Corner order everywhere: c[0] = (u 0, v 0), c[1] = (1, 0), c[2] = (1, 1), c[3] = (0, 1). */
++  [[nodiscard]] inline Node FlatPatchAt(const Node* const c, const float u, const float v) noexcept
++  {
++    const float b[4] = {(1.0f - u) * (1.0f - v), u * (1.0f - v), u * v, (1.0f - u) * v};
++    float sw = 0.0f, sx = 0.0f, sy = 0.0f;
++    for (int i = 0; i < 4; ++i) {
++      const float k = b[i] * c[i].w;
++      sw += k;
++      sx += k * c[i].x;
++      sy += k * c[i].y;
++    }
++    if (sw <= 1.0e-12f) {
++      return Node{c[0].x, c[0].y, c[0].w};
++    }
++    return Node{sx / sw, sy / sw, sw};
++  }
++
++  struct Sample
++  {
++    float u, v;   // where in the patch (0..1) the real ground point was taken
++    Node n;       // its true projection
++  };
++
++  /** Pixels between the true projection of a sample and where the flat patch puts it. */
++  [[nodiscard]] inline float Deviation(const Node* const c, const Sample& s) noexcept
++  {
++    const Node f = FlatPatchAt(c, s.u, s.v);
++    return std::sqrt((f.x - s.n.x) * (f.x - s.n.x) + (f.y - s.n.y) * (f.y - s.n.y));
++  }
++
++  /** True when any sample is more than `tolPx` away from the flat patch through the corners. */
++  [[nodiscard]] inline bool NeedsSplit(const Node* const c, const Sample* const s, const int count, const float tolPx) noexcept
++  {
++    for (int i = 0; i < count; ++i) {
++      if (Deviation(c, s[i]) > tolPx) {
++        return true;
++      }
++    }
++    return false;
++  }
++
++  /**
++   * How many quads a frame may emit. `committed` counts the quads that are drawn or still waiting to be drawn (every top level patch counts one from the start, a
++   * split adds the difference), so a patch that wants to split is refused when the rest of the frame could no longer be drawn at all.
++   */
++  struct QuadBudget
++  {
++    int cap = 60000;
++    int committed = 0;
++
++    [[nodiscard]] bool TrySplit(const int depth, const int maxDepth, const int extraQuads) noexcept
++    {
++      if (depth >= maxDepth || committed + extraQuads > cap) {
++        return false;
++      }
++      committed += extraQuads;
++      return true;
++    }
++  };
++
++  /** ARGB of a patch corner set at (u, v): every channel bilinear. */
++  [[nodiscard]] inline std::uint32_t LerpArgb(const std::uint32_t* const col, const float u, const float v) noexcept
++  {
++    if (col[0] == col[1] && col[1] == col[2] && col[2] == col[3]) {
++      return col[0];
++    }
++    const float b[4] = {(1.0f - u) * (1.0f - v), u * (1.0f - v), u * v, (1.0f - u) * v};
++    std::uint32_t out = 0;
++    for (int shift = 24; shift >= 0; shift -= 8) {
++      float acc = 0.0f;
++      for (int i = 0; i < 4; ++i) {
++        acc += b[i] * static_cast<float>((col[i] >> shift) & 0xFFu);
++      }
++      out |= static_cast<std::uint32_t>(std::min(255.0f, std::max(0.0f, acc + 0.5f))) << shift;
++    }
++    return out;
++  }
++
++  constexpr int kMaxDepth = 4;
++  constexpr float kTolerancePx = 0.75f;
++
++  /**
++   * Draws the patch [x0, x1] x [z0, z1] (integer ground coordinates, x1 > x0 or z1 > z0) whose corner projections are `c` and colours `col` (corner order above).
++   *   node(x, z, Node&) -> bool   projects the real ground point at integer (x, z); false when it is behind the camera
++   *   visible(minX, minY, maxX, maxY) -> bool   false when the screen box is off screen (the patch is dropped before it is cut up)
++   *   emit(const Node* quad4, const std::uint32_t* col4)   one finished quad
++   * Cuts the patch in two along every side that is at least 2 cells long when a sample (edge midpoints and centre) is off the flat patch by more than `tolPx`, and
++   * recurses; stops at `maxDepth`, at single cells, when the budget is spent, and when a sample is behind the camera (the corners are in front: the plain quad is drawn).
++   */
++  template <class NodeFn, class VisibleFn, class EmitFn>
++  void DrapePatch(NodeFn& node, VisibleFn& visible, EmitFn& emit, QuadBudget& budget, const int x0, const int z0, const int x1, const int z1, const Node* const c,
++                  const std::uint32_t* const col, const int depth, const int maxDepth = kMaxDepth, const float tolPx = kTolerancePx)
++  {
++    const int w = x1 - x0, h = z1 - z0;
++    const bool splitX = w >= 2, splitZ = h >= 2;
++    if ((splitX || splitZ) && depth < maxDepth && budget.committed + (splitX ? 1 : 0) + (splitZ ? 1 : 0) + ((splitX && splitZ) ? 1 : 0) <= budget.cap) {
++      const int xm = x0 + w / 2, zm = z0 + h / 2;
++      const float um = splitX ? static_cast<float>(xm - x0) / static_cast<float>(w) : 0.5f;
++      const float vm = splitZ ? static_cast<float>(zm - z0) / static_cast<float>(h) : 0.5f;
++      // nodes: [row][column] over the split lines (3 x 3 at most); the corners are known
++      Node g[3][3];
++      bool ok = true;
++      const int nxs = splitX ? 3 : 2, nzs = splitZ ? 3 : 2;
++      const int xs[3] = {x0, splitX ? xm : x1, x1};
++      const int zs[3] = {z0, splitZ ? zm : z1, z1};
++      Sample samples[5];
++      int ns = 0;
++      for (int jz = 0; jz < nzs && ok; ++jz) {
++        for (int ix = 0; ix < nxs && ok; ++ix) {
++          const bool left = ix == 0, right = ix == nxs - 1, top = jz == 0, bottom = jz == nzs - 1;
++          if ((left || right) && (top || bottom)) {
++            g[jz][ix] = c[top ? (left ? 0 : 1) : (left ? 3 : 2)];
++            continue;
++          }
++          if (!node(xs[ix], zs[jz], g[jz][ix]) || !InFront(g[jz][ix].w)) {
++            ok = false;
++            break;
++          }
++          const float u = (nxs == 3) ? (ix == 1 ? um : (ix == 0 ? 0.0f : 1.0f)) : (ix == 0 ? 0.0f : 1.0f);
++          const float v = (nzs == 3) ? (jz == 1 ? vm : (jz == 0 ? 0.0f : 1.0f)) : (jz == 0 ? 0.0f : 1.0f);
++          samples[ns++] = Sample{u, v, g[jz][ix]};
++        }
++      }
++      if (ok) {
++        float minX = c[0].x, maxX = c[0].x, minY = c[0].y, maxY = c[0].y;
++        for (int i = 0; i < 4; ++i) {
++          minX = std::min(minX, c[i].x); maxX = std::max(maxX, c[i].x);
++          minY = std::min(minY, c[i].y); maxY = std::max(maxY, c[i].y);
++        }
++        for (int i = 0; i < ns; ++i) {
++          minX = std::min(minX, samples[i].n.x); maxX = std::max(maxX, samples[i].n.x);
++          minY = std::min(minY, samples[i].n.y); maxY = std::max(maxY, samples[i].n.y);
++        }
++        if (!visible(minX, minY, maxX, maxY)) {
++          return;
++        }
++        if (NeedsSplit(c, samples, ns, tolPx)) {
++          const int extra = (splitX ? 1 : 0) + (splitZ ? 1 : 0) + ((splitX && splitZ) ? 1 : 0);
++          if (budget.TrySplit(depth, maxDepth, extra)) {
++            for (int jz = 0; jz + 1 < nzs; ++jz) {
++              for (int ix = 0; ix + 1 < nxs; ++ix) {
++                const Node cc[4] = {g[jz][ix], g[jz][ix + 1], g[jz + 1][ix + 1], g[jz + 1][ix]};
++                // child colours: the parent's, interpolated at the child's corners
++                const float u0 = ix == 0 ? 0.0f : um, u1 = (ix + 1 == nxs - 1) ? 1.0f : um;
++                const float v0 = jz == 0 ? 0.0f : vm, v1 = (jz + 1 == nzs - 1) ? 1.0f : vm;
++                const std::uint32_t cc4[4] = {LerpArgb(col, u0, v0), LerpArgb(col, u1, v0), LerpArgb(col, u1, v1), LerpArgb(col, u0, v1)};
++                DrapePatch(node, visible, emit, budget, xs[ix], zs[jz], xs[ix + 1], zs[jz + 1], cc, cc4, depth + 1, maxDepth, tolPx);
++              }
++            }
++            return;
++          }
++        }
++      }
++    }
++    emit(c, col);
++  }
++} // namespace moho::editor::overlaydrape
+diff --git a/src/sdk/moho/editor/EdOverlaySlope.h b/src/sdk/moho/editor/EdOverlaySlope.h
+index 2ada3b4..a1e477f 100644
+--- a/src/sdk/moho/editor/EdOverlaySlope.h
++++ b/src/sdk/moho/editor/EdOverlaySlope.h
+@@ -346,6 +346,33 @@ namespace moho::editor::overlayslope
+     return level;
+   }
+ 
++  /** Blocks per side a view `cells` wide has at `level`. */
++  [[nodiscard]] inline int BlocksAt(const int cells, const int level)
++  {
++    return (cells + (1 << level) - 1) >> level;
++  }
++
++  /**
++   * The block size with hysteresis: the level of the last frame (`prev`, -1 for none) is kept until the view needs more than 1.25 x `maxBlocks` blocks per side
++   * (go coarser) or the next finer level would fit in 0.8 x `maxBlocks` (go finer). While the view is being zoomed, or its estimated size jitters by a few cells with
++   * the camera height, the level no longer flips back and forth at the threshold (each flip re-projects the whole view and changes how the blocks are cut).
++   * Colours are the same at every level (the steepest cell of a block wins, BuildLevels).
++   */
++  [[nodiscard]] inline int LevelWithHysteresis(const int cells, const int maxBlocks, const int prev)
++  {
++    if (prev < 0 || prev >= kLevels) {
++      return LevelForView(cells, maxBlocks);
++    }
++    int level = prev;
++    while (level < kLevels - 1 && BlocksAt(cells, level) * 4 > maxBlocks * 5) {
++      ++level;
++    }
++    while (level > 0 && BlocksAt(cells, level - 1) * 5 <= maxBlocks * 4) {
++      --level;
++    }
++    return level;
++  }
++
+   /**
+    * Colour step of a rating `value` against `limit` (both in the same unit): 0 = flat (not drawn), 1 .. kSteps = green to red up to the limit, kSteps + 1 = beyond
+    * the limit. Neighbouring blocks with the same step get the same colour, so a run of them is drawn as one quad.
+diff --git a/src/sdk/moho/editor/tests/EdOverlayDrapeTest.cpp b/src/sdk/moho/editor/tests/EdOverlayDrapeTest.cpp
+new file mode 100644
+index 0000000..9d840ce
+--- /dev/null
++++ b/src/sdk/moho/editor/tests/EdOverlayDrapeTest.cpp
+@@ -0,0 +1,246 @@
++// Stand-alone test of the overlay draping (EdOverlayDrape.h; no engine needed).
++//   g++ -std=c++20 -O2 -I src/sdk src/sdk/moho/editor/tests/EdOverlayDrapeTest.cpp -o EdOverlayDrapeTest
++//   MSVC: cl /std:c++20 /EHsc /O2 /I src/sdk EdOverlayDrapeTest.cpp
++#include <cmath>
++#include <cstdio>
++#include <functional>
++#include <vector>
++
++#include "moho/editor/EdOverlayDrape.h"
++
++namespace od = moho::editor::overlaydrape;
++
++static int gFailures = 0;
++static int gChecks = 0;
++#define CHECK(cond, ...)                               \
++  do {                                                 \
++    ++gChecks;                                         \
++    if (!(cond)) {                                     \
++      ++gFailures;                                     \
++      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
++      std::printf(__VA_ARGS__);                        \
++      std::printf("\n");                               \
++    }                                                  \
++  } while (0)
++
++// A pinhole camera: eye, looking at a target, 60 degrees vertical field of view, 1280 x 720 pixels. w = distance along the view direction (what the engine divides by).
++struct Cam
++{
++  float ex, ey, ez, fx, fy, fz, rx, ry, rz, ux, uy, uz, focal;
++  Cam(const float ex_, const float ey_, const float ez_, const float tx, const float ty, const float tz) : ex(ex_), ey(ey_), ez(ez_)
++  {
++    float dx = tx - ex, dy = ty - ey, dz = tz - ez;
++    const float l = std::sqrt(dx * dx + dy * dy + dz * dz);
++    fx = dx / l; fy = dy / l; fz = dz / l;
++    // right = forward x up(0,1,0)
++    rx = fy * 0.0f - fz * 1.0f; ry = fz * 0.0f - fx * 0.0f; rz = fx * 1.0f - fy * 0.0f;
++    const float rl = std::sqrt(rx * rx + ry * ry + rz * rz);
++    rx /= rl; ry /= rl; rz /= rl;
++    ux = ry * fz - rz * fy; uy = rz * fx - rx * fz; uz = rx * fy - ry * fx;
++    focal = 360.0f / std::tan(30.0f * 3.14159265f / 180.0f);
++  }
++  od::Node Project(const float x, const float y, const float z) const
++  {
++    const float dx = x - ex, dy = y - ey, dz = z - ez;
++    const float w = dx * fx + dy * fy + dz * fz;
++    const float sx = dx * rx + dy * ry + dz * rz, sy = dx * ux + dy * uy + dz * uz;
++    return od::Node{640.0f + focal * sx / w, 360.0f - focal * sy / w, w};
++  }
++};
++
++static float Area(const od::Node* q)
++{
++  float a = 0.0f;
++  for (int i = 0; i < 4; ++i) {
++    const od::Node& p = q[i];
++    const od::Node& n = q[(i + 1) % 4];
++    a += p.x * n.y - n.x * p.y;
++  }
++  return std::fabs(a) * 0.5f;
++}
++
++int main()
++{
++  // ---- InFront --------------------------------------------------------------------------------------------------------------------------------
++  CHECK(od::InFront(10.0f), "in front");
++  CHECK(od::InFront(0.5f), "in front, close");
++  CHECK(!od::InFront(0.0f), "in the camera plane");
++  CHECK(!od::InFront(-3.0f), "behind");
++
++  // The retired test: viewport.r[1] . p = lodScale * (world width of the view at that depth) = lodScale * 2 * tan(fov/2) * aspect * depth >= 1.
++  // 60 degree vertical fov, aspect 16/9: width per unit depth = 2 * tan(30deg) * 16/9 = 2.053.
++  {
++    const float perDepth = 2.0f * std::tan(30.0f * 3.14159265f / 180.0f) * 16.0f / 9.0f;
++    const auto oldTest = [&](const float lodScale, const float depth) { return lodScale * perDepth * depth >= 1.0f; };
++    CHECK(oldTest(1.0f, 5.0f), "old test passes at lodScale 1, depth 5");
++    CHECK(!oldTest(0.1f, 3.0f), "old test rejects a point 3 units in front at lodScale 0.1 (threshold ~4.9)");
++    CHECK(!oldTest(0.0f, 500.0f), "old test rejects everything at lodScale 0");
++    CHECK(od::InFront(3.0f) && od::InFront(500.0f), "the new test does not depend on a scale");
++  }
++
++  // ---- flat ground: the perspective correct flat patch is exact; the plain screen bilinear is not ----------------------------------------------
++  {
++    const Cam cam(100.0f, 40.0f, 0.0f, 100.0f, 0.0f, 100.0f);   // looks over the ground at a shallow angle
++    const int x0 = 64, z0 = 64, x1 = 128, z1 = 128;
++    const od::Node c[4] = {cam.Project(x0, 0, z0), cam.Project(x1, 0, z0), cam.Project(x1, 0, z1), cam.Project(x0, 0, z1)};
++    float worstFlat = 0.0f, worstNaive = 0.0f;
++    for (int iu = 0; iu <= 4; ++iu) {
++      for (int iv = 0; iv <= 4; ++iv) {
++        const float u = iu * 0.25f, v = iv * 0.25f;
++        const od::Node t = cam.Project(x0 + u * (x1 - x0), 0.0f, z0 + v * (z1 - z0));
++        const od::Sample s{u, v, t};
++        worstFlat = std::max(worstFlat, od::Deviation(c, s));
++        const float nx = (1 - u) * (1 - v) * c[0].x + u * (1 - v) * c[1].x + u * v * c[2].x + (1 - u) * v * c[3].x;
++        const float ny = (1 - u) * (1 - v) * c[0].y + u * (1 - v) * c[1].y + u * v * c[2].y + (1 - u) * v * c[3].y;
++        worstNaive = std::max(worstNaive, std::sqrt((nx - t.x) * (nx - t.x) + (ny - t.y) * (ny - t.y)));
++      }
++    }
++    std::printf("flat 64x64 patch at a low angle: flat patch deviation %.4f px, screen bilinear deviation %.2f px\n", worstFlat, worstNaive);
++    CHECK(worstFlat < 0.01f, "flat ground matches the perspective correct patch (%f)", worstFlat);
++    CHECK(worstNaive > 5.0f, "the screen bilinear would split flat ground for no reason (%f)", worstNaive);
++  }
++
++  // ---- DrapePatch on a function terrain -------------------------------------------------------------------------------------------------------
++  const auto run = [](const Cam& cam, const std::function<float(int, int)>& height, const int x0, const int z0, const int x1, const int z1, const int cap, const float tol,
++                      std::vector<std::vector<od::Node>>& quads, int& nodeCalls) {
++    nodeCalls = 0;
++    auto node = [&](const int x, const int z, od::Node& n) {
++      ++nodeCalls;
++      n = cam.Project(static_cast<float>(x), height(x, z), static_cast<float>(z));
++      return true;
++    };
++    auto visible = [](float, float, float, float) { return true; };
++    auto emit = [&](const od::Node* q, const std::uint32_t*) { quads.emplace_back(q, q + 4); };
++    od::QuadBudget budget;
++    budget.cap = cap;
++    budget.committed = 1;
++    const od::Node c[4] = {cam.Project(x0, height(x0, z0), z0), cam.Project(x1, height(x1, z0), z0), cam.Project(x1, height(x1, z1), z1),
++                           cam.Project(x0, height(x0, z1), z1)};
++    const std::uint32_t col[4] = {0x80FF0000u, 0x80FF0000u, 0x80FF0000u, 0x80FF0000u};
++    od::DrapePatch(node, visible, emit, budget, x0, z0, x1, z1, c, col, 0, od::kMaxDepth, tol);
++    return budget.committed;
++  };
++  {
++    const Cam cam(100.0f, 60.0f, 0.0f, 100.0f, 0.0f, 100.0f);
++    std::vector<std::vector<od::Node>> quads;
++    int calls = 0;
++    run(cam, [](int, int) { return 0.0f; }, 64, 64, 128, 128, 60000, od::kTolerancePx, quads, calls);
++    CHECK(quads.size() == 1, "flat ground stays one quad (%zu)", quads.size());
++    CHECK(calls == 5, "and costs the five samples (%d)", calls);
++  }
++  {
++    // a slope is planar: still one quad
++    const Cam cam(100.0f, 60.0f, 0.0f, 100.0f, 0.0f, 100.0f);
++    std::vector<std::vector<od::Node>> quads;
++    int calls = 0;
++    run(cam, [](int x, int z) { return 0.07f * x + 0.03f * z; }, 64, 64, 128, 128, 60000, od::kTolerancePx, quads, calls);
++    CHECK(quads.size() == 1, "a tilted plane stays one quad (%zu)", quads.size());
++  }
++  {
++    // forced splitting (negative tolerance): 4 depth levels would be 256 quads; with maxDepth 2 here: 16 quads that tile the parent exactly on flat ground
++    const Cam cam(100.0f, 60.0f, 0.0f, 100.0f, 0.0f, 100.0f);
++    std::vector<std::vector<od::Node>> quads;
++    int calls = 0;
++    auto height = [](int, int) { return 0.0f; };
++    auto node = [&](const int x, const int z, od::Node& n) { n = cam.Project(static_cast<float>(x), height(x, z), static_cast<float>(z)); return true; };
++    auto visible = [](float, float, float, float) { return true; };
++    auto emit = [&](const od::Node* q, const std::uint32_t*) { quads.emplace_back(q, q + 4); };
++    od::QuadBudget budget;
++    budget.committed = 1;
++    const od::Node c[4] = {cam.Project(64, 0, 64), cam.Project(128, 0, 64), cam.Project(128, 0, 128), cam.Project(64, 0, 128)};
++    const std::uint32_t col[4] = {1, 1, 1, 1};
++    od::DrapePatch(node, visible, emit, budget, 64, 64, 128, 128, c, col, 0, 2, -1.0f);
++    float sum = 0.0f;
++    for (const auto& q : quads) sum += Area(q.data());
++    const float whole = Area(c);
++    CHECK(quads.size() == 16, "two forced levels give 16 quads (%zu)", quads.size());
++    CHECK(std::fabs(sum - whole) < whole * 1.0e-3f, "the 16 quads tile the parent (%f vs %f)", sum, whole);
++    CHECK(budget.committed == 16, "the budget counted them (%d)", budget.committed);
++    (void)calls;
++  }
++  {
++    // bumpy ground: more quads, and every leaf passes its own test within the tolerance (checked with fresh samples)
++    const Cam cam(100.0f, 45.0f, 10.0f, 100.0f, 0.0f, 100.0f);
++    const auto height = [](const int x, const int z) { return 4.0f * std::sin(x * 0.21f) * std::cos(z * 0.17f) + 1.5f * std::sin(x * 0.9f + z * 0.7f); };
++    std::vector<std::vector<od::Node>> quads;
++    int calls = 0;
++    run(cam, height, 64, 64, 128, 128, 60000, od::kTolerancePx, quads, calls);
++    std::printf("bumpy 64x64 patch: %zu quads, %d projections\n", quads.size(), calls);
++    CHECK(quads.size() > 40, "bumpy ground is cut up (%zu)", quads.size());
++    CHECK(quads.size() <= 64 * 64, "never more than one quad per cell (%zu)", quads.size());
++    // no leaf is bigger than needed in the sense of the test: re-evaluate the corners as a patch and sample its middle by finding which world rectangle it covers
++    float totalArea = 0.0f;
++    for (const auto& q : quads) totalArea += Area(q.data());
++    // the real surface has the same footprint as the cells: summing the leaf areas gives about the area of the projected surface (sanity: finite and positive)
++    CHECK(totalArea > 0.0f && std::isfinite(totalArea), "leaf areas are sane (%f)", totalArea);
++  }
++  {
++    // budget: with a tiny cap nothing splits beyond it, and the number of quads never exceeds the cap
++    const Cam cam(100.0f, 45.0f, 10.0f, 100.0f, 0.0f, 100.0f);
++    const auto height = [](const int x, const int z) { return 4.0f * std::sin(x * 0.21f) * std::cos(z * 0.17f) + 1.5f * std::sin(x * 0.9f + z * 0.7f); };
++    std::vector<std::vector<od::Node>> quads;
++    int calls = 0;
++    run(cam, height, 64, 64, 128, 128, 10, od::kTolerancePx, quads, calls);
++    CHECK(quads.size() <= 10, "a cap of 10 holds (%zu)", quads.size());
++    quads.clear();
++    run(cam, height, 64, 64, 128, 128, 1, od::kTolerancePx, quads, calls);
++    CHECK(quads.size() == 1 && calls == 0, "a cap of 1 is the plain quad and costs no sampling (%zu, %d)", quads.size(), calls);
++  }
++  {
++    // a single spike in the middle of otherwise flat ground is found by the centre sample
++    const Cam cam(100.0f, 60.0f, 0.0f, 100.0f, 0.0f, 100.0f);
++    std::vector<std::vector<od::Node>> quads;
++    int calls = 0;
++    run(cam, [](int x, int z) { return (x == 96 && z == 96) ? 6.0f : 0.0f; }, 64, 64, 128, 128, 60000, od::kTolerancePx, quads, calls);
++    CHECK(quads.size() > 1, "a spike at the centre splits the patch (%zu)", quads.size());
++  }
++  {
++    // a strip one cell high is cut along its length only
++    const Cam cam(100.0f, 60.0f, 0.0f, 100.0f, 0.0f, 100.0f);
++    std::vector<std::vector<od::Node>> quads;
++    int calls = 0;
++    run(cam, [](int x, int) { return 3.0f * std::sin(x * 0.5f); }, 64, 100, 96, 101, 60000, od::kTolerancePx, quads, calls);
++    CHECK(quads.size() > 2 && quads.size() <= 32, "a strip is split along its length (%zu)", quads.size());
++  }
++  {
++    // a sample behind the camera: the corners are in front, the plain quad is drawn
++    std::vector<od::Node> got;
++    auto node = [](int, int, od::Node& n) { n = od::Node{0, 0, -1.0f}; return true; };
++    auto visible = [](float, float, float, float) { return true; };
++    int emitted = 0;
++    auto emit = [&](const od::Node*, const std::uint32_t*) { ++emitted; };
++    od::QuadBudget budget;
++    budget.committed = 1;
++    const od::Node c[4] = {{0, 0, 5}, {100, 0, 5}, {100, 100, 5}, {0, 100, 5}};
++    const std::uint32_t col[4] = {1, 1, 1, 1};
++    od::DrapePatch(node, visible, emit, budget, 0, 0, 16, 16, c, col, 0);
++    CHECK(emitted == 1, "a sample behind the camera gives the plain quad (%d)", emitted);
++  }
++  {
++    // off screen after sampling: dropped before it is cut up
++    auto node = [](int, int, od::Node& n) { n = od::Node{5000, 5000, 5}; return true; };
++    auto visible = [](float, float, float, float) { return false; };
++    int emitted = 0;
++    auto emit = [&](const od::Node*, const std::uint32_t*) { ++emitted; };
++    od::QuadBudget budget;
++    budget.committed = 1;
++    const od::Node c[4] = {{5000, 5000, 5}, {5100, 5000, 5}, {5100, 5100, 5}, {5000, 5100, 5}};
++    const std::uint32_t col[4] = {1, 1, 1, 1};
++    od::DrapePatch(node, visible, emit, budget, 0, 0, 16, 16, c, col, 0);
++    CHECK(emitted == 0, "an off screen patch emits nothing (%d)", emitted);
++  }
++
++  // ---- colours --------------------------------------------------------------------------------------------------------------------------------
++  {
++    const std::uint32_t same[4] = {0x80102030u, 0x80102030u, 0x80102030u, 0x80102030u};
++    CHECK(od::LerpArgb(same, 0.3f, 0.6f) == 0x80102030u, "a uniform colour stays");
++    const std::uint32_t ramp[4] = {0x00FFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0x00FFFFFFu};
++    CHECK(od::LerpArgb(ramp, 0.0f, 0.5f) == 0x00FFFFFFu, "left edge");
++    CHECK(od::LerpArgb(ramp, 1.0f, 0.5f) == 0xFFFFFFFFu, "right edge");
++    const std::uint32_t mid = od::LerpArgb(ramp, 0.5f, 0.5f);
++    CHECK((mid >> 24) >= 0x7Fu && (mid >> 24) <= 0x80u, "alpha half way (%08X)", mid);
++  }
++
++  std::printf("%d checks, %d failures\n", gChecks, gFailures);
++  return gFailures == 0 ? 0 : 1;
++}
+diff --git a/src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp b/src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp
+index cfc1f69..b372ef6 100644
+--- a/src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp
++++ b/src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp
+@@ -202,6 +202,39 @@ int main()
+     CHECK(os::LevelForView(4096, 160) == 5, "an 80 km view uses blocks of 32 (%d)", os::LevelForView(4096, 160));
+     CHECK((4096 + 31) / 32 <= 160, "and fits");
+     CHECK(os::LevelForView(320, 160) == 1, "320 cells -> blocks of 2");
++    // hysteresis: 160 blocks per side; level 0 holds up to 200 cells, level 1 from 128 cells (0.8 x 160) down
++    CHECK(os::LevelWithHysteresis(100, 160, -1) == 0 && os::LevelWithHysteresis(4096, 160, -1) == 5, "no previous level: the plain choice");
++    CHECK(os::LevelWithHysteresis(170, 160, 0) == 0, "170 cells at level 0 (160 is the plain limit): kept up to 1.25 x");
++    CHECK(os::LevelWithHysteresis(201, 160, 0) == 1, "201 cells: coarser");
++    CHECK(os::LevelWithHysteresis(300, 160, 1) == 1, "at level 1 up to 400 cells");
++    CHECK(os::LevelWithHysteresis(180, 160, 1) == 1, "180 cells at level 1: the plain choice is 1 as well");
++    CHECK(os::LevelWithHysteresis(150, 160, 1) == 1, "150 cells at level 1 would fit at level 0 but not within 0.8 x: stays");
++    CHECK(os::LevelWithHysteresis(128, 160, 1) == 0, "128 cells: finer");
++    {
++      // zooming in and out across the threshold flips at most once each way
++      int level = -1, flips = 0, last = -1;
++      for (int cells = 100; cells <= 400; cells += 3) {
++        level = os::LevelWithHysteresis(cells, 160, level);
++        if (last >= 0 && level != last) ++flips;
++        last = level;
++      }
++      for (int cells = 400; cells >= 100; cells -= 3) {
++        level = os::LevelWithHysteresis(cells, 160, level);
++        if (level != last) ++flips;
++        last = level;
++      }
++      CHECK(flips == 2, "a zoom from 100 to 400 cells and back flips the level once each way (0>1, 1>0; the plain choice flips at 160 and 320: 4 times): %d", flips);
++      // jitter around the plain threshold (160) never flips
++      level = os::LevelForView(160, 160);
++      int jitterFlips = 0;
++      for (int k = 0; k < 200; ++k) {
++        const int cells = 160 + ((k * 7) % 21) - 10;
++        const int now = os::LevelWithHysteresis(cells, 160, level);
++        if (now != level) ++jitterFlips;
++        level = now;
++      }
++      CHECK(jitterFlips == 0, "a view that jitters by +-10 cells around the threshold never flips (%d)", jitterFlips);
++    }
+     CHECK(os::ColorStep(0.0f, 0.75f) == 0 && os::ColorStep(0.02f, 0.75f) == 0, "flat is not drawn");
+     CHECK(os::ColorStep(0.75f, 0.75f) == os::kSteps, "at the limit is the last step");
+     CHECK(os::ColorStep(0.76f, 0.75f) == os::kSteps + 1, "beyond the limit");

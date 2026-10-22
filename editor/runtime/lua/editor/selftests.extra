@@ -35,3 +35,7 @@ selftest_unitfit
 selftest_camframe
 selftest_console
 selftest_layout_fields
+selftest_peace
+selftest_selbox
+selftest_unitview2
+selftest_uniticons

@@ -110,6 +110,11 @@ function Run()
     H.Undo()
     local afterUndo = Chains.Markers('PT_Chain')
     Check(table.getn(afterUndo) == 3 and afterUndo[2] == 'PT_B' and Markers().PT_B ~= nil, 'undo puts it back in the chain')
+    -- selecting a marker makes its chain the highlighted one
+    Chains.Current = false
+    Tools.Select('marker', 'PT_C')
+    Chains.Draw(nil)
+    Check(Chains.Current == 'PT_Chain', 'selecting a marker of a chain makes it the current chain (' .. tostring(Chains.Current) .. ')')
     Check(Chains.Create('PT_Other', { 'PT_A' }) and table.getn(Chains.Problems()) >= 1, 'a chain with one marker is a problem')
     local problem = false
     for _, p in Chains.Problems() do if string.find(p.text, 'PT_Other', 1, true) then problem = true end end

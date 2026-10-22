@@ -71,7 +71,7 @@ local function ThumbOf(e, owner)
             if ok then Cat = mod end
         end
         if Cat then
-            local ok, tex = pcall(Cat.Thumb, e)
+            local ok, tex = pcall(Cat.Thumb, e, owner)
             if ok then return tex end
         end
     end

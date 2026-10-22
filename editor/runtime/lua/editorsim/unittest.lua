@@ -29,6 +29,7 @@ function Register(Callbacks)
         Kill(s.unit)
         for _, t in s.targets do Kill(t) end
         for _, e in s.extras do Kill(e) end
+        if s.fight then pcall(function() import('/lua/editorsim/peace.lua').Unfight(s.fight[1], s.fight[2]) end) end
         ScenarioInfo.EdTest = nil
     end
 
@@ -104,6 +105,7 @@ function Register(Callbacks)
         army = army or 'ARMY_1'
         local ok, unit = pcall(function() return CreateUnitHPR(bp, army, x, y, z, 0, heading or 0, 0) end)
         if not ok or not unit then return nil, tostring(unit) end
+        unit.EdLab = true      -- the lab's units fight while the map is edited: editorsim/peace.lua leaves them off hold fire
         return unit
     end
 
@@ -144,6 +146,13 @@ function Register(Callbacks)
                 t.EdTestTarget = true
                 table.insert(s.targets, t)
             end
+        end
+        -- editing is quiet (every army is neutral to every other, editorsim/peace.lua): the unit under test and its dummy targets are enemies for the length of the test
+        if s.targets[1] then
+            pcall(function()
+                local a, b = unit:GetArmy(), s.targets[1]:GetArmy()
+                if import('/lua/editorsim/peace.lua').Fight(a, b) then s.fight = { a, b } end
+            end)
         end
         Status(data.path)
     end

@@ -344,18 +344,19 @@ end
 
 -- ---- thumbnails --------------------------------------------------------------------------------------------------------------------------------
 
-local iconOk = {}
-
-function Thumb(entry)
+function Thumb(entry, owner)
     if entry.kind == 'units' then
-        -- the game's strategic icon; a unit without one (mod units, campaign specials) has no picture
-        local path = '/textures/ui/common/icons/units/' .. string.upper(entry.key) .. '_icon.dds'
-        local ok = iconOk[path]
-        if ok == nil then
-            ok = DiskGetFileInfo(path) and true or false
-            iconOk[path] = ok
+        -- the unit's own icon (units.lua IconPath: the folder of its mod, the game's icon folder, the icon its blueprint names); a unit without one is drawn from its mesh
+        -- (assetthumbs 'unitmesh', a software preview made in the background), and only a unit with no readable mesh gets the game's placeholder icon
+        local Units = import('/lua/editor/units.lua')
+        local path = Units.IconPath(entry.key)
+        if path then return path end
+        local mesh = Units.MeshFile(entry.key)
+        if mesh then
+            local tex = Thumbs.Request('unitmesh', entry.key, mesh, owner or 'assets')
+            if tex or not Thumbs.Failed('unitmesh', entry.key, mesh) then return tex end
         end
-        return ok and path or nil
+        return Units.GenericIconPath(entry.key)
     elseif entry.kind == 'props' or entry.kind == 'decals' or entry.kind == 'textures' then
         return Thumbs.Request(entry.kind, entry.key, entry.source, 'assets')
     end

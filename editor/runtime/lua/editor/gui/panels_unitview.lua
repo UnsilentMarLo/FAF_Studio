@@ -31,7 +31,7 @@ end
 Panels.Register{
     id = 'unitview', title = 'Unit viewer',
     create = function(group, host)
-        local P = { anims = {}, playing = false, listMode = 'animations', lodIndex = 0, colorIndex = 1, lightIndex = 1 }
+        local P = { anims = {}, playing = false, listMode = 'animations', lodIndex = 0, colorIndex = 1, lightIndex = 1, errorShown = false }
         live.unitview = P
 
         local function Btn(text, w, fn, opts) return W.Button(group, text, 0, 0, Skin.S(w), Skin.S(22), fn, opts) end
@@ -175,6 +175,8 @@ Panels.Register{
             P.bLight:SetText('Light: ' .. View.LightName)
             local text = View.Id and ('Showing ' .. View.Id .. ', ' .. table.getn(P.anims) .. ' animations, ' .. table.getn(View.Bones) .. ' bones') or 'No unit shown'
             if View.BoneSel then text = text .. '   bone ' .. View.BoneSel end
+            if View.LastError then text = View.LastError end        -- (what went wrong: the Console has the same line)
+            P.errorShown = View.LastError
             local info = View.LODInfo
             if info and P.lodIndex > 0 and info.n == P.lodIndex then
                 text = text .. string.format('   LOD %d: used from %d to %d, camera at %d%s', info.n, info.from, info.cutoff, info.depth, info.reached and '' or ' (the camera cannot go further)')
@@ -221,4 +223,5 @@ Panels.Register{
 function Refresh()
     local P = live.unitview
     if P and View.Show.bones and P.listMode == 'bones' then pcall(function() P.list:Refresh() end) end
+    if P and P.errorShown ~= View.LastError then pcall(function() P:Refresh() end) end        -- the sim's answer arrives a moment after Show unit
 end

@@ -16,7 +16,8 @@ Items = {}
 Hover = { kind = false, name = false }
 --- Marker template the Marker tool places.
 MarkerType = 'Blank Marker'
---- Rectangle being dragged out with the select tool, { x0, z0, x1, z1 } in world units, or false.
+--- Rectangle being dragged out with the select tool, { x0, z0, x1, z1 } in world units, or false. With the camera-aligned box (SelectBoxFollowsCamera) it also has
+--- .screen = { sx0, sy0, sx1, sy1 } (window coordinates, the corners the pointer dragged between) and the overlay draws that (MarqueeRuns).
 Marquee = false
 --- Bumped by every change of the objects (overlays and marker visuals re-sync on it).
 Changed = 0
@@ -832,25 +833,24 @@ local function WorldAt(x, y)
     return nil
 end
 
---- Everything whose reference point lies inside the world rectangle: markers by position, areas by centre. `only` = 'marker' | 'area' limits it to one kind
---- (see Pick); markers of a hidden View layer are left out.
-local function InBox(x0, z0, x1, z1, only)
-    local minx, maxx, minz, maxz = math.min(x0, x1), math.max(x0, x1), math.min(z0, z1), math.max(z0, z1)
+--- Everything whose reference point lies inside the selection box (see BoxHas / BoxHasRect: a rectangle on the screen, or the old world rectangle): markers by position, areas by
+--- centre. `box` is what BeginBoxSelect passes to onDone. `only` = 'marker' | 'area' limits it to one kind (see Pick); markers of a hidden View layer are left out.
+local function InBox(box, only)
     local list = {}
     local Filter = import('/lua/editor/markerfilter.lua')
+    local MC = import('/lua/editor/markercheck.lua')
     for name, m in Markers() do
-        local p = m.position
-        if only ~= 'area' and p[1] >= minx and p[1] <= maxx and p[3] >= minz and p[3] <= maxz and (not Filter.IsHidden(m.type) or IsSelected('marker', name)) then
-            table.insert(list, { kind = 'marker', name = name })
+        if only ~= 'area' and m.position then
+            local x, y, z = MC.DisplayPos(m)          -- where the marker is drawn (the height the screen box is tested at)
+            if BoxHas(box, x, z, y) and (not Filter.IsHidden(m.type) or IsSelected('marker', name)) then
+                table.insert(list, { kind = 'marker', name = name })
+            end
         end
     end
     for name, a in Areas() do
         local r = a.rectangle
-        if r and only ~= 'marker' then
-            local cx, cz = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2
-            if cx >= minx and cx <= maxx and cz >= minz and cz <= maxz then
-                table.insert(list, { kind = 'area', name = name })
-            end
+        if r and only ~= 'marker' and BoxHasRect(box, r[1], r[2], r[3], r[4]) then
+            table.insert(list, { kind = 'area', name = name })
         end
     end
     return list
@@ -1023,30 +1023,182 @@ local function BeginResize(name, handle, event)
     PostDragger(GetFrame(0), event.KeyCode, dragger)
 end
 
+-- ---- the selection box: a rectangle on the screen (default) or on the ground ---------------------------------------------------------
+-- With SelectBoxFollowsCamera (Tool settings panel) the box a select tool drags out is a rectangle ON THE SCREEN: what is selected is whatever PROJECTS inside it (BoxHas), so it
+-- is aligned with the camera however the map is turned. Off: the old box, a rectangle on the ground aligned with the world axes. Only the select tools use this; the area
+-- drawing tool and every other tool that makes a world rectangle stay world-aligned.
+--
+--   SelectBoxFollowsCamera / SetSelectBoxFollowsCamera(on)   the switch (saved in the user settings)
+--   CameraFrame() -> { ex, ey, ez, lx, ly, lz } | nil          eye and look direction of the world camera (ed_camera_info; nil without it)
+--   BoxHas(box, x, z, y) -> bool                               is the point (x, y, z) inside the box (y omitted: the ground height)
+--   BoxHasRect(box, x0, z0, x1, z1) -> bool                    is the rectangle (an area) inside the box: by its CENTRE, at the ground height, as the world box always did
+--   MarqueeRuns() -> list of { x, z, x, z ... closed = bool }  the dragged screen box dropped onto the ground, for the overlay
+--
+-- A box is { x0, z0, x1, z1 } (world; the ground the screen box covers, bounding, for older consumers) and, for a screen box, .screen = { sx0, sy0, sx1, sy1 } (window coordinates, the
+-- space of event.MouseX / MouseY), .view = the world view that projects, .ox / .oy its origin (view:Project answers in view coordinates), .cam = CameraFrame().
+-- A point behind the camera (or within 0.5 of its plane) is never inside: view:Project mirrors such a point onto the screen instead of failing. Nothing is tested for being
+-- hidden behind a hill. Per object the cost is one Project call, once, when the button is released (nothing is scanned while the box is dragged).
+
+SelectBoxFollowsCamera = true
+pcall(function()
+    SelectBoxFollowsCamera = import('/lua/editor/userdata.lua').Get('selectBoxCamera', true) ~= false
+end)
+
+function SetSelectBoxFollowsCamera(on)
+    SelectBoxFollowsCamera = on and true or false
+    pcall(function() import('/lua/editor/userdata.lua').Set('selectBoxCamera', SelectBoxFollowsCamera) end)
+end
+
+local NEAR_PLANE = 0.5
+local MARQUEE_SAMPLES = 32       -- ground samples along each side of the dragged screen box
+
+function CameraFrame()
+    if not rawget(_G, 'ed_camera_info') then return nil end
+    -- the model of camframe.lua: look = (sin h cos p, -sin p, cos h cos p), eye = focus - look * eye distance
+    local ok, fov, dist, fx, fy, fz, hd, pt = pcall(ed_camera_info)
+    if not ok or not dist or not fx or not hd or not pt then return nil end
+    local cp = math.cos(pt)
+    local lx, ly, lz = math.sin(hd) * cp, -math.sin(pt), math.cos(hd) * cp
+    return { ex = fx - lx * dist, ey = fy - ly * dist, ez = fz - lz * dist, lx = lx, ly = ly, lz = lz }
+end
+
+function BoxHas(box, x, z, y)
+    local s = box.screen
+    local view = box.view
+    if not s or not view then
+        -- the world box: the rectangle on the ground
+        if not box.minx then
+            box.minx, box.maxx = math.min(box[1], box[3]), math.max(box[1], box[3])
+            box.minz, box.maxz = math.min(box[2], box[4]), math.max(box[2], box[4])
+        end
+        return x >= box.minx and x <= box.maxx and z >= box.minz and z <= box.maxz
+    end
+    if y == nil then y = GroundHeight(x, z) end
+    local c = box.cam
+    if c and (x - c.ex) * c.lx + (y - c.ey) * c.ly + (z - c.ez) * c.lz < NEAR_PLANE then return false end
+    local p = view:Project(Vector(x, y, z))
+    if not p then return false end
+    local px, py = (box.ox or view.Left()) + p.x, (box.oy or view.Top()) + p.y
+    return px >= s[1] and px <= s[3] and py >= s[2] and py <= s[4]
+end
+
+function BoxHasRect(box, x0, z0, x1, z1)
+    local cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
+    return BoxHas(box, cx, cz, (box.screen and box.view) and GroundHeight(cx, cz) or nil)
+end
+
+--- The finished box of a drag (Marquee as it was on release): the screen rectangle made ready for BoxHas, or the world rectangle as it was.
+local function FinishBox(mq)
+    if not mq.screen then return mq end
+    local view = View()
+    local s = mq.screen
+    local sx0, sx1 = math.min(s[1], s[3]), math.max(s[1], s[3])
+    local sy0, sy1 = math.min(s[2], s[4]), math.max(s[2], s[4])
+    local box = { mq[1], mq[2], mq[3], mq[4], screen = { sx0, sy0, sx1, sy1 } }
+    if not view then
+        box.screen = nil          -- no view to project through: the ground rectangle of the drag
+        return box
+    end
+    box.view, box.ox, box.oy, box.cam = view, view.Left(), view.Top(), CameraFrame()
+    -- the ground the box covers: the bounding rectangle of the corners that meet the ground (a corner above the horizon is left out)
+    local minx, maxx, minz, maxz
+    for i = 1, 4 do
+        local gx, gz = WorldAt((i == 1 or i == 3) and sx0 or sx1, (i <= 2) and sy0 or sy1)
+        if gx then
+            minx, maxx = minx and math.min(minx, gx) or gx, maxx and math.max(maxx, gx) or gx
+            minz, maxz = minz and math.min(minz, gz) or gz, maxz and math.max(maxz, gz) or gz
+        end
+    end
+    if minx then box[1], box[2], box[3], box[4] = minx, minz, maxx, maxz end
+    return box
+end
+
+local marqueeKey, marqueeRuns = false, false
+
+--- The dragged screen box dropped onto the ground, as lists of world points for the overlay: the sides of the screen rectangle sampled and each sample unprojected onto the
+--- terrain, so the outline lies on the ground where the box really is. A sample that meets no ground (above the horizon) is left out and cuts the line there, so the result is
+--- a list of runs; one closed run when every sample hit. Redone only when the box or the camera changed. nil when the box is not a screen box.
+function MarqueeRuns()
+    local mq = Marquee
+    if not mq or not mq.screen then return nil end
+    local view = View()
+    if not view then return nil end
+    local s = mq.screen
+    local cam = CameraFrame()
+    local key = string.format('%s|%.1f|%.1f|%.1f|%.1f|%.3f|%.3f|%.3f|%.4f|%.4f', tostring(mq), s[1], s[2], s[3], s[4], cam and cam.ex or 0, cam and cam.ey or 0, cam and cam.ez or 0, cam and cam.lx or 0, cam and cam.lz or 0)
+    if key == marqueeKey then return marqueeRuns end
+    local x0, x1 = math.min(s[1], s[3]), math.max(s[1], s[3])
+    local y0, y1 = math.min(s[2], s[4]), math.max(s[2], s[4])
+    -- round the four sides: top (left to right), right (down), bottom (right to left), left (up); the last point of each side is the first of the next
+    local corners = { { x0, y0 }, { x1, y0 }, { x1, y1 }, { x0, y1 } }
+    local samples = {}
+    for i = 1, 4 do
+        local a, b = corners[i], corners[i == 4 and 1 or i + 1]
+        for k = 0, MARQUEE_SAMPLES - 1 do
+            local f = k / MARQUEE_SAMPLES
+            local gx, gz = WorldAt(a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f)
+            table.insert(samples, gx and { gx, gz } or false)
+        end
+    end
+    local n = table.getn(samples)
+    local runs = {}
+    local firstMiss
+    for i = 1, n do
+        if not samples[i] then firstMiss = i break end
+    end
+    if not firstMiss then
+        local run = { closed = true }
+        for i = 1, n do table.insert(run, samples[i][1]) table.insert(run, samples[i][2]) end
+        table.insert(runs, run)
+    else
+        local run
+        for k = 1, n do
+            local i = math.mod(firstMiss - 1 + k, n) + 1          -- from the sample after the first miss, once around
+            local p = samples[i]
+            if p then
+                if not run then run = { closed = false } end
+                table.insert(run, p[1]) table.insert(run, p[2])
+            elseif run then
+                if table.getn(run) >= 4 then table.insert(runs, run) end
+                run = nil
+            end
+        end
+        if run and table.getn(run) >= 4 then table.insert(runs, run) end
+    end
+    marqueeKey, marqueeRuns = key, runs
+    return runs
+end
+
 --- Drag out a selection box from empty ground (also used by the unit, prop and decal select tools). `onDone(box, additive)` runs on release:
---- box = { x0, z0, x1, z1 } in world units after a drag, nil after a plain click.
+--- box = nil after a plain click; after a drag box = { x0, z0, x1, z1 } in world units, which with SelectBoxFollowsCamera also carries the screen rectangle: test objects with
+--- BoxHas / BoxHasRect, not with box[1..4] (those are then only the ground the screen box covers).
 function BeginBoxSelect(wx, wz, event, additive, onDone)
     local sx, sy = event.MouseX, event.MouseY
     local dragger = Dragger()
     local moved = false
+    local screenBox = SelectBoxFollowsCamera and View() and true or false
+    local lastx, lastz = wx, wz
     dragger.OnMove = function(self, x, y)
         local cx, cz = WorldAt(x, y)
-        if not cx then return end
+        if not cx and not screenBox then return end     -- (a screen box may be dragged over the sky: it is only the pointer that has no ground there)
         if not moved and (math.abs(x - sx) + math.abs(y - sy)) < 5 then return end   -- a click, not a drag, until the pointer leaves
         moved = true
-        Marquee = { wx, wz, cx, cz }
+        if cx then lastx, lastz = cx, cz end
+        Marquee = { wx, wz, lastx, lastz, screen = screenBox and { sx, sy, x, y } or nil }
         Bump()
     end
     dragger.OnRelease = function(self, x, y)
         self:Destroy()
-        local box = Marquee
+        local mq = Marquee
         Marquee = false
-        onDone(box, additive)
+        marqueeKey, marqueeRuns = false, false
+        onDone(mq and FinishBox(mq) or nil, additive)
         Bump()
     end
     dragger.OnCancel = function(self)
         self:Destroy()
         Marquee = false
+        marqueeKey, marqueeRuns = false, false
         Bump()
     end
     PostDragger(GetFrame(0), event.KeyCode, dragger)
@@ -1055,7 +1207,7 @@ end
 local function BeginMarquee(wx, wz, event, additive, only)
     BeginBoxSelect(wx, wz, event, additive, function(box, add)
         if box then
-            SelectMany(InBox(box[1], box[2], box[3], box[4], only), add)
+            SelectMany(InBox(box, only), add)
         elseif not add then
             Select(false)
         end

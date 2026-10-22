@@ -16,6 +16,7 @@
 --   Order() -> keys             what the worker makes next, in order (tests)
 --   SetBudget(seconds)         how long the worker may work per tick (default 12 ms; the open browser raises it, nobody scrolls while a modal dialog waits for its pictures)
 --   Cached(kind, key, source)  -> vfs path | nil   only what is on disk
+--   Failed(kind, key, source)  -> bool              the picture could not be made (kind 'unitmesh': the software icon of a unit without one, source = its mesh file)
 --   Listen(id, fn) / Unlisten(id)  fn is called (at most every 0.2 s) when pictures were made, so a panel can redraw
 --   Hold(seconds)              the background worker makes no picture for this long (a list that is being scrolled calls it on every wheel step: decoding a big DDS blocks the
 --                              frame, and the rows that scroll by are not wanted anyway)
@@ -143,7 +144,44 @@ local function MakeShape(req)
     return ed_dds_write(Dir() .. '/' .. req.name, n, n, px, 1)
 end
 
+local UNIT_TINT = { UEF = { 150, 165, 190 }, Aeon = { 150, 190, 160 }, Cybran = { 190, 150, 130 }, Seraphim = { 190, 180, 140 } }
+local MAX_ICON_VERTICES = 20000
+
+--- The icon of a unit that ships none (a mod unit): its mesh file (req.source, a vfs path) drawn by the software preview of quickicon.lua, 64 x 64. Returns true | nil, reason.
+local function MakeUnitMesh(req)
+    local disk = req.source and ed_vfs_to_disk(req.source)
+    if not disk then return nil, 'no mesh file' end
+    local data = ed_read_file(disk)
+    if not data then return nil, 'the mesh file cannot be read (inside an archive?)' end
+    local Scm = import('/lua/editor/scm.lua')
+    local head, why = Scm.Header(data)
+    if not head then return nil, why end
+    if head.vertexCount > MAX_ICON_VERTICES then return nil, 'the mesh is too big for a preview' end
+    local mesh, why2 = Scm.Read(data, { noIndexCheck = true })
+    if not mesh then return nil, why2 end
+    local Units = import('/lua/editor/units.lua')
+    local bp = __blueprints and __blueprints[req.key]
+    local tint = UNIT_TINT[bp and Units.FactionOf(req.key, bp) or 'Other']
+    local r, why3 = import('/lua/editor/quickicon.lua').Render(mesh, { tint = tint })
+    if not r then return nil, why3 end
+    local bytes, msg = ed_dds_write(Dir() .. '/' .. req.name, r.w, r.h, r.px, 1)
+    if not bytes then return nil, msg end
+    return true
+end
+
 local function MakeNative(req)
+    if req.kind == 'unitmesh' then
+        local ok, res, why = pcall(MakeUnitMesh, req)
+        if ok and res then
+            known[req.name] = true
+            counts.made = counts.made + 1
+        else
+            failedNames[req.name] = true
+            counts.failed = counts.failed + 1
+            LOG('EDITOR asset thumbnail of unit ' .. tostring(req.key) .. ': ' .. tostring(ok and why or res))
+        end
+        return
+    end
     if req.kind == 'shapes' then
         if MakeShape(req) then
             known[req.name] = true
@@ -501,6 +539,12 @@ function Request(kind, key, source, owner)
     end
     Start()
     return nil
+end
+
+--- True when the picture of an entry could not be made (not asked again until Clear).
+function Failed(kind, key, source)
+    local name = NameOf(kind, key, source)
+    return failedNames[name] and true or false
 end
 
 --- A list is about to bind its visible rows again: whatever `owner` asked in earlier waves and does not ask for in this one is cancelled (see the header).

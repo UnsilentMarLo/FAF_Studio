@@ -482,19 +482,18 @@ local function ScreenToWorld(x, y)
     return nil
 end
 
---- Selects every decal whose centre lies inside the world box { x0, z0, x1, z1 } (a decal and its normals decal count as one; replaces the
---- selection, or adds to it); nil box = a click on empty ground.
+--- Selects every decal whose centre lies inside the selection box (tools.lua BoxHas: a rectangle on the screen, or the world box { x0, z0, x1, z1 }; a decal and its normals
+--- decal count as one; replaces the selection, or adds to it); nil box = a click on empty ground.
 function SelectBox(box, additive)
     if not box then
         if not additive then ClearSelection() end
         return
     end
-    local minx, maxx = math.min(box[1], box[3]), math.max(box[1], box[3])
-    local minz, maxz = math.min(box[2], box[4]), math.max(box[2], box[4])
+    local BoxHas = import('/lua/editor/tools.lua').BoxHas
     if not additive then Selection = {} end
     for i = 1, ed_decal_count() do
         local d = Read(i)
-        if d and d.x >= minx and d.x <= maxx and d.z >= minz and d.z <= maxz and not IsSelected(d) then
+        if d and BoxHas(box, d.x, d.z, d.y) and not IsSelected(d) then
             table.insert(Selection, { tex = d.tex, x = d.x, z = d.z })
         end
     end

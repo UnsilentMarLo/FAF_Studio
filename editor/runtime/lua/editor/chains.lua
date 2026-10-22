@@ -402,6 +402,38 @@ local function FocusChains(chains)
     return focus
 end
 
+local followStamp = false
+
+--- When the selection changes to markers that belong to chains, the chain the panel shows (and the world highlights) becomes the chain of the selected marker: kept when the
+--- current chain already holds one of the selected markers, else the first chain (by name) that does. Only on a change of the selection: choosing a chain in the panel stays.
+local function FollowSelection(chains)
+    if followStamp == Tools.Changed then return end
+    followStamp = Tools.Changed
+    local selected, any = {}, false
+    for _, it in Tools.Items do
+        if it.kind == 'marker' then
+            selected[it.name] = true
+            any = true
+        end
+    end
+    if not any then return end
+    local cur = Current and chains[Current]
+    if cur then
+        for _, m in cur.Markers or {} do
+            if selected[m] then return end
+        end
+    end
+    for _, cname in Names() do
+        for _, m in chains[cname].Markers or {} do
+            if selected[m] then
+                Current = cname
+                Bump()
+                return
+            end
+        end
+    end
+end
+
 function Draw(ui)
     if rawget(_G, 'ed_overlay_set') == nil or not Map.Doc then return end
     local chains = ChainTable() or {}
@@ -414,6 +446,7 @@ function Draw(ui)
         if next(drawn) ~= nil then Remove({}) drawKey = '' end
         return
     end
+    FollowSelection(chains)
     local Filter = import('/lua/editor/markerfilter.lua')
     local key = tostring(Revision) .. '|' .. tostring(Current) .. '|' .. tostring(Tools.Changed) .. '|' .. tostring(OnlySelected) .. '|' .. HiddenKey(Filter)
     if key == drawKey then return end

@@ -3,7 +3,8 @@
 --
 --   Terrain     radius and falloff of the brush (the same variables as the Brush and Texture brush panels)
 --   Objects     units: snap to the build grid, free or stepped rotation; props: snap, random rotation, random scale; decals: snap, random rotation, random size;
---               markers: a note; areas: limit to the map bounds (shown when the editor has that setting, tools.lua LimitAreas)
+--               markers: a note; areas: limit to the map bounds (shown when the editor has that setting, tools.lua LimitAreas); selection: the box of the Select tools follows the
+--               camera (tools.lua SelectBoxFollowsCamera)
 --   Mission     units, markers and areas like Objects
 --   others      a short note
 --
@@ -34,8 +35,8 @@ end
 -- which sections each workspace shows
 local SECTIONS = {
     Terrain = { 'terrain' },
-    Objects = { 'units', 'props', 'decals', 'markers', 'areas' },
-    Mission = { 'units', 'markers', 'areas' },
+    Objects = { 'units', 'props', 'decals', 'markers', 'areas', 'select' },
+    Mission = { 'units', 'markers', 'areas', 'select' },
 }
 
 local STEP_TIP = 'The angle of one step. The rotation ring of the Select tools and the random turns of the brushes use whole steps of it.'
@@ -167,6 +168,13 @@ Panels.Register{
                     Row({
                         Toggle('Limit to map bounds', Skin.S(150), 'Areas cannot be drawn or resized past the edge of the map.',
                             function() return Opts.LimitAreas() end, function(v) Opts.SetLimitAreas(v) end),
+                    }, has)
+                elseif name == 'select' then
+                    local has = function() return Opts.SelectBoxCamera() ~= nil end
+                    Title('Selection', has)
+                    Row({
+                        Toggle('Selection box follows the camera', Skin.S(230), 'The box you drag with a Select tool is a rectangle on the screen and selects what lies inside it, however the view is turned. Off: a box on the ground, aligned with the map axes. Area drawing and the other world-rectangle tools are not affected.',
+                            function() return Opts.SelectBoxCamera() end, function(v) Opts.SetSelectBoxCamera(v) end),
                     }, has)
                 end
             end

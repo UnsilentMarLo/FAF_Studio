@@ -547,18 +547,18 @@ local function ScreenToWorld(x, y)
     return nil
 end
 
---- Selects every prop inside the world box { x0, z0, x1, z1 } (replacing the selection, or adding to it); nil box = a click on empty ground.
+--- Selects every prop inside the selection box (tools.lua BoxHas: a rectangle on the screen, or the world box { x0, z0, x1, z1 }; replacing the selection, or adding to it);
+--- nil box = a click on empty ground.
 function SelectBox(box, additive)
     if not box then
         if not additive then ClearSelection() end
         return
     end
-    local minx, maxx = math.min(box[1], box[3]), math.max(box[1], box[3])
-    local minz, maxz = math.min(box[2], box[4]), math.max(box[2], box[4])
+    local BoxHas = import('/lua/editor/tools.lua').BoxHas
     if not additive then Selection = {} end
     for i = 1, ed_prop_count() do
         local bp, x, y, z = ed_prop_get(i)
-        if bp and x >= minx and x <= maxx and z >= minz and z <= maxz then
+        if bp and BoxHas(box, x, z, y) then
             local p = { bp = bp, x = x, z = z }
             if not IsSelected(p) then table.insert(Selection, p) end
         end

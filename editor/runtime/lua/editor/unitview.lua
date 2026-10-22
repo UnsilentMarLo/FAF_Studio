@@ -28,7 +28,7 @@ Bones = {}
 BoneSel = false          -- the picked bone (its name)
 LODInfo = false          -- the measured LOD range of the shown unit (see ShowLOD); false until one was measured
 Rate = 1
-Heading, Pitch = 3.7, 0.55
+Heading, Pitch = -2.5831853, 0.55      -- (3.7 turned into the range -pi .. pi: NormHeading)
 Info = false             -- what the sim told about the shown unit: { id, pos = {x,y,z}, ext = {minx,miny,minz,maxx,maxy,maxz} }
 local ids = {}
 local boneIds = {}
@@ -37,6 +37,26 @@ local saved = false      -- the terrain flags are switched (the viewer stage is 
 local origCamera = false -- the map's camera, saved by the first Spawn and put back by Close
 local lockC = false      -- the centre and radius the lock holds the camera on: set by Aim, so a turning turret does not shake the view
 local aimUntil = 0       -- the lock waits while Aim is still settling the camera
+LastError = false        -- what went wrong the last time a unit was shown (the panel's status line shows it); false = nothing
+local spawnedAt = 0
+local lastLockAt = -1
+local logAt = {}
+
+--- LOG with the 'EDITOR unitview:' prefix, at most once in 5 seconds per key (a failure that repeats every frame must not flood the Console).
+local function Log(key, text)
+    local now = GetSystemTimeSeconds()
+    if logAt[key] and now - logAt[key] < 5 then return end
+    logAt[key] = now
+    LOG('EDITOR unitview: ' .. text)
+end
+
+--- A heading in (-pi, pi]. The engine's culling of mesh instances misbehaves for headings outside that range (units vanished facing some directions, camera.lua NormalizeHeading), and
+--- the viewer's own presets used to ask for 3.7 and 4.71: every heading the viewer sets goes through here.
+function NormHeading(h)
+    while h > 3.1415927 do h = h - 6.2831853 end
+    while h <= -3.1415927 do h = h + 6.2831853 end
+    return h
+end
 
 local function Overlay() return rawget(_G, 'ed_overlay_set') ~= nil end
 
@@ -398,7 +418,7 @@ end
 
 --- Called every frame by overlay.lua: the bones follow the animation exactly (the renderer's own interpolated pose).
 function OnFrame()
-    if lockC then pcall(LockCamera) end
+    if lockC then Tick() end
     if Show.bones and EntityId and Overlay() then
         DrawBones()
     elseif next(boneIds) then
@@ -415,6 +435,7 @@ function Remove(final)
     end
     Id, EntityId, Info = false, false, false
     lockC = false
+    LastError = false
     Bones, BoneSel = {}, false
     Clear()
     ClearBones()
@@ -436,10 +457,16 @@ local function ReadInfo()
 end
 
 --- Spawns the unit for army ARMY_1 on the stage and frames it (keepCamera: leaves the camera where it is). Returns true | nil + reason; the framing happens a moment later (a thread).
+--- What goes wrong later (the sim cannot make the unit, no answer, the renderer has no mesh for it) is logged ('EDITOR unitview: ...') and kept in LastError for the panel.
 function Spawn(id, keepCamera)
     local bp = __blueprints and __blueprints[id]
-    if not bp then return nil, 'no such unit' end
+    if not bp then
+        LastError = 'no such unit: ' .. tostring(id)
+        Log('spawn', LastError)
+        return nil, 'no such unit'
+    end
     Remove()
+    LastError = false
     if not origCamera then origCamera = GetCamera('WorldCamera'):SaveSettings() end
     if Stage == 'viewer' then
         StageOn()
@@ -458,21 +485,44 @@ function Spawn(id, keepCamera)
     SimCallback({ Func = 'EdViewSpawn', Args = { bp = id, army = 'ARMY_1', x = X, y = Y0, z = Z, heading = 0, path = infoPath } }, false)
     Id = id
     Rate = 1
-    local stamp = GetSystemTimeSeconds()
+    spawnedAt = GetSystemTimeSeconds()
+    Log('spawn:' .. id, string.format('showing %s on the %s stage at %.1f, %.1f, %.1f', id, Stage, X, Y0, Z))
     ForkThread(function()
-        -- the sim writes the unit's entity id and extents; the renderer has the unit a frame or two later
-        for i = 1, 40 do
+        -- the sim writes the unit's entity id and extents; the renderer has the unit a frame or two later (a busy sim answers late: wait up to 8 seconds)
+        local why
+        for i = 1, 80 do
             WaitSeconds(0.1)
             if Id ~= id then return end
             local info = ReadInfo()
             if info then
-                if info.error then Info = false break end
+                if info.error then
+                    Info = false
+                    LastError = 'the sim could not make ' .. id .. ' (' .. tostring(info.error) .. ')'
+                    Log('simerror', LastError)
+                    break
+                end
                 Info = info
-                EntityId = info.id
-                if EntityId and ed_unit_bones and ed_unit_bones(EntityId) then break end
+                EntityId = (info.id and info.id >= 0) and info.id or false
+                if EntityId then
+                    if not ed_unit_bones then break end
+                    local okBones, bones, message = pcall(ed_unit_bones, EntityId)
+                    if okBones and bones then break end
+                    why = okBones and message or bones
+                end
             end
         end
         if Id ~= id then return end
+        if not LastError then
+            if not EntityId then
+                LastError = 'the sim did not answer for ' .. id .. ' (no unit was made, or it is slow)'
+                Log('noanswer', LastError .. '; the camera is held on the stage anyway')
+            elseif ed_unit_bones then
+                local okB, bonesNow = pcall(ed_unit_bones, EntityId)
+                if not (okB and bonesNow) then
+                    Log('nomesh', 'the sim made ' .. id .. ' (entity ' .. tostring(EntityId) .. ') but the renderer has no mesh for it: ' .. tostring(why))
+                end
+            end
+        end
         -- a unit settles (an aircraft lands, the collision shape follows): ask again after a moment so the hit box and the framing use the settled extents
         if EntityId then
             ed_write_file(infoPath, '')
@@ -516,6 +566,7 @@ end
 --- the engine made of the zoom (field of view, eye distance) and to centre the unit in the visible panel instead of the middle of the whole window.
 function Aim(heading, pitch, fit)
     if not Id then return end
+    heading = NormHeading(heading)
     local oldHeading, oldPitch = Heading, Pitch
     Heading, Pitch = heading, pitch
     aiming = aiming + 1
@@ -523,7 +574,7 @@ function Aim(heading, pitch, fit)
     ForkThread(function()
         local cam = GetCamera('WorldCamera')
         local cx, cy, cz, radius = Bounds()
-        if not cx then return end
+        if not cx then Log('aimbounds', 'Aim: the bounds of ' .. tostring(Id) .. ' are unknown') return end
         lockC = { cx, cy, cz, radius }
         aimUntil = GetSystemTimeSeconds() + 0.08 * 5 + 0.5
         local gy = Ground(X, Z)
@@ -545,7 +596,7 @@ function Aim(heading, pitch, fit)
             WaitSeconds(0.08)
             if mine ~= aiming or not Id then return end
             local fov, eye, _, _, _, _, _, _, vx, vy, vw, vh = ed_camera_info()
-            if not fov then return end
+            if not fov then Log('aimcam', 'Aim: ed_camera_info answers nothing (no world camera?)') return end
             local _, _, _, s = FocusFor(cx, cy, cz, heading, pitch, gy, 0, 0, 0)
             local depth = eye - s                                       -- from the eye to the unit's centre along the line of sight
             upp = 2 * depth * math.tan(fov / 2) / vh
@@ -572,12 +623,13 @@ function Aim(heading, pitch, fit)
     end)
 end
 
---- Holds the camera on the unit (called every frame): the focus point is put back where the line of sight meets the unit's centre, so right-drag panning and the move keys do nothing, while rotating and
+--- Holds the camera on the unit (Tick calls it every frame; it needs the unit shown and framed, not the sim's answer: a slow sim must not leave the camera free): the focus point is put back where the line of sight meets the unit's centre, so right-drag panning and the move keys do nothing, while rotating and
 --- the wheel work around the unit. The pitch stays between 0.05 and 1.5, the eye between 1.3 and 40 radii from the centre.
 function LockCamera()
-    if not (Show.lock and Id and EntityId and lockC) or iconLens or GetSystemTimeSeconds() < aimUntil then return end
+    if not (Show.lock and Id and lockC) or iconLens or GetSystemTimeSeconds() < aimUntil then return end
     local fov, eye, fx, fy, fz, hd, pt, tz, vx, vy, vw, vh = ed_camera_info()
     if not fov or not vh or vh <= 0 then return end
+    hd = NormHeading(hd)
     local cx, cy, cz, radius = lockC[1], lockC[2], lockC[3], lockC[4]
     local cam = GetCamera('WorldCamera')
     local gy = Ground(X, Z)
@@ -607,6 +659,17 @@ function LockCamera()
     else
         Heading, Pitch = hd, pt
     end
+end
+
+--- Every frame (camera.lua Update calls it after the held keys, overlay.lua OnFrame calls it too: whichever of the two runs): LockCamera, not twice in one frame, and a failure is logged
+--- ('EDITOR unitview: LockCamera failed: ...') instead of silently leaving the camera free.
+function Tick()
+    if not (Show.lock and Id and lockC) then return end
+    local now = GetSystemTimeSeconds()
+    if now - lastLockAt < 0.004 then return end
+    lastLockAt = now
+    local ok, err = pcall(LockCamera)
+    if not ok then Log('lock', 'LockCamera failed: ' .. tostring(err)) end
 end
 
 local PRESETS = { iso = { 3.7, 0.55 }, unit = { 3.7, 0.55 }, front = { 3.1416, 0.12 }, back = { 0, 0.12 }, side = { 4.7124, 0.12 }, top = { 3.1416, 1.45 } }

@@ -156,6 +156,7 @@ local TARGETS = { { 'LOG', 'info' }, { 'WARN', 'warn' }, { 'SPEW', 'info' }, { '
 --- Wraps the global print functions once. `env` (default _G) is where they live: the self test passes a table of its own.
 function Install(env)
     env = env or _G
+    S.wrapped = S.wrapped or {}          -- (a state kept from an older build of this module has no table of wrappers)
     S.capture = Capture
     local done = false
     for _, t in TARGETS do

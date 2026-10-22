@@ -15,8 +15,18 @@ do
     end
     EdFreezeUnit = FreezeUnit
 
+    --- Editing is quiet (editorsim/peace.lua): every army pair is neutral and every unit holds fire. A test run restores the scenario's own diplomacy and the fire states.
+    local function Peace(what)
+        local ok, err = pcall(function() import('/lua/editorsim/peace.lua')[what]() end)
+        if not ok then WARN('editor: peace ' .. what .. ': ' .. tostring(err)) end
+    end
+
     Callbacks.EdSetPlay = function(data)
         ScenarioInfo.EditorPlaying = data.on and true or false
+        if ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then
+            -- first, so that the test run starts with the diplomacy the scenario made (free for all, teams, a mission's Alliances); back to edit (on = false) is quiet again
+            Peace(data.on and 'Restore' or 'Enter')
+        end
         if data.on then
             local units = GetUnitsInRect(Rect(0, 0, 100000, 100000))
             if units then
@@ -193,6 +203,11 @@ do
         local ok, unit = pcall(function() return CreateUnitHPR(data.bp, army, data.x, y, data.z, 0, data.heading or 0, 0) end)
         if ok and unit then FreezeUnit(unit) end
         if ok and unit and data.group == '_view' then unit.EdViewUnit = true end      -- the unit viewer's own units (EdClearLab takes them down)
+        -- no shooting while editing: hold fire (the viewer's units are skipped, they are protected); the armies are neutral already, Enter again in case the session start missed it
+        if ok and unit and not ScenarioInfo.EditorPlaying then
+            Peace('Enter')
+            pcall(function() import('/lua/editorsim/peace.lua').Hold(unit) end)
+        end
         -- units of the mission's own groups are shown while editing only: the script spawns them when the mission plays
         if ok and unit and data.group and data.group ~= 'INITIAL' and string.sub(data.group, 1, 8) ~= 'INITIAL/' then
             ScenarioInfo.EditorGroupUnits = ScenarioInfo.EditorGroupUnits or {}
