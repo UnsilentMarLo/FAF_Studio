@@ -710,6 +710,13 @@ The engine rates slope in two ways, both read from its own code and computed nat
 - **Colours:** clear below 4 % of the limit, green, yellow at half the limit, red at the limit, purple beyond it (blocked). The status line shows the rating of the cell under
   the pointer (`slope 0.62 / 0.75 (1x1)`), the View panel (and `S`, or the Slope button) holds mode, footprint size and legend. Verified: the native ratings equal a hand
   calculation from `ed_terrain_get` cell for cell.
+- **Performance (2026-10-22):** the ratings are cached in 64 x 64 cell tiles (`EdOverlaySlope.h`) until the heights under a tile change (`edoverlay::NotifyHeights`, called by the
+  document's height sink in `EditorDocument.cpp`; a map or kind / window change drops them), rated with separable sliding window maxima (O(cells), not O(cells x window^2); the
+  whole 4096 x 4096 map takes ~0.9 s in total, 0.2 ms per tile) and only for the tiles the view shows, at most 5 ms per frame (the rest fills in over the next frames, the
+  nearest to the middle first). Each tile keeps max-reduced blocks of 2 ... 64 cells, so a wide view draws at most 160 x 160 blocks (blocks aligned to multiples of their size,
+  the steepest cell of a block wins) and merges runs of equal colour (24 colour steps) into one quad; unchanged cameras project nothing (`ProjGrid`). `ed_overlay_perf()` and the
+  perf.lua report show the numbers. Node grids (`ed_overlay_nodes`, terrain type layers) share one projection per window, project only the nodes a drawn cell needs, draw
+  merged runs of flat cells and take `ed_overlay_nodes_rect` for a dab. Tests: `EdOverlaySlopeTest`, `EdOverlayNodesTest` (`scripts/ed_native_tests.py`).
 - **Not covered yet:** terrain-type "blocking" cells (`STIMap::IsBlockingTerrain`, from TerrainTypes.lua and the terrain-type layer), water depth limits, and the
   `FlattenSkirt` perimeter check (`OCCUPY_CheckEdgeFlatness`) that normal structures use on top of the flatness rule.
 - The grid and slope views draw without a map document (they used to wait for the first edit).

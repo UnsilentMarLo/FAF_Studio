@@ -19,7 +19,8 @@
 --   Order, Kinds                  the four kinds and what they are
 --   ShaderClass(id) / Slot(kind[, shaderId]) -> slot | nil, why        which layer slot the shader reads the kind from
 --   Current(kind) -> info         { slot, path, size, file, empty, active, managed, class }
---   Stale(kind) -> bool       made from the terrain here, and the terrain (or the sun) changed since
+--   Stale(kind) -> bool       made from the terrain here, and the terrain (or the sun) changed since, or the map was resized after it was made;   StaleReason(kind) -> 'terrain' | 'resized' | nil
+--   AfterResize(oldSize, newSize) -> list of kinds    Map > Resize (resize.lua): the map-wide layers get the tile size of the new map so they stay active, and are marked out of date
 --   Generate(kind, o) -> entry | nil, message         from the map's heights and lighting (o: size, strength, soft, quality, reach, ao, ambient); one undo entry
 --   FromGraph(kind, pieces, o) -> entry | nil, message   from the graph's fields (pieces: nx, nz | shadow, ao); o: size, assign
 --   Import(kind, file) / Export(kind, file) / Clear(kind) -> entry | true | nil, message
@@ -33,11 +34,12 @@ local Fields = import('/lua/editor/fields.lua')
 local History = import('/lua/editor/history.lua')
 local Strata = import('/lua/editor/strata.lua')
 local World = import('/lua/editor/world.lua')
+local Shaders = import('/lua/editor/shaders.lua')
 
 STAGE = '../maptex'
 MOUNT = '/edmaptex'
 
-State = { serial = 0, mounted = false, created = {}, thumbs = {}, made = {}, sumVersion = -1, nowSum = '' }
+State = { serial = 0, mounted = false, created = {}, thumbs = {}, made = {}, sumVersion = -1, nowSum = '', resized = {} }
 
 Order = { 'normal', 'light', 'specular', 'macro' }
 
@@ -56,17 +58,7 @@ Kinds = {
         usedBy = 'TTerrainXPExt, Terrain000 and Terrain050' },
 }
 
-local N7 = { layer = 18, pack = 'normal7', tile = true, where = 'normal map of layer 8', layout = 'A = normal x, R = G = B = normal z' }
-local L7 = { layer = 8, pack = 'info7', tile = true, where = 'albedo of layer 8', layout = 'R = water depth, G = B = ambient occlusion, A = sun (1) or shadow (0)' }
-
-Slots = {
-    ext = { normal = N7, light = L7, macro = { layer = 9, pack = 'raw', where = 'albedo of the Upper layer', layout = 'RGB = colour, A = opacity' } },
-    spec = { normal = N7, light = L7, specular = { layer = 9, pack = 'raw', where = 'albedo of the Upper layer', layout = 'RGB = specular colour, A = sharpness' } },
-    pbr = { normal = N7, light = L7 },
-    splat = { normal = N7, light = L7 },
-    old301 = { light = { layer = 9, pack = 'light301', tile = true, where = 'albedo of the Upper layer', layout = 'R = normal x, G = normal z, B = water depth, A = sun (1) or shadow (0)' } },
-}
-Slots.old301.normal = { layer = 9, pack = 'light301', tile = true, shared = 'light', where = 'albedo of the Upper layer (with the lighting)', layout = Slots.old301.light.layout }
+-- Which layer slot each shader reads the kinds from comes from shaders.lua (Profile(id).maps, MapSlots(class)): one table for the editor.
 
 local CH = { 'r', 'g', 'b', 'a' }
 
@@ -87,14 +79,7 @@ end
 
 --- 'legacy' (TTerrain, TTerrainXP, TTerrainGlow), 'ext' (TTerrainXPExt, Terrain000, Terrain050), 'spec' (Terrain001, Terrain051), 'pbr' (Terrain1xx), 'splat' (Terrain2xx), 'old301' or 'other'.
 function ShaderClass(id)
-    id = id or ''
-    if id == 'TTerrainXPExt' or id == 'Terrain000' or id == 'Terrain050' then return 'ext' end
-    if id == 'Terrain001' or id == 'Terrain051' then return 'spec' end
-    if id == 'Terrain301' then return 'old301' end
-    if string.find(id, '^Terrain1%d%dB?$') then return 'pbr' end
-    if string.find(id, '^Terrain2%d%dB?$') then return 'splat' end
-    if id == 'TTerrain' or id == 'TTerrainXP' or id == 'TTerrainGlow' or id == '' then return 'legacy' end
-    return 'other'
+    return Shaders.ClassOf(id)
 end
 
 function ShaderId()
@@ -106,8 +91,7 @@ end
 function Slot(kind, shaderId)
     local id = shaderId or ShaderId()
     local class = ShaderClass(id)
-    local set = Slots[class]
-    local slot = set and set[kind]
+    local slot = Shaders.MapSlots(class)[kind]
     if slot then return slot end
     local info = Kinds[kind]
     if class == 'legacy' then
@@ -484,10 +468,18 @@ end
 --- Whether the texture of `kind` was made from the terrain here and the terrain (or, for the lighting texture, the sun) has changed since: it is out of date then. Cheap: the heights are
 --- compared only after the document changed.
 function Stale(kind)
+    return StaleReason(kind) ~= nil
+end
+
+--- Why the texture of `kind` is out of date: 'resized' (the map changed size after the picture was made: it still shows the old map), 'terrain' (heights or sun changed since it was made here),
+--- or nil.
+function StaleReason(kind)
     local cur = Current(kind)
-    if not cur.slot or cur.empty then return false end
-    local made = State.made[string.lower(cur.path or '')]
-    if not made then return false end
+    if not cur.slot or cur.empty then return nil end
+    local lowerPath = string.lower(cur.path or '')
+    if State.resized[lowerPath] then return 'resized' end
+    local made = State.made[lowerPath]
+    if not made then return nil end
     local v = History.Version
     if State.sumVersion ~= v then
         State.sumVersion = v
@@ -495,12 +487,34 @@ function Stale(kind)
         State.nowSum = Fields.Checksum(f)
         Fields.Free(f)
     end
-    if made.heights ~= State.nowSum then return true end
+    if made.heights ~= State.nowSum then return 'terrain' end
     if cur.slot.pack ~= 'normal7' then
         local az, alt = World.SunAngles()
-        if made.sun ~= string.format('%.2f,%.2f', az, alt) then return true end
+        if made.sun ~= string.format('%.2f,%.2f', az, alt) then return 'terrain' end
     end
-    return false
+    return nil
+end
+
+--- Map > Resize restores the texture layers of the old map, with their tile sizes: a map-wide picture had the old map size + 1, which is below the new map size when the map grew (the shaders
+--- then treat the layer as an ordinary tiled texture and ignore the picture) and wastes the picture's extent when it shrank. The layers that were active get the new map size + 1, so they stay
+--- active, and are marked out of date (the picture still shows the old map: Generate again). Returns the kinds changed.
+function AfterResize(oldSize, newSize)
+    local done, seen = {}, {}
+    if not oldSize or not newSize or not rawget(_G, 'ed_stratum_layer') then return done end
+    for _, kind in Order do
+        local slot = Slot(kind)
+        if slot and slot.tile and not seen[slot.layer] then
+            seen[slot.layer] = true
+            local path, size = ed_stratum_layer(slot.layer)
+            if not IsEmptyPath(path) and (size or 0) > oldSize then
+                if ed_stratum_set_layer(slot.layer, path, newSize + 1) then
+                    State.resized[string.lower(path)] = true
+                    table.insert(done, kind)
+                end
+            end
+        end
+    end
+    return done
 end
 
 --- From the fields of the terrain graph (Build): kind 'normal' with pieces.nx and pieces.nz, kind 'light' with pieces.shadow and pieces.ao (optional). o.size (choice or number), o.assign
@@ -512,7 +526,7 @@ function FromGraph(kind, pieces, o)
     local slot, why = Slot(kind)
     local assign = o.assign ~= false
     if assign and not slot then return nil, why end
-    slot = slot or (Slots.ext and Slots.ext[kind])
+    slot = slot or Shaders.MapSlots('ext')[kind]
     if slot and slot.shared then
         kind = slot.shared
         slot = Slot(kind)

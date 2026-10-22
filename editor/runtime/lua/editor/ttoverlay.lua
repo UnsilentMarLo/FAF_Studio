@@ -3,8 +3,9 @@
 -- The cells draw as one node layer per type present in the part of the grid the camera sees (ed_overlay_nodes, one colour per layer). What makes this cheap:
 --   * the layers are built at a reduced resolution: at most MAX_NODES nodes per side, fewer when many types are present (the engine projects every node of every layer each frame);
 --   * the codes under the nodes come from one native call (terraintype.lua NodeCodes), not one per row;
---   * the node codes and the layer tables are kept. A change of the grid (a brush dab) only re-reads the nodes under the changed cells (terraintype.lua TakeDirty) and sends the layers
---     that really changed to the engine; nothing is rebuilt for a dab;
+--   * the node codes and the layer tables are kept. A change of the grid (a brush dab) only re-reads the nodes under the changed cells (terraintype.lua TakeDirty) and sends the
+--     changed rectangle of the layers that really changed to the engine (ed_overlay_nodes_rect; a whole layer when the engine has no such call); nothing is rebuilt for a dab;
+--   * the engine projects the nodes once per window and frame (layers share the window), only those a drawn cell needs, and not at all while the camera stands still;
 --   * rebuilds are at most one per UPDATE_GAP seconds, so a stroke that dabs many times a frame redraws a few times a second.
 --
 --   Draw(view)    once per frame
@@ -168,7 +169,24 @@ local function Patch(s, cx0, cz0, cx1, cz1)
             end
         end
     end
-    for code, _ in touched do Upload(s, code) end
+    -- a layer the engine already holds gets only the changed rectangle (ed_overlay_nodes_rect), not all of its nodes; a new or emptied layer is uploaded whole
+    local rect = rawget(_G, 'ed_overlay_nodes_rect')
+    for code, _ in touched do
+        local g = grids[code]
+        local sent = false
+        if rect and g and s.ids[IdOf(code)] and (count[code] or 0) > 0 then
+            local vals, k = {}, 0
+            for j = j0, j1 do
+                local base = j * s.nw + 1
+                for i = i0, i1 do
+                    k = k + 1
+                    vals[k] = g[base + i]
+                end
+            end
+            sent = rect(IdOf(code), i0, j0, iw, jh, vals) and true or false
+        end
+        if not sent then Upload(s, code) end
+    end
     Stats.partial = Stats.partial + 1
     Stats.nodes = Stats.nodes + iw * jh
 end

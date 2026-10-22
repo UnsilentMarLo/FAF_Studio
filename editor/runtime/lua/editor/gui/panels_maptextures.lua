@@ -195,7 +195,7 @@ Panels.Register{
             local textW = math.max(Skin.S(40), P.w - (P.picW or Skin.S(100)) - 3 * Skin.S(10))
             for _, card in P.cards do
                 local cur = MT.Current(card.kind)
-                local stale = (not cur.empty) and MT.Stale(card.kind)
+                local stale = (not cur.empty) and MT.StaleReason(card.kind)
                 local key = tostring(cur.path) .. '|' .. tostring(cur.size) .. '|' .. id .. '|' .. tostring(textW) .. '|' .. tostring(stale)
                 if force or key ~= card.key then
                     card.key = key
@@ -218,7 +218,7 @@ Panels.Register{
                             W.Fit(card.line3, cur.slot.layout, textW)
                         else
                             if stale then
-                                W.Fit(card.state, 'Out of date: the terrain or the sun changed. Generate again.', P.w - 2 * Skin.S(10))
+                                W.Fit(card.state, stale == 'resized' and 'Out of date: the map was resized. Generate again.' or 'Out of date: the terrain or the sun changed. Generate again.', P.w - 2 * Skin.S(10))
                                 card.state:SetColor(c.warn)
                             else
                                 W.Fit(card.state, 'In use (' .. where .. ')', P.w - 2 * Skin.S(10))

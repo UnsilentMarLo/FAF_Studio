@@ -9,7 +9,10 @@
 --   Discover()           the composite terrain techniques found in effects/terrain.fx: { name = normalsTechnique }
 --   Profile(id)          what the mask bytes and layers mean for a shader: { range = 'half' | 'full' (how the albedo pass reads a mask byte: saturate(2m - 1) or m), painted = 4 | 7 | 8 (painted layers it blends),
 --                          l8 = 'paint' | 'rough' | 'data' | 'none' (what layer 8 is: a painted layer, the roughness multiplier mask, map-wide data in its textures, not drawn),
---                          upper = 'overlay' | 'specular' | 'atlas', alpha = 'spec' | 'matte' | 'glow' | 'unused' (the albedo alpha of the layers), supported, reason }
+--                          upper = 'overlay' | 'specular' | 'atlas', alpha = 'spec' | 'matte' | 'glow' | 'unused' (the albedo alpha of the layers), supported, reason,
+--                          class = 'legacy' | 'ext' | 'spec' | 'pbr' | 'splat' | 'old301' | 'other' (the family of texture layouts), maps = { normal, light, macro, specular } the map-wide
+--                          pictures the shader reads and from which layer slot (maptextures.lua; a kind the shader does not use is missing) }
+--   ClassOf(id)          the class of a shader ('legacy' for the empty name, as for a map without a shader)      MapSlots(class) -> the maps table of a class
 --   RangeOf(id)          'half' or 'full': the encoding of the paint masks a shader reads (strata.lua uses it for every mask it reads or writes)
 --   Mismatch()           nil, or { range, shader, now, current } when the paint masks are still in the range of `shader` (they were written for it) while the map's shader reads the range `now`: a plain
 --                          Set(id) changes the technique only, so the paint looks different until Convert layers (stratumconv.lua) re-encodes the masks. Saved with the map (SidecarText / LoadSidecar,
@@ -83,7 +86,29 @@ end
 local NOTE_ATLAS = 'Upper atlas: 2 x 2 tiles. The tile of the Base layer and layers 1-3 (top left, top right, bottom left, bottom right) hold their roughness in R and their height in G; layers 4-7 use the same tiles in B (roughness) and A (height).'
 local NOTE_ROUGH = 'Layer 8 has no paint: its mask is a roughness multiplier (128 = neutral, lower = shinier, higher = rougher).'
 
-local function Prof(range, painted, l8, upper, alpha) return { range = range, painted = painted, l8 = l8, upper = upper, alpha = alpha, supported = true } end
+-- The map-wide pictures (maptextures.lua) by class: the layer slot (an index of ed_stratum_layer: 0..9 albedo, 10..19 normal) the shader reads each kind from, how the editor packs the channels
+-- (`pack`), whether the layer's tile size has to exceed the map for the shader to use it (`tile`: terrain.fx ShaderUsesTerrainInfoTexture / UseMapNormalFromTexture), and the texts of the panel.
+local N7 = { layer = 18, pack = 'normal7', tile = true, where = 'normal map of layer 8', layout = 'A = normal x, R = G = B = normal z' }
+local L7 = { layer = 8, pack = 'info7', tile = true, where = 'albedo of layer 8', layout = 'R = water depth, G = B = ambient occlusion, A = sun (1) or shadow (0)' }
+local MAPS = {
+    ext = { normal = N7, light = L7, macro = { layer = 9, pack = 'raw', where = 'albedo of the Upper layer', layout = 'RGB = colour, A = opacity' } },
+    spec = { normal = N7, light = L7, specular = { layer = 9, pack = 'raw', where = 'albedo of the Upper layer', layout = 'RGB = specular colour, A = sharpness' } },
+    pbr = { normal = N7, light = L7 },
+    splat = { normal = N7, light = L7 },
+    old301 = { light = { layer = 9, pack = 'light301', tile = true, where = 'albedo of the Upper layer', layout = 'R = normal x, G = normal z, B = water depth, A = sun (1) or shadow (0)' } },
+    legacy = {},
+    other = {},
+}
+MAPS.old301.normal = { layer = 9, pack = 'light301', tile = true, shared = 'light', where = 'albedo of the Upper layer (with the lighting)', layout = MAPS.old301.light.layout }
+
+--- The map-wide pictures a class of shaders reads (see above).
+function MapSlots(class)
+    return MAPS[class] or MAPS.other
+end
+
+local function Prof(range, painted, l8, upper, alpha, class)
+    return { range = range, painted = painted, l8 = l8, upper = upper, alpha = alpha, supported = true, class = class, maps = MapSlots(class) }
+end
 
 local LAYOUT_OLD = 'Layers: Base, painted layers 1-4, Upper. Albedo RGB plus an alpha that sets the specular amount; normals X Y Z.'
 local LAYOUT_XP = 'Layers: Base, painted layers 1-8, Upper. Albedo RGB plus alpha = specularity; normals X Y Z. The Upper layer is an overlay whose alpha is its opacity.'
@@ -98,42 +123,42 @@ local Info = {
     TTerrain = { family = 'legacy', summary = 'The shader of the original Supreme Commander.', mask = 'half',
         instructions = 'Blends only the painted layers 1-4 over the base layer; layers 5-8 are not drawn. Choose it only for a map that has to look like the original game. Use TTerrainXP for everything else. ' ..
                        'The alpha of the albedo textures works the other way round than in TTerrainXP: the specular amount is 1 - alpha.',
-        layout = LAYOUT_OLD, rows = ROWS_LEGACY4, profile = Prof('half', 4, 'none', 'overlay', 'matte'),
+        layout = LAYOUT_OLD, rows = ROWS_LEGACY4, profile = Prof('half', 4, 'none', 'overlay', 'matte', 'legacy'),
         notes = { 'Only layers 1-4 are blended; paint on layers 5-8 is not drawn.' } },
     TTerrainXP = { family = 'legacy', summary = 'The Forged Alliance shader: the default of nearly every map.', mask = 'half',
         instructions = 'Blends all eight painted layers and the upper layer. Masks are read as saturate(2 * m - 1), so the paint brushes store half-range masks (what the editor does for you). ' ..
                        'Normals are blended by simple lerps; they read the mask without the half-range conversion, so they follow the paint a little more broadly than the colours.',
-        layout = LAYOUT_XP, rows = ROWS_XP, profile = Prof('half', 8, 'paint', 'overlay', 'spec'),
+        layout = LAYOUT_XP, rows = ROWS_XP, profile = Prof('half', 8, 'paint', 'overlay', 'spec', 'legacy'),
         notes = { 'Masks use the half range: a byte up to 127 means "none", 255 means "fully this layer".' } },
     TTerrainGlow = { family = 'legacy', summary = 'TTerrain where the alpha of the first painted layer is animated as a glow.', mask = 'half',
         instructions = 'Like TTerrain (painted layers 1-4) but the alpha of the first painted layer\'s texture is animated and used as a glow channel. Use it for lava or energy ground; give that layer an albedo whose alpha is the glow mask.',
-        layout = LAYOUT_OLD, rows = ROWS_GLOW, profile = Prof('half', 4, 'none', 'overlay', 'glow'),
+        layout = LAYOUT_OLD, rows = ROWS_GLOW, profile = Prof('half', 4, 'none', 'overlay', 'glow', 'legacy'),
         notes = { 'Only layers 1-4 are blended; paint on layers 5-8 is not drawn.' } },
     TTerrainXPExt = { family = 'ext', summary = 'Drop-in replacement for TTerrainXP that adds the map-wide normals and shadows.', mask = 'mixed',
         instructions = 'Keeps the different mask ranges of TTerrainXP (half range for albedo, full for normals), so an existing map looks the same. Choose it to upgrade a TTerrainXP map without repainting.',
-        layout = LAYOUT_EXT, rows = ROWS_EXT, profile = Prof('half', 7, 'data', 'overlay', 'spec'),
+        layout = LAYOUT_EXT, rows = ROWS_EXT, profile = Prof('half', 7, 'data', 'overlay', 'spec', 'ext'),
         notes = { 'Layer 8 has no paint. Masks use the half range for the colours and the full range for the normals, like TTerrainXP.' } },
     Terrain000 = { family = 'ext', summary = 'Like TTerrainXPExt, with the full mask range for albedo and normals.', mask = 'full',
         instructions = 'Both albedo and normals use the whole mask range (0-255). Paint layers normally; there is no half-range conversion. Good for new maps that only need the extended shader.',
-        layout = LAYOUT_EXT, rows = ROWS_EXT, profile = Prof('full', 7, 'data', 'overlay', 'spec'),
+        layout = LAYOUT_EXT, rows = ROWS_EXT, profile = Prof('full', 7, 'data', 'overlay', 'spec', 'ext'),
         notes = { 'Layer 8 has no paint. Masks use the full range: the byte is the share of the layer.' } },
     Terrain050 = { family = 'ext', summary = 'Like Terrain000, but only the upper half of the mask range counts.', mask = 'half',
         instructions = 'Uses only the upper half of the mask range, which is what maps made for TTerrainXP store. Easiest choice when converting an existing map.',
-        layout = LAYOUT_EXT, rows = ROWS_EXT, profile = Prof('half', 7, 'data', 'overlay', 'spec'),
+        layout = LAYOUT_EXT, rows = ROWS_EXT, profile = Prof('half', 7, 'data', 'overlay', 'spec', 'ext'),
         notes = { 'Layer 8 has no paint. Masks use the half range: a byte up to 127 means "none".' } },
     Terrain001 = { family = 'ext', summary = 'UDN normal blending and a specularity texture on the upper layer.', mask = 'full',
         instructions = 'Normals are blended with UDN blending. The base layer\'s albedo is drawn first and blended over everything again by its alpha. The upper layer is not a macrotexture: its RGB is the specular colour and its alpha the specular sharpness, which gives fine control over the shine of the whole map.',
-        layout = LAYOUT_SPEC, rows = ROWS_SPEC, profile = Prof('full', 7, 'data', 'specular', 'unused'),
+        layout = LAYOUT_SPEC, rows = ROWS_SPEC, profile = Prof('full', 7, 'data', 'specular', 'unused', 'spec'),
         notes = { 'Layer 8 has no paint. Masks use the full range.' } },
     Terrain051 = { family = 'ext', summary = 'Terrain001 with only the upper half of the mask range.', mask = 'half',
         instructions = 'As Terrain001, but only the upper half of the mask range counts (maps converted from TTerrainXP).',
-        layout = LAYOUT_SPEC, rows = ROWS_SPEC, profile = Prof('half', 7, 'data', 'specular', 'unused'),
+        layout = LAYOUT_SPEC, rows = ROWS_SPEC, profile = Prof('half', 7, 'data', 'specular', 'unused', 'spec'),
         notes = { 'Layer 8 has no paint. Masks use the half range.' } },
     Terrain301 = { family = 'old', summary = 'Height splatting, the first version (kept for old maps).', mask = 'half',
         instructions = 'The earlier form of the splatting of the 2xx shaders. Prefer Terrain200 / Terrain250 for new maps. It uses an older texture layout (the roughness atlas is in the normal map of layer 8, the water depth in the Upper layer), so the editor does not convert layers to or from it.',
         layout = 'Layers: Base, painted layers 1-7. The atlas for roughness and height is in the normal map of layer 8; layer 8\'s albedo is a map-wide colour with its opacity in alpha; the Upper layer holds the water depth in its blue channel.',
         rows = ROWS_301, notes = { 'Layer 8 has no paint: its mask is a roughness multiplier (128 = neutral).', 'Masks use the half range.' },
-        profile = { supported = false, range = 'half', painted = 7, l8 = 'rough', upper = 'atlas', alpha = 'unused',
+        profile = { supported = false, range = 'half', painted = 7, l8 = 'rough', upper = 'atlas', alpha = 'unused', class = 'old301', maps = MapSlots('old301'),
                     reason = 'Terrain301 uses an older texture layout (the atlas is in the normal map of layer 8)' } },
 }
 
@@ -155,7 +180,7 @@ local function PbrInfo(name)
              summary = (splat and 'Height splatting' or 'PBR') .. (biplanar and ', biplanar' or '') .. (half and ', half mask range' or ', full mask range') .. (macro and ('; ' .. macro) or ''),
              instructions = text .. (splat and ' SpecularColor.r (the map\'s specular colour, Lighting panel) sets how soft the splat transitions are; SpecularColor.g raises the contrast of the height texture. Loading the same texture into two neighbouring layers lets the shader rotate every second one and hides tiling.' or ''),
              layout = splat and LAYOUT_SPLAT or LAYOUT_PBR, rows = RowsPbr(tail ~= '0', biplanar, splat), notes = notes,
-             profile = Prof(half and 'half' or 'full', 7, 'rough', 'atlas', 'unused') }
+             profile = Prof(half and 'half' or 'full', 7, 'rough', 'atlas', 'unused', splat and 'splat' or (digit == '1' and 'pbr' or 'other')) }
 end
 
 --- The terrain techniques with usage "composite" of the shader file the game loads: { name = normals technique }.
@@ -181,7 +206,7 @@ function Discover()
     return found
 end
 
-local UNKNOWN_PROFILE = { supported = false, range = 'half', painted = 8, l8 = 'paint', upper = 'overlay', alpha = 'spec',
+local UNKNOWN_PROFILE = { supported = false, range = 'half', painted = 8, l8 = 'paint', upper = 'overlay', alpha = 'spec', class = 'other', maps = MAPS.other,
                           reason = 'the editor has no notes about this shader' }
 
 local function Entry(name)
@@ -211,6 +236,12 @@ function Profile(id)
         profiles[id] = p
     end
     return p
+end
+
+--- The class of a shader ('legacy', 'ext', 'spec', 'pbr', 'splat', 'old301' or 'other'): the empty name (no shader) counts as 'legacy'.
+function ClassOf(id)
+    if id == nil or id == '' then return 'legacy' end
+    return Profile(id).class or 'other'
 end
 
 --- The encoding of the paint masks a shader reads: 'half' (saturate(2m - 1): bytes up to 127 mean nothing) or 'full' (the byte is the share). The editor stores every mask in the encoding of

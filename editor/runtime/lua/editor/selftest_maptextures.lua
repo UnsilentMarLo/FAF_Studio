@@ -11,6 +11,7 @@ local GRun = import('/lua/editor/graphrun.lua')
 local History = import('/lua/editor/history.lua')
 local MT = import('/lua/editor/maptextures.lua')
 local Panels = import('/lua/editor/gui/panels.lua')
+local Shaders = import('/lua/editor/shaders.lua')
 
 function Run(verbose)
     local failures, lines = {}, {}
@@ -32,6 +33,17 @@ function Run(verbose)
         and MT.ShaderClass('Terrain150') == 'pbr' and MT.ShaderClass('Terrain301') == 'old301' and MT.ShaderClass('Terrain051') == 'spec' and MT.ShaderClass('Surprise') == 'other')
     local n0, l0, l3, m0, s1 = MT.Slot('normal', 'Terrain000'), MT.Slot('light', 'Terrain000'), MT.Slot('light', 'Terrain301'), MT.Slot('macro', 'Terrain000'), MT.Slot('specular', 'Terrain001')
     check('layer slots', n0 and n0.layer == 18 and l0 and l0.layer == 8 and l3 and l3.layer == 9 and m0 and m0.layer == 9 and s1 and s1.layer == 9)
+    -- one table for the editor: the classes and slots are the shader profiles' (shaders.lua)
+    check('the classes are the shader profiles\'', Shaders.Profile('Terrain000').class == 'ext' and Shaders.ClassOf('Terrain250B') == 'splat' and Shaders.ClassOf('') == 'legacy' and Shaders.ClassOf('Surprise') == 'other'
+        and Shaders.Profile('Terrain301').class == 'old301' and Shaders.Profile('Terrain051').class == 'spec')
+    check('Slot() returns the slot of the shader profile', MT.Slot('normal', 'Terrain000') == Shaders.Profile('Terrain000').maps.normal and MT.Slot('light', 'Terrain301') == Shaders.Profile('Terrain301').maps.light
+        and MT.Slot('specular', 'Terrain001') == Shaders.Profile('Terrain001').maps.specular and Shaders.Profile('TTerrainXP').maps.normal == nil)
+    check('every described shader has a class and a maps table', (function()
+        for _, s in Shaders.List() do
+            if s.profile.class == nil or s.profile.maps == nil then return false end
+        end
+        return true
+    end)())
     check('a legacy shader has no map-wide slots', MT.Slot('normal', 'TTerrainXP') == nil and MT.Slot('macro', 'Terrain001') == nil and MT.Slot('specular', 'Terrain000') == nil)
     check('the panel is registered', Panels.Get('maptextures') ~= nil)
     check('the native op is there', rawget(_G, 'ed_field_ops') ~= nil and (function() for _, n in Fields.OpNames() do if n == 'normal_map' then return true end end return false end)())
@@ -44,6 +56,25 @@ function Run(verbose)
     end
     History.Clear()
     ed_stratum_shader('Terrain000')
+
+    -- ---- after Map > Resize: the map-wide layers keep their pictures at the new tile size and are marked out of date ----------------------------------------
+    do
+        local pic = '/env/evergreen/layers/dirt001_albedo.dds'
+        local ok1 = ed_stratum_set_layer(18, pic, W + 1)
+        local p18, s18 = ed_stratum_layer(18)
+        if ok1 and (s18 or 0) > W then
+            local done = MT.AfterResize(W, 2 * W)
+            local _, size18 = ed_stratum_layer(18)
+            check('AfterResize gives an active map-wide layer the new map size + 1', size18 == 2 * W + 1 and done[1] == 'normal', tostring(size18))
+            check('and marks the picture out of date', MT.Stale('normal') and MT.StaleReason('normal') == 'resized')
+            ed_stratum_set_layer(18, pic, 4)
+            local none = MT.AfterResize(W, 2 * W)
+            local _, size4 = ed_stratum_layer(18)
+            check('an ordinary tiled texture in the slot is left alone', table.getn(none) == 0 and size4 == 4, tostring(size4))
+        else
+            table.insert(lines, '  (the layer tile size could not be set: the AfterResize checks are skipped)')
+        end
+    end
 
     -- ---- the generators, directly ----------------------------------------------------------------------------------------------------------
     Fields.Run(function(S)

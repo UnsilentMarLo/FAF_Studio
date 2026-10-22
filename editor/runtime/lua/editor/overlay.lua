@@ -510,7 +510,8 @@ local function GridView(view, px)
     while (vis[3] - vis[1]) / step > 90 or (vis[4] - vis[2]) / step > 90 do step = step * 4 end
 
     local inside = gridStep == step and vis[1] >= gridX0 and vis[3] <= gridX1 and vis[2] >= gridZ0 and vis[4] <= gridZ1
-    if inside and math.mod(frameCount, 90) ~= 0 then return end
+    -- the lines are laid onto the terrain again (up to ~50000 height reads) when the ground changed (TerrainEpoch), not on a timer
+    if inside and gridKey == TerrainEpoch.Epoch then return end
 
     local mapX, mapZ = MapSize()
     local pad = 10 * step
@@ -519,6 +520,7 @@ local function GridView(view, px)
     local z0 = math.max(0, math.floor((vis[2] - pad) / step) * step)
     local z1 = math.min(mapZ, math.ceil((vis[4] + pad) / step) * step)
     gridStep, gridX0, gridX1, gridZ0, gridZ1 = step, x0, x1, z0, z1
+    gridKey = TerrainEpoch.Epoch
 
     local seen = {}
     local sample = math.max(1, math.floor(step / 2))      -- sample finer than the line spacing so the lines follow slopes

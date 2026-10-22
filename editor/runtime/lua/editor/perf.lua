@@ -92,6 +92,15 @@ function Report()
         local perSec = (span > 0) and (s.total * 1000 / span) or 0
         Out(string.format('%-34s %7.2f ms/s %6d calls  avg %6.3f  max %7.2f', e.name, perSec, s.calls, s.total * 1000 / math.max(1, s.calls), s.max * 1000))
     end
+    -- what the engine's overlay spent in its last frame (EdOverlay.cpp ed_overlay_perf: slope view and node grids; the native draw is not part of the Lua sections)
+    local native = rawget(_G, 'ed_overlay_perf')
+    if native then
+        local rate, draw, rated, pending, quads, level, projected, grids, gridQuads, gridProjected, groups = native()
+        if rated and (quads > 0 or pending > 0 or gridQuads > 0) then
+            Out(string.format('native slope: rate %.2f ms (%d tiles, %d waiting), draw %.2f ms (%d quads, block %d, %d nodes projected)', rate, rated, pending, draw, quads, math.pow(2, level), projected))
+            Out(string.format('native grids: %.2f ms (%d quads, %d nodes projected, %d windows)', grids, gridQuads, gridProjected, groups))
+        end
+    end
     sections = {}
     started = now
     frames = 0
