@@ -830,23 +830,43 @@ Panels.Register{
         function Pn.DragBoxBegin(x, y, additive)
             Pn.box = { x = x - bg.Left(), y = y - bg.Top(), x2 = x - bg.Left(), y2 = y - bg.Top(), additive = additive }
             if not Pn.boxBit then
+                -- a clear fill and a one pixel frame in the accent colour, above everything on the canvas (the old fill alone was 19 % opaque and hardly seen)
                 Pn.boxBit = Bitmap(bg)
-                Pn.boxBit.Depth:Set(function() return bg.Depth() + 60 end)
-                Pn.boxBit:SetSolidColor('3040b7d4')
+                Pn.boxBit.Depth:Set(function() return bg.Depth() + 400 end)
+                Pn.boxBit:SetSolidColor('4040b7d4')
                 Pn.boxBit:DisableHitTest()
+                Pn.boxEdges = {}
+                for i = 1, 4 do
+                    local e = Bitmap(bg)
+                    e.Depth:Set(function() return bg.Depth() + 401 end)
+                    e:SetSolidColor('ff40b7d4')
+                    e:DisableHitTest()
+                    Gone(e)
+                    Pn.boxEdges[i] = e
+                end
             end
         end
         function Pn.DragBox(x, y)
             local b = Pn.box
             if not b then return end
             b.x2, b.y2 = math.max(0, math.min(Pn.cw, x - bg.Left())), math.max(0, math.min(Pn.ch, y - bg.Top()))
-            Put(Pn.boxBit, math.min(b.x, b.x2), math.min(b.y, b.y2), math.max(1, math.abs(b.x2 - b.x)), math.max(1, math.abs(b.y2 - b.y)))
+            local bx, by, bw, bh = math.min(b.x, b.x2), math.min(b.y, b.y2), math.max(2, math.abs(b.x2 - b.x)), math.max(2, math.abs(b.y2 - b.y))
+            Put(Pn.boxBit, bx, by, bw, bh)
             Pn.boxBit:Show()
+            local e = Pn.boxEdges
+            if e then
+                Put(e[1], bx, by, bw, 1)
+                Put(e[2], bx, by + bh - 1, bw, 1)
+                Put(e[3], bx, by, 1, bh)
+                Put(e[4], bx + bw - 1, by, 1, bh)
+                for i = 1, 4 do e[i]:Show() end
+            end
         end
         function Pn.DragBoxEnd(x, y)
             local b = Pn.box
             Pn.box = nil
             if Pn.boxBit then Gone(Pn.boxBit) Pn.boxBit:Hide() end
+            for _, e in Pn.boxEdges or {} do Gone(e) e:Hide() end
             if not b then return end
             if x then Pn.DragBox(x, y) end
             local view = View()
