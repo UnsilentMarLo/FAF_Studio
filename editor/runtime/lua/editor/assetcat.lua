@@ -334,7 +334,9 @@ local function UseTexture(entry)
     if not before then return nil, 'no terrain layer is selected' end
     local albedo, normal = before.albedo, before.normal
     if entry.tags.type == 'normal' then normal = entry.key else albedo = entry.key normal = '' end
-    Strata.SetTexture(i, albedo, normal, before.size, before.nsize)
+    local size, nsize = before.size, before.nsize
+    if entry.tags.type ~= 'normal' then size, nsize = import('/lua/editor/texscale.lua').Carry(before.albedo, size, nsize, albedo) end      -- an empty or default tile size becomes the Optimal one
+    Strata.SetTexture(i, albedo, normal, size, nsize)
     local after = Strata.Snapshot(i)
     UI.PushEdit({
         label = 'texture of layer ' .. tostring(i),

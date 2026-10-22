@@ -187,6 +187,17 @@ Panels.Register{
         end
         P.size = SizeSlider('albedo', 'Albedo tile size (world units)')
         P.nsize = SizeSlider('normal', 'Normal tile size (world units)')
+        -- Optimal: both tile sizes from the texture's pixel width (texscale.lua), one undo step; the line beside it shows the texel density of the present albedo size
+        P.optimal = W.Button(group, 'Optimal', 0, 0, Skin.S(70), Skin.S(24), function()
+            local l = Selected()
+            if not l then return end
+            if l.albedo == '' or l.albedo == Strata.CLEAR then Say('This layer has no texture yet') return end
+            local TexScale = import('/lua/editor/texscale.lua')
+            local opt = TexScale.Optimal(l.albedo)
+            Edit('optimal tile size of', function(sel) Strata.SetSizes(sel.index, opt, opt) end)
+            Say(string.format('tile size %g for %s', opt, l.file))
+        end)
+        P.density = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
 
         local function Entry(entry)
             if entry then
@@ -271,13 +282,16 @@ Panels.Register{
                 end
                 Edit('texture of', function()
                     local albedo, normal = l.albedo, l.normal
+                    local size, nsize = l.size, l.nsize
                     if kind == 'albedo' then
+                        -- a tile size the user tuned stays; an empty layer or a default size takes the Optimal tile of the new texture (texscale.lua)
+                        size, nsize = import('/lua/editor/texscale.lua').Carry(l.albedo, l.size, l.nsize, path)
                         albedo = path
                         normal = ''                 -- SetTexture picks the matching normal map, or the neutral one
                     else
                         normal = path
                     end
-                    Strata.SetTexture(l.index, albedo, normal, l.size, l.nsize)
+                    Strata.SetTexture(l.index, albedo, normal, size, nsize)
                 end)
             end)
         end
@@ -330,6 +344,17 @@ Panels.Register{
                 end
                 P.size:Refresh()
                 P.nsize:Refresh()
+                -- texel density of the albedo at its tile size (pixel width / tile size) and the Optimal tile for the texture
+                local dens = ''
+                if l and l.albedo ~= '' and l.albedo ~= Strata.CLEAR then
+                    local TexScale = import('/lua/editor/texscale.lua')
+                    local px = TexScale.Pixels(l.albedo)
+                    if px and l.size and l.size > 0 then
+                        dens = string.format('%.0f texels per unit (%d px), optimal %g', px / l.size, px, TexScale.ForPixels(px))
+                    end
+                end
+                P.densityText = dens
+                W.Fit(P.density, dens, P.densityW or Skin.S(160))
             end
         end
 
@@ -367,6 +392,19 @@ Panels.Register{
             y = y + Skin.S(50)
             P.nsize:Place(pad, y, w - 2 * pad)
             y = y + Skin.S(54)
+            local ow = Skin.S(70)
+            W.Place(P.optimal, group, pad, y, ow, Skin.S(24))
+            W.Center(P.optimal.label, P.optimal, 0, 0, ow, Skin.S(24))
+            if w - 2 * pad - ow - Skin.S(8) >= Skin.S(150) then
+                P.densityW = w - 2 * pad - ow - Skin.S(8)
+                W.Place(P.density, group, pad + ow + Skin.S(8), y + Skin.S(5))
+                y = y + Skin.S(30)
+            else
+                P.densityW = w - 2 * pad
+                W.Place(P.density, group, pad, y + Skin.S(28))
+                y = y + Skin.S(48)
+            end
+            P.shownKey = nil          -- the density line is fitted to its width
             local bx = pad
             for _, b in { P.up, P.down, P.clearMask, P.fillMask } do
                 W.Place(b, group, bx, y, b.Width(), Skin.S(24))

@@ -18,9 +18,10 @@
 -- REPETITION
 --   The same T for every layer is fine: layers are different textures. What must not happen is two overlays whose tiles have a simple ratio (2 : 1, 3 : 1): their repeat patterns then
 --   line up every few tiles and a pattern shows up. The golden ratio phi = 1.618... is the number least well approximated by fractions (its continued fraction is all ones), so
---   a ratio phi^k never lines up. Decorrelate(size) is size * phi^k (rounded to STEP); MacroTile(baseSize) uses it for the Upper layer (the macrotexture, a low frequency colour
---   overlay, which has no matching normal map): the power of phi nearest to 128 (the engine's default for that slot) in log scale. Layers that must stay aligned (albedo / normal
---   pairs) are never decorrelated. The base layer uses plain Optimal (the former rule "base = 2 x painted layers" only halved its sharpness).
+--   the ratios phi^2 = 2.618, phi^3 = 4.236, phi^4 = 6.854, phi^5 = 11.09 stay 0.09 or more from a whole number (phi^6 = 17.94, phi^7 = 29.03 and higher do not: they approach the
+--   Lucas numbers). Decorrelate(size[, k]) is size * phi^k rounded to STEP. MacroTile(baseSize) uses it for the Upper layer (the macrotexture: a low frequency colour overlay with no
+--   matching normal map): baseSize * phi^k with k = 2 .. 5, the one nearest 128 (the engine's default for that slot) in log scale. Layers that must stay aligned (an albedo and its
+--   normal map) are never decorrelated. The base layer uses plain Optimal (the former rule "base = 2 x painted layers" only halved its sharpness).
 --
 --   Optimal(albedoPath[, fallback])    tile size in world units; the texture width is read once per path (cached); `fallback` replaces the result when the file cannot be read
 --   NormalSize(albedoPath)             the same value for the normal map
@@ -138,22 +139,26 @@ function Decorrelate(size, steps)
     return v
 end
 
---- The tile of the Upper layer (a macrotexture): the power of phi times `baseSize` nearest to `target` (log scale), within [MACRO_MIN, MACRO_MAX].
+--- The tile of the Upper layer (a macrotexture): baseSize * phi^k for k = 2 .. 5 (k = 1 is too close to the base, powers above 5 are within 0.06 of a whole number: phi^6 = 17.94, phi^7 = 29.03
+--- and so line up), within [MACRO_MIN, MACRO_MAX], whose ratio to baseSize after rounding is at least 0.08 from a whole number; of those the one nearest `target` in log scale.
 function MacroTile(baseSize, target)
     target = target or MACRO_TARGET
     baseSize = baseSize or MIN
     if baseSize < 1 then baseSize = MIN end
-    local best, bestErr
-    for k = 1, 8 do
+    local best, bestErr, loose, looseErr
+    for k = 2, 5 do
         local v = baseSize * math.pow(PHI, k)
         if v >= MACRO_MIN and v <= MACRO_MAX then
             local err = math.abs(math.log(v / target))
-            if not bestErr or err < bestErr then best, bestErr = v, err end
+            local r = Round(v) / baseSize
+            if math.abs(r - math.floor(r + 0.5)) >= 0.08 then
+                if not bestErr or err < bestErr then best, bestErr = v, err end
+            elseif not looseErr or err < looseErr then
+                loose, looseErr = v, err
+            end
         end
     end
-    if not best then
-        if baseSize * PHI < MACRO_MIN then best = MACRO_MIN else best = MACRO_MAX end
-    end
+    best = best or loose or target
     return Round(best)
 end
 

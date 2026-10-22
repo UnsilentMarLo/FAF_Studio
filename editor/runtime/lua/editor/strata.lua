@@ -10,7 +10,7 @@
 -- stroke may reach), Scatter, minimum / maximum slope angle (cells outside are skipped) and a height range, Invert.
 --
 --   Layers()                               list of { index, name, albedo, normal, size, nsize, ... }
---   SetTexture(i, albedo, normal, size, nsize)     Snapshot(i) / Restore(snapshot)      SetSizes(i, size, nsize)
+--   SetTexture(i, albedo, normal, size, nsize)     (size nil = Optimal tile of the texture, texscale.lua; the 4 of Clear / Info is the engine's empty slot value)     Snapshot(i) / Restore(snapshot)      SetSizes(i, size, nsize)
 --   Move(i, +1 | -1)     Clear(i)     ClearMask(i)     FillMask(i)     each returns an undo entry (or nil)
 --   Active               the painted layer (1..8) the paint / erase brushes work on
 --   Brush                the texture brush settings
@@ -198,6 +198,7 @@ end
 --- normal map stands in. Returns true when the albedo loaded.
 function SetTexture(i, albedoPath, normalPath, size, nsize)
     EnsureShader(i)
+    if not size then size = import('/lua/editor/texscale.lua').Optimal(albedoPath) end      -- no size given: the Optimal tile of the texture (texel density)
     if not normalPath or normalPath == '' then
         normalPath = NormalFor(albedoPath)
     end

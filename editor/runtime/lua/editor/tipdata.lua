@@ -391,6 +391,7 @@ Widget = {
     ["layers/clear"] = "Remove everything painted on the layer.",
     ["layers/down"] = "Move the layer one place down.",
     ["layers/fill"] = "Paint the layer over the whole map.",
+    ["layers/optimal"] = "Sets both tile sizes to the largest tile whose texels are still as sharp as the screen at close zoom: the texture width in pixels divided by about 48 texels per world unit (1024 px gives 21). One undo step.",
     ["layers/normal tile size"] = "How many world units one tile of the normal map covers.",
     ["layers/texture set"] = "Gives all layers the textures of a ready-made set (temperate, desert, tropical ...): grass, rock, sand, dirt, wet ground, high rock, dark rock and snow on layers 1 to 8. The paint is not changed.",
     ["layers/shader"] = "The terrain shader of the map: how the layers are blended and what the textures must contain. Opens the shader browser with notes on every shader.",

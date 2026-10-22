@@ -10,7 +10,7 @@
 --   Thumb(kind, id) -> VFS path of the thumbnail picture of a 'look' or 'theme' (editor/tools/gen_env_thumbs.py), or nil
 -- Themes
 --   Themes() -> list { id, name, group, desc, user, layers = { [0] = { albedo, size, normal, nsize }, ... [9] } }
---   ApplyTheme(entry, opts) -> true | false, reason         opts: clearUnused (remove the textures of layers the theme leaves empty, and what they painted), preview (returns the revert function)
+--   ApplyTheme(entry, opts) -> true | false, reason         (a layer of a theme without `size` gets the Optimal tile of its texture, texscale.lua)   opts: clearUnused (remove the textures of layers the theme leaves empty, and what they painted), preview (returns the revert function)
 --   SaveTheme(name) -> entry      DeleteTheme(id)      ImportTheme(scmapPath, name) -> entry | nil, reason      CurrentLayers() -> the present layers in the theme shape
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
