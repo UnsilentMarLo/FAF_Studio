@@ -37,6 +37,11 @@ Bug report (hands-on): after loading a real map, thousands of markers (all kinds
 
 `markercheck.lua` (Analyse, DisplayPos, SnapY, Survey, SurveyAll), `overlay.lua` (reset, grey icons, display positions), `markervis.lua`, `validate.lua` (aggregated entries, `PullMarkersInside`), `tools.lua` (`ClampMarkersToMap`), `gui/panels_objects.lua` (button, command), `control.lua`, `schook/lua/ui/uimain.lua`, `selftest_markers.lua` (registered in `selftests.extra`).
 
+## Look by type, camera frame
+
+`markervis.Style(type, storedProp, storedColor, name)` picks the 3D object of a marker by **type** (table `STYLES`: game mesh, size factor; tint = the type's colour from `MarkerTemplates`, brightened x1.5), because saved markers mostly carry the blank prop whatever their type. Unknown (mod) types take the stored prop, then the template's, then the blank marker. Start positions (`ARMY_<n>`) are bigger and gold. Display only: nothing is written to the save data. Game data has meshes for Blank, Camera, Combatzone, Defensive, Expansion, Mass, Hydrocarbon only; the other types share one and differ by size and tint.
+`camframe.lua` draws the field of view of a **selected Camera Info marker** (eye from focus, zoom, heading, pitch; four edges to the ground, the outline draped on the terrain, a line of sight); model and assumptions in its header. Self test: `selftest_camframe.lua`.
+
 ## Side finding (not fixed)
 
 Opening `sc2_ca_c06` or `adaptive_theta_passage` from a running editor started a normal game session (HUD, AI armies, sim running), not the editor (`control module started` never logged), so the editor stops answering its command channel. Probably the campaign / adaptive map script path; unchecked on a clean base.
