@@ -1,9 +1,12 @@
--- The ground window of an overlay drawn as a node grid (ed_overlay_nodes: at most 300 x 300 nodes, `step` world units apart). The window covers everything the camera sees of the map: the corners and
+-- The ground window of an overlay drawn as a node grid (ed_overlay_nodes: at most 300 x 300 nodes, `step` world units apart). Fields on the map do not need it: ed_overlay_field (EdOverlay.cpp)
+-- samples the field itself at the resolution the camera needs; this is the fallback for an engine without that call, plus the brush weights and terrain type layers. The window covers everything the camera sees of the map: the corners and
 -- edge middles of the view are projected onto the ground (a corner that looks at the sky counts as the whole map), the box around them is clamped to the map, and the node distance grows
 -- (1, 2, 4 ... units) until the box fits `maxNodes` nodes per side, so a zoomed out view still shows the whole map and a close view keeps one node per unit.
 --
 --   Window(view, maxNodes) -> x0, z0, nw, nh, step      (world units; nil without a terrain or a view)
 --   Fit(x0, z0, x1, z1, last, maxNodes) -> the same for a given ground box (what Window does after it has found the box of the view)
+--   Level(v, opts) -> 0..255                            the alpha level of a field value, exactly as the engine's ed_overlay_field maps it (EdOverlayField.h MapValue):
+--                                                       t = v * scale + bias; invert: 1 - t; at or below cutoff (default 0.02): 0; else round(min(1, t) * 255)
 --
 -- The box is snapped to a multiple of max(8, step) units, so it only changes when the camera has moved a bit: callers compare the returned numbers with the last ones before they rebuild a grid.
 --
@@ -47,4 +50,18 @@ function Window(view, maxNodes)
         x0, z0, x1, z1 = 0, 0, last, last
     end
     return Fit(x0, z0, x1, z1, last, maxNodes)
+end
+
+--- The alpha level 0..255 of a field value. opts: scale (1), bias (0), invert (false), cutoff (0.02): the same rule as the engine's ed_overlay_field, so the Lua fallback looks the same.
+function Level(v, opts)
+    local t = v
+    local cutoff = 0.02
+    if opts then
+        t = v * (opts.scale or 1) + (opts.bias or 0)
+        if opts.invert then t = 1 - t end
+        if opts.cutoff then cutoff = opts.cutoff end
+    end
+    if not (t > cutoff) then return 0 end             -- also catches NaN
+    if t > 1 then t = 1 end
+    return math.floor(t * 255 + 0.5)
 end

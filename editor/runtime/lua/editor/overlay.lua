@@ -621,6 +621,33 @@ local function SlopeView(view)
     slopeShown = true
 end
 
+--- The build grid. The engine draws it every frame (ed_overlay_grid, EdOverlay.cpp): a quadtree over the visible ground, so there are lines every cell where a cell is big on
+--- screen and every 2, 4, 8 ... cells where it is small, fading with the distance, laid on the real ground and hidden by hills. Nothing is built here: this only passes the visible
+--- rectangle. Without the native (an older engine) the Lua line set (GridView) is drawn, as before.
+local nativeGridShown = false
+
+local function GridNative(view, px)
+    if rawget(_G, 'ed_overlay_grid') == nil then
+        GridView(view, px)
+        return
+    end
+    if next(gridIds) ~= nil then                         -- lines of the Lua fallback: gone
+        for id, _ in gridIds do ed_overlay_remove(id) end
+        gridIds, gridKey, gridStep = {}, '', 0
+    end
+    if not Grid.Visible then
+        if nativeGridShown then
+            ed_overlay_grid_off()
+            nativeGridShown = false
+        end
+        return
+    end
+    local vis = SlopeRect(view)
+    if not vis then return end
+    ed_overlay_grid(math.max(0, math.floor(vis[1]) - 1), math.max(0, math.floor(vis[2]) - 1), math.ceil(vis[3]) + 1, math.ceil(vis[4]) + 1)
+    nativeGridShown = true
+end
+
 -- ---- pointer ------------------------------------------------------------------------------------------------------------------------
 
 local function Remove(id)
@@ -1248,6 +1275,10 @@ function Clear()
     Cursors.Reset(View())
     if Available() then ed_overlay_slope_off() end
     slopeShown = false
+    if nativeGridShown then
+        ed_overlay_grid_off()
+        nativeGridShown = false
+    end
     MarkerVis.Clear()
     Validate.Clear()
     if Available() then
@@ -1270,7 +1301,7 @@ end
 local function DrawLayers(ui, view, px)
     local t0
     t0 = Perf.Begin()
-    GridView(view, px)
+    GridNative(view, px)
     SlopeView(view)
     DrawAxes()
     DrawRuler()

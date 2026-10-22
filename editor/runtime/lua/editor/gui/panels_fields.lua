@@ -19,6 +19,7 @@ local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local Fields = import('/lua/editor/fields.lua')
 local Gen = import('/lua/editor/fieldgen.lua')
+local Throttle = import('/lua/editor/throttle.lua')       -- a slider that drags re-runs the live preview at most once per 80 ms (the last setting always)
 
 live = {}
 
@@ -386,10 +387,11 @@ Panels.Register{
 
         local GS = Gen.Settings
 
-        --- A setting changed: with Live preview on the result is made again at once, otherwise the text says the picture is old.
+        --- A setting changed: with Live preview on the result is made again (at once, or in a moment while a slider is dragged), otherwise the text says the picture is old.
         local function GenChanged()
             if state.live then
-                GenEval()
+                Throttle.Defer('fields:generate', function() GenEval() Sync() end)      -- Sync (pictures included) with the result, at most once per 80 ms while dragging
+                return
             elseif gen.result then
                 gen.text = 'Settings changed: press Refresh preview'
             end
@@ -517,8 +519,7 @@ Panels.Register{
                     set = function(v)
                         state.values[state.op][param.key] = v
                         if state.live then
-                            Evaluate()
-                            Sync()
+                            Throttle.Defer('fields:op', function() Evaluate() Sync() end)
                         end
                     end })
                 table.insert(self.sliders, s)

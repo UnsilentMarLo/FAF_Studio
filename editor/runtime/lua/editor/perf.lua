@@ -100,10 +100,14 @@ function Report()
     -- what the engine's overlay spent in its last frame (EdOverlay.cpp ed_overlay_perf: slope view and node grids; the native draw is not part of the Lua sections)
     local native = rawget(_G, 'ed_overlay_perf')
     if native then
-        local rate, draw, rated, pending, quads, level, projected, grids, gridQuads, gridProjected, groups = native()
-        if rated and (quads > 0 or pending > 0 or gridQuads > 0) then
-            Out(string.format('native slope: rate %.2f ms (%d tiles, %d waiting), draw %.2f ms (%d quads, block %d, %d nodes projected)', rate, rated, pending, draw, quads, math.pow(2, level), projected))
+        local rate, draw, rated, pending, quads, level, projected, grids, gridQuads, gridProjected, groups, leaves, finest, buildMs, buildLeaves, buildSegs, buildProjected, depth, fieldMs, fieldLeaves, fieldQuads, fieldProjected, fieldPyramidMs, fieldFinest, fieldCoarsest = native()
+        if rated and (quads > 0 or pending > 0 or gridQuads > 0 or (buildSegs or 0) > 0 or (fieldQuads or 0) > 0) then
+            Out(string.format('native slope: rate %.2f ms (%d tiles, %d waiting), draw %.2f ms (%d quads, %d blocks of %d..%d cells, %d nodes projected)', rate, rated, pending, draw, quads, leaves or 0, math.pow(2, finest or 0), math.pow(2, level), projected))
+            Out(string.format('native build grid: %.2f ms (%d blocks, %d line segments, %d nodes projected), depth test %s', buildMs or 0, buildLeaves or 0, buildSegs or 0, buildProjected or 0, (depth == 1) and 'on' or 'off'))
             Out(string.format('native grids: %.2f ms (%d quads, %d nodes projected, %d windows)', grids, gridQuads, gridProjected, groups))
+            if fieldMs then
+                Out(string.format('native field overlay: %.2f ms last frame (%d blocks of %d..%d cells, %d quads, %d nodes projected), last mip chain %.2f ms', fieldMs, fieldLeaves or 0, math.pow(2, fieldFinest or 0), math.pow(2, fieldCoarsest or 0), fieldQuads or 0, fieldProjected or 0, fieldPyramidMs or 0))
+            end
         end
     end
     sections = {}

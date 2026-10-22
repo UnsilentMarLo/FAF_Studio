@@ -29,9 +29,9 @@ Rounded to steps of 0.5 and clamped to [4, 64]:
 
 | Texture width | 128 | 256 | 512 | 1024 | 2048 | 4096 |
 |---|---|---|---|---|---|---|
-| Tile size | 4 (clamped from 2.7) | 5.5 | 10.5 | 21 | 42.5 | 64 (clamped from 85) |
+| Tile size | 20 (density asks 2.7) | 20 (5.5) | 20 (10.5) | 21 | 42.5 | 64 (clamped from 85) |
 
-Note: most Evergreen layer albedos are 512 px (count by file size in `_asset_index/scd/env.scd.tsv`), so they get about 10.5, not 18 - 24. If the wanted look is "texels a bit blurry at the
+**Update:** the density alone gave 512 px textures 10.5, and the user saw the texture pattern repeat as a regular grain over the recipe-painted map. A repetition floor `REPEAT_MIN` = 20 world units now lifts every smaller result (a bit blurrier at the closest zoom is better than a visible grid). Old note, kept for the numbers: most Evergreen layer albedos are 512 px (count by file size in `_asset_index/scd/env.scd.tsv`), so they get about 10.5, not 18 - 24. If the wanted look is "texels a bit blurry at the
 closest zoom", raise `REF_DISTANCE` (54 gives 24 texels per unit, 512 px -> 21): only that constant changes.
 
 * The width is read with `ed_dds_thumb(src, scratch, 4)` (decodes the DDS from a file or a game archive and returns its size; ed_img_info goes through WIC, which reads neither DDS nor archives),

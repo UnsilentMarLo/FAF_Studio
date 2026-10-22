@@ -12,6 +12,7 @@
 --   NewContext(scope, opts) -> ctx                           the heights and map facts the rules read; opts.step (1 = full resolution, 2 = preview on big maps)
 --   Evaluate(ctx, def) -> field | nil, message               the mask (owned by ctx's scope)
 --   PreviewDef(def) -> field | nil, message                  evaluates at preview resolution and keeps it as the preview (drawn on the map by DrawOverlay, in the panel as a thumbnail)
+--   Defer(fn)                                                runs a re-evaluation now or, when one ran less than 80 ms ago, in a moment (the last one wins): what a slider that drags calls
 --   ApplyToLayer(def, target) / ApplyToTypes(def, target)    write the mask into a texture layer's paint mask / the terrain-type grid: ONE undo step each
 --   FreeAbove(ctx, layer)                                    field: how much of every cell the layers above `layer` leave free
 --   Presets, LoadPreset(def, id)                             starting points (cliffs, beach, snow ...)
@@ -372,24 +373,24 @@ end
 
 local overlayKey = ''
 local overlayLive = false
+local Throttle = import('/lua/editor/throttle.lua')
+local overlayThrottle = Throttle.New(Throttle.DEFAULT_MS)       -- at most one upload per 80 ms while a slider is dragged; the last state always arrives
 
---- Called every frame by overlay.lua: draws the preview mask as red squares over everything of the map the camera sees (overlaywin.lua: up to 290 x 290 nodes, coarser when zoomed out).
-function DrawOverlay(view)
-    local f = Preview.field
-    if not (f and Preview.show) or not rawget(_G, 'ed_overlay_nodes') then
-        if overlayLive then
-            ed_overlay_remove('maskgen:mask')
-            overlayLive = false
-            overlayKey = ''
-        end
-        return
-    end
-    local size = ed_terrain_info()
-    if not size then return end
-    local x0, z0, nw, nh, step = import('/lua/editor/overlaywin.lua').Window(view, 290)
+--- Runs `fn` (a re-evaluation of the preview that a slider asked for) now, or in a moment when one ran less than 80 ms ago; a newer call replaces one that waits (throttle.lua).
+function Defer(fn)
+    Throttle.Defer('maskgen:preview', fn)
+end
+
+--- The fallback for an engine without ed_overlay_field: the old node grid (ed_overlay_nodes: up to 290 x 290 nodes, coarser when zoomed out), sampled in Lua. Slow, so it is only called
+--- at the throttle's pace.
+local function NodeGridOverlay(view, f)
+    local Win = import('/lua/editor/overlaywin.lua')
+    local x0, z0, nw, nh, step = Win.Window(view, 290)
     if not x0 then return end
     local key = x0 .. '|' .. z0 .. '|' .. nw .. '|' .. nh .. '|' .. step .. '|' .. Preview.revision
     if key == overlayKey then return end
+    overlayThrottle:Push(key)
+    if not overlayThrottle:Poll() then return end
     overlayKey = key
     local w, h, cell, ox, oz = Fields.Info(f)
     -- the field samples under the window: one read of the box that holds them
@@ -410,16 +411,15 @@ function DrawOverlay(view)
                 local ix = Index(x0 + i * step, z0)
                 local v = vals[(iz - iz0) * rw + (ix - ix0) + 1] or 0
                 n = n + 1
-                grid[n] = v > 0.02 and math.floor(math.min(1, v) * 255) or 0
+                grid[n] = Win.Level(v)
             end
         end
     else
         -- too many samples for one read (a big window on a fine field): sample the nodes one by one
         for j = 0, nh - 1 do
             for i = 0, nw - 1 do
-                local v = Fields.Sample(f, x0 + i * step, z0 + j * step)
                 n = n + 1
-                grid[n] = v > 0.02 and math.floor(math.min(1, v) * 255) or 0
+                grid[n] = Win.Level(Fields.Sample(f, x0 + i * step, z0 + j * step))
             end
         end
     end
@@ -427,9 +427,39 @@ function DrawOverlay(view)
     overlayLive = true
 end
 
+--- Called every frame by overlay.lua: draws the preview mask as red squares over everything of the map the camera sees. The engine does it all (ed_overlay_field: it keeps the field,
+--- samples it at the resolution the camera needs and drapes it over the ground, depth tested), so a new preview costs one call with the field's handle, not a table of 90000 numbers.
+function DrawOverlay(view)
+    Throttle.Pump()                 -- the waiting slider updates (this is the one per-frame hook the Mask generator, Recipes and Graph previews all have)
+    local f = Preview.field
+    local native = rawget(_G, 'ed_overlay_field')
+    if not (f and Preview.show) or not (native or rawget(_G, 'ed_overlay_nodes')) then
+        if overlayLive then
+            ed_overlay_remove('maskgen:mask')
+            overlayLive = false
+            overlayKey = ''
+            overlayThrottle:Cancel()
+        end
+        return
+    end
+    if native then
+        local key = f .. '|' .. Preview.revision
+        if key == overlayKey then return end
+        overlayThrottle:Push(key)
+        if not overlayThrottle:Poll() then return end
+        overlayKey = key
+        local ok, err = native('maskgen:mask', f, 'FF3030', 170, { reduce = 'avg' })
+        overlayLive = ok and true or false
+        if not ok then LOG('EDITOR mask overlay: ' .. tostring(err)) end
+        return
+    end
+    if ed_terrain_info() then NodeGridOverlay(view, f) end
+end
+
 function OverlayReset()
     overlayKey = ''
     overlayLive = false
+    overlayThrottle:Cancel()
 end
 
 -- ---- outputs ----------------------------------------------------------------------------------------------------------------------------------------

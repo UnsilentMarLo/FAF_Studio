@@ -23,11 +23,11 @@ function Run()
 
     -- the formula
     check('density is about 48 texels per unit', TexScale.DENSITY > 48 and TexScale.DENSITY < 48.6, TexScale.DENSITY)
-    check('512 px -> 10.5', near(TexScale.ForPixels(512), 10.5), TexScale.ForPixels(512))
+    check('512 px -> 20 (the density asks for 10.5; a tile below REPEAT_MIN repeats visibly)', near(TexScale.ForPixels(512), 20), TexScale.ForPixels(512))
     check('1024 px -> 21 (the 18 - 24 band)', near(TexScale.ForPixels(1024), 21), TexScale.ForPixels(1024))
     check('2048 px -> 42.5', near(TexScale.ForPixels(2048), 42.5), TexScale.ForPixels(2048))
-    check('256 px -> 5.5', near(TexScale.ForPixels(256), 5.5), TexScale.ForPixels(256))
-    check('small textures clamp to 4', near(TexScale.ForPixels(128), 4) and near(TexScale.ForPixels(32), 4))
+    check('256 px -> 20', near(TexScale.ForPixels(256), 20), TexScale.ForPixels(256))
+    check('small textures are lifted to REPEAT_MIN', near(TexScale.ForPixels(128), 20) and near(TexScale.ForPixels(32), 20))
     check('large textures clamp to 64', near(TexScale.ForPixels(4096), 64) and near(TexScale.ForPixels(8192), 64))
     check('an unknown width counts as 1024 px', near(TexScale.ForPixels(nil), 21) and near(TexScale.ForPixels(0), 21))
     local steps = true
@@ -102,7 +102,7 @@ function Run()
                 local _, gns = ed_stratum_layer(11)
                 check('layer 1 takes Optimal of its texture (21), normal the same', near(gs, 21) and near(gns, 21), tostring(gs) .. ' / ' .. tostring(gns))
                 local _, rs = ed_stratum_layer(2)
-                check('layer 2 takes Optimal of a 512 px texture (10.5)', near(rs, 10.5), rs)
+                check('layer 2 takes Optimal of a 512 px texture (20)', near(rs, 20), rs)
                 local prof = Strata.Profile()
                 if not prof.upper or prof.upper == 'overlay' then
                     local _, us = ed_stratum_layer(9)
