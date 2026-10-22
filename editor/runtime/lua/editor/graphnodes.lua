@@ -153,7 +153,7 @@ end
 
 local function Noise(op, lo, hi)
     return function(E, v, ins)
-        local f = E:Op(op, { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, persistence = v.persistence })
+        local f = E:Op(op, { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, persistence = v.persistence, rotate = 1 })       -- rotate: every octave in its own frame, no lattice seams (EdFieldCore.h OctaveFrame)
         return One(Fit(E, f, lo, hi))
     end
 end
@@ -209,7 +209,7 @@ Def('ridged', { label = 'Ridged noise', cat = 'gen', kw = 'noise ridged mountain
     params = { SEED, N('scale', 'Feature size (units)', 4, 800, 2, '%d', 150, { wire = true }), N('octaves', 'Octaves', 1, 10, 1, '%d', 5), N('persistence', 'Persistence', 0.2, 0.9, 0.05, '%.2f', 0.5),
                C('basis', 'Basis noise', { 'perlin', 'simplex' }, { 'Perlin', 'Simplex' }, 'perlin') },
     eval = function(E, v, ins)
-        local f = E:Op('ridged', { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, persistence = v.persistence, basis = v.basis })
+        local f = E:Op('ridged', { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, persistence = v.persistence, basis = v.basis, rotate = 1 })
         return One(Fit(E, f, 0.25, 1))
     end })
 

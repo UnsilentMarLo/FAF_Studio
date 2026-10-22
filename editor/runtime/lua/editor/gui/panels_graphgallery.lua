@@ -82,7 +82,8 @@ Panels.Register{
                 else
                     cell.pic:SetSolidColor('ff0f1113')
                 end
-                cell.label:SetText(item and ('seed ' .. item.seed .. (item.seed == Graph.Current.seed and '  (current)' or '')) or '')
+                -- cut to the picture's width ('seed 1234  (current)' is wider than a 112 px cell)
+                W.Fit(cell.label, item and ('seed ' .. item.seed .. (item.seed == Graph.Current.seed and '  (current)' or '')) or '', Skin.S(state.size) - Skin.S(8))
             end
         end
 

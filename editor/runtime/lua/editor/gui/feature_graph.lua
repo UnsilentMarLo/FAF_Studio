@@ -64,8 +64,16 @@ Commands.Intercept(function(id)
 end)
 
 Commands.Register{ id = 'graph.build', title = 'Graph: build (heights, layers, types, props: one undo step)', run = function()
-    local r, err = GRun.Build()
-    Say(r and string.format('graph built in %.0f ms', r.ms) or ('graph not built: ' .. tostring(err)))
+    local r, err, trace = GRun.Build()
+    local warn = ''
+    if r and r.warnings then
+        for _, wn in r.warnings do
+            WARN(wn.text)
+            warn = warn .. '   Warning: ' .. wn.text
+        end
+    end
+    Say(r and (string.format('graph built in %.0f ms', r.ms) .. warn) or ('graph not built: ' .. tostring(err)))
+    if trace and rawget(_G, 'SPEW') then SPEW('terrain graph build: ' .. tostring(trace)) end
     Tick()
 end }
 Commands.Register{ id = 'graph.preview', title = 'Graph: preview on terrain', run = function()

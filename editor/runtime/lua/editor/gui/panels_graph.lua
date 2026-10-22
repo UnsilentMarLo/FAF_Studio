@@ -311,6 +311,17 @@ Panels.Register{
             if v.frame == true then v.body:Destroy() else v.frame:Destroy() end      -- the children go with it
         end
 
+        --- Cuts the status line (the parameter summary, an error, the output caption) to the node's real width at the zoom. ONE place for it: Geometry (creation, zoom change, a
+        --- change of the rows or the label) and UpdateNodes (the text changed) both call it. It is keyed on (text, width), so a call that changes nothing measures nothing. A pan, a
+        --- zoom and the editor's first fit only lay out (SetView does not run UpdateNodes), so a line cut at an old zoom used to stay as wide as it was then.
+        local function FitStatus(v, node, z)
+            local maxW = math.floor(NodeW(node) * z) - Skin.S(10)
+            local key = maxW .. '|' .. (v.statusRaw or '')
+            if v.statusFitKey == key then return end
+            v.statusFitKey = key
+            W.Fit(v.status, v.statusRaw or '', maxW)
+        end
+
         --- Places the children of a node at the zoom (relative to the frame).
         local function Geometry(v, node, z)
             local def = Nodes.Defs[node.type]
@@ -345,6 +356,7 @@ Panels.Register{
             v.title:SetText(node.label or (def and def.label) or node.type)
             W.Fit(v.title, node.label or (def and def.label) or node.type, nw - Skin.S(10))
             In(v.title, Skin.S(5), math.floor((math.floor(HEAD * z) - v.title.Height()) / 2))
+            FitStatus(v, node, z)
             -- the status line is centred in the strip below the ports and the thumbnail, inside the frame (it used to start inside the thumbnail's rows and ran over the bottom edge)
             local stripTop = math.floor((HEAD + PAD + BodyH(node)) * z)
             In(v.status, Skin.S(5), stripTop + math.max(0, math.floor((math.floor(STAT * z) - v.status.Height()) / 2)))
@@ -605,7 +617,8 @@ Panels.Register{
                         v.thumb:SetSolidColor('00000000')
                     end
                     v.frame:SetSolidColor(fill)
-                    W.Fit(v.status, text, math.floor(NW * zoom) - Skin.S(10))
+                    v.statusRaw = text
+                    FitStatus(v, n, zoom)
                     v.status:SetColor(col)
                 end
               end
@@ -830,23 +843,43 @@ Panels.Register{
         function Pn.DragBoxBegin(x, y, additive)
             Pn.box = { x = x - bg.Left(), y = y - bg.Top(), x2 = x - bg.Left(), y2 = y - bg.Top(), additive = additive }
             if not Pn.boxBit then
+                -- a clear fill and a one pixel frame in the accent colour, above everything on the canvas (the old fill alone was 19 % opaque and hardly seen)
                 Pn.boxBit = Bitmap(bg)
-                Pn.boxBit.Depth:Set(function() return bg.Depth() + 60 end)
-                Pn.boxBit:SetSolidColor('3040b7d4')
+                Pn.boxBit.Depth:Set(function() return bg.Depth() + 400 end)
+                Pn.boxBit:SetSolidColor('4040b7d4')
                 Pn.boxBit:DisableHitTest()
+                Pn.boxEdges = {}
+                for i = 1, 4 do
+                    local e = Bitmap(bg)
+                    e.Depth:Set(function() return bg.Depth() + 401 end)
+                    e:SetSolidColor('ff40b7d4')
+                    e:DisableHitTest()
+                    Gone(e)
+                    Pn.boxEdges[i] = e
+                end
             end
         end
         function Pn.DragBox(x, y)
             local b = Pn.box
             if not b then return end
             b.x2, b.y2 = math.max(0, math.min(Pn.cw, x - bg.Left())), math.max(0, math.min(Pn.ch, y - bg.Top()))
-            Put(Pn.boxBit, math.min(b.x, b.x2), math.min(b.y, b.y2), math.max(1, math.abs(b.x2 - b.x)), math.max(1, math.abs(b.y2 - b.y)))
+            local bx, by, bw, bh = math.min(b.x, b.x2), math.min(b.y, b.y2), math.max(2, math.abs(b.x2 - b.x)), math.max(2, math.abs(b.y2 - b.y))
+            Put(Pn.boxBit, bx, by, bw, bh)
             Pn.boxBit:Show()
+            local e = Pn.boxEdges
+            if e then
+                Put(e[1], bx, by, bw, 1)
+                Put(e[2], bx, by + bh - 1, bw, 1)
+                Put(e[3], bx, by, 1, bh)
+                Put(e[4], bx + bw - 1, by, 1, bh)
+                for i = 1, 4 do e[i]:Show() end
+            end
         end
         function Pn.DragBoxEnd(x, y)
             local b = Pn.box
             Pn.box = nil
             if Pn.boxBit then Gone(Pn.boxBit) Pn.boxBit:Hide() end
+            for _, e in Pn.boxEdges or {} do Gone(e) e:Hide() end
             if not b then return end
             if x then Pn.DragBox(x, y) end
             local view = View()
@@ -1006,10 +1039,11 @@ Panels.Register{
         Pn.buttons = {}
         local function Add(b) table.insert(Pn.buttons, b) return b end
 
-        Pn.status = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
+        -- the status text under the toolbar is wrapped (at most 3 lines) in labels made by UpdateStatus; the canvas starts below it
+        Pn.statusLines, Pn.statusH, Pn.statusY, Pn.statusKey = {}, Skin.S(14) + Skin.S(2), 0, false
 
         Add(Btn('Build', 54, function()
-            local r, err = GRun.Build()
+            local r, err, trace = GRun.Build()
             if r then
                 local slow = ''
                 for i, s in r.slow do
@@ -1020,10 +1054,24 @@ Panels.Register{
                 end
                 state.text = string.format('built in %.0f ms: %d height samples, %d layers, %d types, %d props (one undo step)%s', r.ms, r.changed, r.layers, r.types, r.props, slow)
                 if r.mapNote then state.text = state.text .. r.mapNote end
+                Say(state.text)
+                -- a part of the build that could not be applied is a warning, not a failure: the status line (warning colour, with a Switch shader button when the shader is the cause) and the Console say it
+                if r.warnings and r.warnings[1] then
+                    local texts, shader = {}, false
+                    for _, wn in r.warnings do
+                        table.insert(texts, wn.text)
+                        if wn.code == 'shader' then shader = true end
+                        WARN(wn.text)
+                    end
+                    state.text = state.text .. '   Warning: ' .. table.concat(texts, ' ')
+                    state.warnText, state.shaderWarn = state.text, shader
+                end
             else
                 state.text = 'not built: ' .. tostring(err)
+                Say(state.text)
+                -- the traceback of an unexpected error goes to the log once, as SPEW (the lowest priority), never into the message
+                if trace and rawget(_G, 'SPEW') then SPEW('terrain graph build: ' .. tostring(trace)) end
             end
-            Say(state.text)
             Pn:Tick(true)
         end))
         Pn.bTerrain = Add(Btn('On terrain', 80, function(self)
@@ -1085,9 +1133,12 @@ Panels.Register{
         end))
 
         -- ---- ticking -----------------------------------------------------------------------------------------------------------------
+        --- The status text, wrapped under the toolbar (2 - 3 lines; the full text is in the Console), in the warning colour while a build warning is shown, with the Switch shader button when
+        --- the warning is about the shader. When the height of the status area changes the panel is laid out again, so the canvas gives up exactly that height.
         function Pn:UpdateStatus()
             local g = Graph.Current
             self.seedLabel:SetText('seed ' .. g.seed)
+            if not self.w then return end
             local rep = GRun.Report
             local line = state.text
             if line == '' and rep then
@@ -1100,7 +1151,39 @@ Panels.Register{
                         errs > 0 and ('   ' .. errs .. ' with errors') or '')
                 end
             end
-            W.Fit(self.status, line, math.max(Skin.S(60), self.w - Skin.S(16)))
+            line = string.gsub(tostring(line), '%c+', ' ')
+            local warn = state.warnText ~= nil and state.warnText == state.text
+            local shaderBtn = warn and state.shaderWarn
+            local key = line .. '|' .. self.w .. '|' .. self.statusY .. '|' .. (warn and 'w' or '') .. (shaderBtn and 's' or '')
+            if key == self.statusKey then return end
+            self.statusKey = key
+            for _, l in self.statusLines do l:Destroy() end
+            if self.bSwitch then self.bSwitch:Destroy() self.bSwitch = false end
+            local pad, lineH = Skin.S(6), Skin.S(14)
+            local width = math.max(Skin.S(60), self.w - 2 * pad)
+            local maxChars = math.max(8, math.floor(width / Skin.S(7)))
+            local lines, bottom = W.Paragraph(group, import('/lua/editor/consolelog.lua').BreakWords(line, maxChars), pad, self.statusY, width,
+                { color = warn and c.warn or c.textDim, size = 'small' }, lineH, self.statusY + 3 * lineH)
+            self.statusLines = lines
+            local h = math.max(1, table.getn(lines)) * lineH + Skin.S(2)
+            if shaderBtn then
+                self.bSwitch = W.Button(group, 'Switch shader...', 0, 0, Skin.S(120), Skin.S(22), function()
+                    import('/lua/editor/gui/shaderbrowser.lua').Open(function(id)
+                        Say('terrain shader: ' .. id)
+                        state.warnText, state.shaderWarn, state.text = nil, false, 'terrain shader: ' .. id .. '. Press Build again to apply the map textures.'
+                        Pn:Tick(true)
+                    end)
+                end, { tip = 'Open the shader browser to choose a terrain shader that reads the map-wide textures (Terrain000 or a later one). Build again afterwards.' })
+                W.Place(self.bSwitch, group, pad, self.statusY + h, Skin.S(120), Skin.S(22))
+                h = h + Skin.S(26)
+            end
+            if h ~= self.statusH and not self.relaying then
+                self.statusH = h
+                self.relaying = true
+                self:OnResize(self.w, self.h)
+                self.relaying = false
+            end
+            self.statusH = h
         end
 
         --- Evaluates when the graph changed, refreshes the pictures, the live terrain preview and the mask view.
@@ -1158,8 +1241,9 @@ Panels.Register{
                 end
                 x = x + iw + Skin.S(4)
             end
-            W.Place(self.status, group, pad, y + rowH + 2)
-            local top = y + rowH + Skin.S(22)
+            -- the status text (UpdateStatus) sits under the toolbar; the canvas starts below its height, whatever it is
+            self.statusY = y + rowH + 2
+            local top = y + rowH + Skin.S(6) + self.statusH
             self.toolbarH = top
             self.cw, self.ch = w, math.max(Skin.S(80), h - top)
             bg.Left:Set(function() return group.Left() end)

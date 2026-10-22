@@ -532,6 +532,61 @@ function Run(verbose)
             check('panning moves the view', Graph.Current.view.x == vx0 + 30)
             Pn:Fit()
             check('fit shows every node', Graph.Current.view.zoom <= 1)
+            -- the text of a node (title, status line, port names) never reaches past the node's right edge: not on the first layout, after a parameter change, a zoom and a resize
+            do
+                local def = Nodes.Defs['erode_droplet']
+                local pkey, pmax
+                if def then
+                    for _, p in def.params do
+                        if not pkey and p.kind == 'number' and not p.seed then pkey, pmax = p.key, p.max end
+                    end
+                end
+                local ea = Graph.Add('erode_droplet', 40, 40)
+                if ea then ea.label = 'A hydraulic erosion node with a very long title' end
+                local eb = Graph.Add('out_height', 360, 40)
+                if not ea or not eb then return 'FAIL (could not add the nodes of the text-fit check)' end
+                local overs = {}
+                local function Overflow(when)
+                    local bad = {}
+                    for id, vw in Pn.views do
+                        if vw.frame ~= true and vw.state ~= 'off' and vw.state ~= 'new' then
+                            local right = vw.frame.Left() + vw.frame.Width()
+                            local list = { vw.title, vw.status }
+                            for _, port in vw.ins do table.insert(list, port.label) end
+                            for _, port in vw.outs do table.insert(list, port.label) end
+                            for _, ctl in list do
+                                if not ctl:IsHidden() and ctl.Left() + ctl.Width() > right + 1 then
+                                    table.insert(bad, id .. ':' .. ctl:GetText())
+                                end
+                            end
+                        end
+                    end
+                    if table.getn(bad) > 0 then table.insert(overs, when .. ' [' .. table.concat(bad, ' | ') .. ']') end
+                end
+                Pn:SetView(10, 10, 1)
+                Pn:Layout()
+                Overflow('first layout')
+                Pn:Tick(true)
+                Overflow('after the status text arrived')
+                if pkey then
+                    Graph.SetParam(ea.id, pkey, pmax)
+                    Pn:Tick(true)
+                    Overflow('after a parameter change')
+                end
+                for _, z in { 0.8, 1.6, 1 } do
+                    Pn:SetView(10, 10, z)          -- only lays out, as the wheel and Fit do
+                    Overflow('after a zoom to ' .. z)
+                end
+                local w0, h0 = Pn.w, Pn.h
+                Pn:OnResize(math.floor(w0 * 0.6), h0)
+                Overflow('after a resize')
+                Pn:OnResize(w0, h0)
+                Overflow('after the resize back')
+                check('node text stays inside its node (first layout, parameter change, zoom, resize)', table.getn(overs) == 0, table.concat(overs, '; '))
+                Graph.Remove({ ea.id, eb.id })
+                Pn:SetView(10, 10, 1)
+                Pn:Tick(true)
+            end
             -- a click on a wire finds it
             Pn:SetView(10, 10, 1)
             Graph.Connect(n1.id, 'out', n2.id, 'a')
@@ -596,6 +651,24 @@ function Run(verbose)
             canvasMod.state.onTerrain = false
             GRun.RevertTerrain()
             check('revert takes it off', Sum() == flat)
+            -- the status text wraps inside the panel (at most 3 lines, the full text is in the Console) and the canvas gives up exactly its height
+            canvasMod.state.text = 'built'
+            Pn:Tick(true)
+            local ch1, h1 = Pn.ch, Pn.statusH
+            canvasMod.state.text = 'not built: ' .. string.rep('a very long failure text ', 30) .. 'C:\\some\\long\\path\\' .. string.rep('x', 200) .. '\nstack traceback:\n\tgraphrun.lua:767: in function f'
+            Pn:Tick(true)
+            local nl = table.getn(Pn.statusLines)
+            check('a long status text wraps into 2 or 3 lines', nl >= 2 and nl <= 3, nl)
+            local widest = 0
+            for _, l in Pn.statusLines do widest = math.max(widest, l.Width()) end
+            check('the status lines stay inside the panel', widest <= Pn.w, widest .. ' > ' .. Pn.w)
+            check('the canvas is shorter by what the status needs', Pn.statusH > h1 and Pn.ch < ch1 and Pn.toolbarH >= Pn.statusY + Pn.statusH, Pn.ch .. ' ' .. ch1)
+            canvasMod.state.warnText, canvasMod.state.shaderWarn = canvasMod.state.text, true
+            Pn:Tick(true)
+            check('a shader warning in the status adds the Switch shader button', Pn.bSwitch and true or false)
+            canvasMod.state.warnText, canvasMod.state.shaderWarn, canvasMod.state.text = nil, false, ''
+            Pn:Tick(true)
+            check('and a new text takes the button away', not Pn.bSwitch)
             Graph.New('untitled')
             Pn:Tick(true)
         end

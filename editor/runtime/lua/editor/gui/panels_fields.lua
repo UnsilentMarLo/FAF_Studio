@@ -1,6 +1,11 @@
 -- The Fields panel: a first debug front end of the native field engine (fields.lua, docs/projects/editor/TERRAIN_GEN_DESIGN.md stage T1).
 --
--- A working field is shaped step by step: pick an op, set its sliders, Preview (live: every slider change re-runs the op on the current field and shows the result), Apply to make the result the
+-- GENERATE (top of the panel): the usual way to make terrain. A preset (Hills, Mountains, Badlands, Dunes, Plains detail, Rocks) makes a RELIEF, a zero-mean field whose largest rise or dip is
+-- the chosen amplitude in world units, and mixes it into the heights that are there (fieldgen.lua): Blend (add, multiply, raise only, lower only, replace), Strength, an optional mask (whole map,
+-- playable area, selected area, with a soft border), protected spots around start positions and resource markers, and a water level clamp. The picture shows the new terrain or the change, the
+-- text below it says how much changes. Apply to terrain writes it as ONE undo step. The map is never replaced by a bare field.
+--
+-- FIELD OPERATIONS (below): a debug front end of the native field engine. A working field is shaped step by step: pick an op, set its sliders, Preview (live: every slider change re-runs the op on the current field and shows the result), Apply to make the result the
 -- working field. Generators start a new field, filters work on the current one, binary ops (min, max, add, sub, mul, blend) combine it with the field before it. "Map heights" loads the terrain,
 -- "Commit" writes the working field into the heights (one undo step), "To layer" into the paint mask of a texture layer (one undo step). Everything runs in the native engine; the thumbnail is a
 -- down-sampled picture of the field.
@@ -13,6 +18,7 @@ local Skin = import('/lua/editor/gui/skin.lua')
 local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local Fields = import('/lua/editor/fields.lua')
+local Gen = import('/lua/editor/fieldgen.lua')
 
 live = {}
 
@@ -32,6 +38,10 @@ OPS = {
     simplex = { kind = 'gen', params = Noise() },
     ridged = { kind = 'gen', params = Noise() },
     billow = { kind = 'gen', params = Noise() },
+    fractal = { kind = 'gen', params = { SEED, P('scale', 'Feature size (units)', 2, 600, 2, '%d', 120), P('octaves', 'Octaves', 1, 12, 1, '%d', 8), P('finest', 'Smallest detail (units)', 0, 200, 1, '%d', 8),
+                                        P('persistence', 'Persistence', 0.2, 0.9, 0.05, '%.2f', 0.5), P('warp', 'Warp (units)', 0, 300, 1, '%d', 0),
+                                        P('slope_detail', 'Detail on slopes', -1, 1, 0.05, '%.2f', 0), P('sharpness', 'Ridge sharpness', 1, 5, 0.1, '%.1f', 2),
+                                        P('modeIndex', 'Shape (1 rolling, 2 hills, 3 ridged)', 1, 3, 1, '%d', 1) } },
     voronoi = { kind = 'gen', params = { SEED, P('scale', 'Cell size (units)', 4, 400, 2, '%d', 60), P('jitter', 'Jitter', 0, 1, 0.05, '%.2f', 1) } },
     gradient = { kind = 'gen', params = { P('angle', 'Angle (deg)', 0, 360, 5, '%d', 0), P('lo', 'Start value', 0, 1, 0.05, '%.2f', 0), P('hi', 'End value', 0, 1, 0.05, '%.2f', 1) } },
     radial = { kind = 'gen', params = { P('radius', 'Radius (units)', 4, 6000, 4, '%d', 400) } },
@@ -42,6 +52,7 @@ OPS = {
     clamp = { kind = 'filter', params = { P('lo', 'Low', -100, 400, 1, '%d', 0), P('hi', 'High', -100, 400, 1, '%d', 1) } },
     invert = { kind = 'filter', params = { P('lo', 'Low', -100, 400, 1, '%d', 0), P('hi', 'High', -100, 400, 1, '%d', 1) } },
     abs = { kind = 'filter', params = {} },
+    amplitude = { kind = 'filter', params = { P('amplitude', 'Amplitude (units)', 0, 200, 0.5, '%.1f', 20) } },
     gamma = { kind = 'filter', params = { P('gamma', 'Gamma', 0.2, 4, 0.05, '%.2f', 1.5) } },
     affine = { kind = 'filter', params = { P('mul', 'Multiply', -100, 300, 0.5, '%.1f', 40), P('add', 'Add', -100, 300, 1, '%d', 20) } },
     smoothstep = { kind = 'filter', params = { P('edge0', 'Edge 0', -100, 300, 0.05, '%.2f', 0.3), P('edge1', 'Edge 1', -100, 300, 0.05, '%.2f', 0.7) } },
@@ -80,12 +91,16 @@ OPS = {
 }
 
 local MODES = { 'x', 'z', 'xz', 'rot2', 'rot4', 'diag', 'adiag' }
+local FRACTALS = { 'fbm', 'billow', 'ridged' }
 local SLOPES = { 'degrees', 'gradient', 'rating', 'variation' }
 local RAMPS = { 'terrain', 'grey', 'heat' }
 
 -- ---- model (module level: the controls come and go) ------------------------------------------------------------------------------------------------
 
-state = { op = 'perlin', values = {}, stack = {}, result = false, live = true, ramp = 1, layer = 1, text = '', lo = 0, hi = 1 }
+state = { op = 'perlin', values = {}, stack = {}, result = false, live = true, ramp = 1, layer = 1, text = '', lo = 0, hi = 1, serial = 0, confirmAt = -1 }
+
+--- The Generate section: the last generated result (a native terrain field and the change), what the text line says, and which picture is shown.
+gen = { result = false, text = '', showChange = false }
 
 local function Say(text)
     pcall(function() UI.Say(text) end)
@@ -128,6 +143,13 @@ local function Params(op)
         params.mid, params.bend = nil, nil
     elseif op == 'warp' then
         params.scale, params.seed, params.strength = nil, nil, params.strength
+    elseif op == 'fractal' then
+        params.kind = FRACTALS[math.floor(params.modeIndex + 0.5)]
+        params.modeIndex = nil
+    elseif op == 'amplitude' then
+        params.mode = 'peak'
+    elseif op == 'perlin' or op == 'simplex' or op == 'ridged' or op == 'billow' then
+        params.rotate = 1          -- every octave in its own frame: no lattice seams (EdFieldCore.h OctaveFrame)
     end
     return params
 end
@@ -160,8 +182,8 @@ local function Evaluate()
         local s = Params(op)
         local nz = ValueOf(op, OPS.warp.params[2])
         local seed = ValueOf(op, OPS.warp.params[3])
-        local dx = Fields.TryOp('perlin', { like = work, seed = seed, scale = nz, octaves = 3 })
-        local dz = Fields.TryOp('perlin', { like = work, seed = seed + 1, scale = nz, octaves = 3 })
+        local dx = Fields.TryOp('perlin', { like = work, seed = seed, scale = nz, octaves = 3, rotate = 1 })
+        local dz = Fields.TryOp('perlin', { like = work, seed = seed + 1, scale = nz, octaves = 3, rotate = 1 })
         if dx and dz then f, err = Fields.TryOp('warp', { a = work, dx = dx, dz = dz, strength = s.strength }) else err = 'noise failed' end
         Drop(dx) Drop(dz)
     else
@@ -197,6 +219,50 @@ local function Show(P)
     W.Fit(P.info, string.format('%s%dx%d  cell %g   min %.2f  max %.2f  mean %.2f', state.result and 'preview  ' or 'field  ', w, h, cell, mn, mx, mean), (P.w or 300) - Skin.S(16))
 end
 
+--- The Generate section's picture: the new terrain, or the change (red up, blue down).
+local function ShowGen(P)
+    local r = gen.result
+    if not r then
+        P.gpic:Hide()
+        return
+    end
+    local f, opts = r.terrain, { ramp = 'terrain' }
+    if gen.showChange then
+        local m = math.max(0.01, r.stats.max)
+        f, opts = r.change, { ramp = 'heat', lo = -m, hi = m }
+    end
+    local path = Fields.Preview(f, 128, opts)
+    if path then
+        P.gpic:SetTexture(path)
+        P.gpic:Show()
+    end
+end
+
+--- Makes the result of the Generate settings on the map as they are now (kept for the picture and for Apply to terrain).
+local function GenEval()
+    if gen.result then
+        Gen.Free(gen.result)
+        gen.result = false
+    end
+    local r, why = Gen.Build()
+    if r then
+        gen.result = r
+        gen.text = ''
+    else
+        gen.text = tostring(why)
+    end
+    return r ~= nil
+end
+
+--- The three statistics lines under the picture.
+local function GenLines()
+    local r = gen.result
+    if not r then return 'No preview yet', '', '' end
+    local s = r.stats
+    if s.max < 0.05 then return 'No change: nothing moves', 'by more than 0.05 units', '' end
+    return string.format('Changes heights by up to %.1f units', s.max), string.format('on average %.1f units', s.mean), string.format('%d%% of the map moves', math.floor(s.share * 100 + 0.5))
+end
+
 Panels.Register{
     id = 'fields', title = 'Fields', minW = 240, minH = 200, stack = { workspace = 'Terrain', with = 'console' },
     create = function(group, host)
@@ -213,14 +279,28 @@ Panels.Register{
         Pn.frame.Depth:Set(function() return group.Depth() + 4 end)
         Pn.pic.Depth:Set(function() return group.Depth() + 6 end)
         Pn.pic:DisableHitTest()
+        Pn.gpic = Bitmap(group)
+        Pn.gframe = Bitmap(group)
+        Pn.gframe:SetSolidColor(c.panelAlt)
+        Pn.gframe.Depth:Set(function() return group.Depth() + 4 end)
+        Pn.gpic.Depth:Set(function() return group.Depth() + 6 end)
+        Pn.gpic:DisableHitTest()
+        Pn.gpic:Hide()
+        Pn.gHead = W.Label(group, 'Generate', 0, 0, { color = c.text })
+        Pn.gLines = { W.Label(group, '', 0, 0, { color = c.text, size = 'small' }), W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' }),
+                      W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' }) }
+        Pn.gMsg = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
+        Pn.oHead = W.Label(group, 'Field operations (advanced)', 0, 0, { color = c.text })
         Pn.info = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
         Pn.status = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
         Pn.opLabel = W.Label(group, '', 0, 0, { color = c.text })
         Pn.sliders = {}
 
         local function Sync()
+            state.serial = state.serial + 1
             Pn:Refresh()
             Show(Pn)
+            ShowGen(Pn)
         end
 
         Pn.actions = {}
@@ -275,11 +355,20 @@ Panels.Register{
         Pn.bCommit = Btn('Commit to heights', 110, function()
             local f = state.result or Work()
             if not f then Say('no field to commit') return end
+            -- this REPLACES the heights of the whole map with the field (a generator field is 0..1: the map would become flat): ask once. Generate / Apply to terrain mixes instead.
+            if state.confirmAt ~= state.serial then
+                Sync()
+                state.confirmAt = state.serial
+                Pn.bCommit:SetOn(true)
+                state.text = 'This replaces the heights of the whole map with the field. Click Commit to heights again to do it (Generate above mixes into the map instead).'
+                Pn:Refresh()
+                return
+            end
             local n, err = Fields.CommitHeight(f, { label = 'Field to terrain' })
             state.text = n and (n .. ' samples changed') or ('commit failed: ' .. tostring(err))
             Say(state.text)
             Sync()
-        end)
+        end, { tip = 'Replaces the heights of the whole map with the working field (one undo step). Click twice: the first click only asks. To mix a generated relief into the map, use Generate (Apply to terrain) at the top.' })
         Pn.bMask = Btn('Commit to layer', 100, function()
             local f = state.result or Work()
             if not f then Say('no field to commit') return end
@@ -292,6 +381,104 @@ Panels.Register{
         end)
         Pn.sLayer = W.Slider(group, { label = 'Texture layer', compact = true, min = 1, max = 8, step = 1, fmt = '%d',
             get = function() return state.layer end, set = function(v) state.layer = v end })
+
+        -- ---- Generate -------------------------------------------------------------------------------------------------------------------------
+
+        local GS = Gen.Settings
+
+        --- A setting changed: with Live preview on the result is made again at once, otherwise the text says the picture is old.
+        local function GenChanged()
+            if state.live then
+                GenEval()
+            elseif gen.result then
+                gen.text = 'Settings changed: press Refresh preview'
+            end
+            Sync()
+        end
+
+        Pn.gPresets = {}
+        for _, def in Gen.Presets do
+            local d = def
+            local b = Btn(d.label, 7 * string.len(d.label) + 22, function()
+                Gen.Choose(d.id)
+                GenEval()
+                Sync()
+            end, { tip = d.tip })
+            table.insert(Pn.gPresets, { def = d, button = b })
+        end
+
+        local function Next(list, value)
+            for i, v in list do
+                if v == value then return list[math.mod(i, table.getn(list)) + 1] end
+            end
+            return list[1]
+        end
+        local blendTip = 'How the generated relief meets the ground that is there (click to cycle).'
+        for _, name in Gen.Blends do blendTip = blendTip .. '\n' .. Gen.BlendNames[name] .. ': ' .. Gen.BlendTips[name] end
+        Pn.bBlend = Btn('Blend: Add', 138, function()
+            GS.blend = Next(Gen.Blends, GS.blend)
+            GenChanged()
+        end, { tip = blendTip })
+        Pn.bMaskSel = Btn('Mask: Whole map', 150, function()
+            GS.mask = math.mod(GS.mask, table.getn(Gen.Masks)) + 1
+            GenChanged()
+        end, { tip = 'Where the generator may change the map (click to cycle). Whole map; the playable area; or the area that is selected in the editor. The border fades out over the mask border.' })
+        Pn.bFlat = Btn('Keep flat areas', 106, function(self)
+            GS.keepFlat = self.on
+            GenChanged()
+        end, { toggle = true })
+        Pn.bWater = Btn('Keep water level', 116, function(self)
+            GS.keepWater = self.on
+            GenChanged()
+        end, { toggle = true })
+        Pn.bRandom = Btn('Random seed', 92, function()
+            GS.seed = math.random(1, 9999)
+            GenChanged()
+        end)
+        Pn.bRefresh = Btn('Refresh preview', 106, function()
+            GenEval()
+            Sync()
+        end)
+        Pn.bShowGen = Btn('Show: Terrain', 104, function()
+            gen.showChange = not gen.showChange
+            Sync()
+        end)
+        Pn.bGApply = Btn('Apply to terrain', 114, function()
+            if not gen.result and not GenEval() then Say(gen.text) Sync() return end
+            local n, err = Gen.Commit(gen.result)
+            Gen.Free(gen.result)
+            gen.result = false
+            if n and n > 0 then
+                gen.text = string.format('Applied: %d samples changed. Undo (Ctrl+Z) takes it back in one step.', n)
+            elseif n then
+                gen.text = 'Nothing changed'
+            else
+                gen.text = 'Not applied: ' .. tostring(err)
+            end
+            Say(gen.text)
+            Sync()
+        end)
+        Pn.gSliders = {}
+        local function GSlider(label, key, min, max, step, fmt)
+            local s = W.Slider(group, { label = label, compact = true, min = min, max = max, step = step, fmt = fmt,
+                get = function() return GS[key] end,
+                set = function(v)
+                    GS[key] = v
+                    GenChanged()
+                end })
+            table.insert(Pn.gSliders, s)
+        end
+        GSlider('Amplitude (units)', 'amplitude', 0, 100, 0.5, '%.1f')
+        GSlider('Strength', 'strength', 0, 1, 0.05, '%.2f')
+        GSlider('Feature size (units)', 'scale', 10, 800, 5, '%d')
+        GSlider('Detail', 'detail', 0, 1, 0.05, '%.2f')
+        GSlider('Warp', 'warp', 0, 1, 0.05, '%.2f')
+        GSlider('Gullies', 'gullies', 0, 1, 0.05, '%.2f')
+        GSlider('Seed', 'seed', 0, 9999, 1, '%d')
+        GSlider('Mask border (units)', 'feather', 0, 200, 2, '%d')
+        GSlider('Flat radius (units)', 'flatRadius', 0, 120, 2, '%d')
+        Pn.bFlat:SetOn(GS.keepFlat)
+        Pn.bWater:SetOn(GS.keepWater)
 
         -- the op list
         Pn.list = W.VirtualList(group, {
@@ -345,6 +532,22 @@ Panels.Register{
             W.Fit(self.opLabel, 'Op: ' .. state.op .. '  -  ' .. OPS[state.op].kind, (self.w or 300) - Skin.S(16))
             for _, s in self.sliders do s:Refresh() end
             self.sLayer:Refresh()
+            self.bCommit:SetOn(state.confirmAt == state.serial)
+            -- Generate
+            local GS = Gen.Settings
+            for _, s in self.gSliders do s:Refresh() end
+            for _, e in self.gPresets do e.button:SetOn(e.def.id == GS.preset) end
+            self.bBlend:SetText('Blend: ' .. Gen.BlendNames[GS.blend])
+            self.bMaskSel:SetText('Mask: ' .. Gen.MaskNames[Gen.Masks[GS.mask]])
+            self.bFlat:SetOn(GS.keepFlat)
+            self.bWater:SetOn(GS.keepWater)
+            self.bShowGen:SetText(gen.showChange and 'Show: Change' or 'Show: Terrain')
+            local l1, l2, l3 = GenLines()
+            local tw = (self.gTextW or 300)
+            W.Fit(self.gLines[1], l1, tw)
+            W.Fit(self.gLines[2], l2, tw)
+            W.Fit(self.gLines[3], l3, tw)
+            W.Fit(self.gMsg, string.gsub(tostring(gen.text or ''), '[%c]+', ' '), (self.w or 300) - Skin.S(16))
         end
 
         function Pn:OnResize(w, h)
@@ -354,7 +557,57 @@ Panels.Register{
             -- after the panel got wider or another op was picked, and the panel scrolled on into empty space below the status line.
             W.BeginLayout(group)
             local pad = Skin.S(8)
+            local rowH, gap = Skin.S(22), Skin.S(4)
             local y = pad
+            local size = Skin.S(128)
+
+            --- Sliders in as many columns as fit (at least 190 px each); returns the y below the last row.
+            local function Columns(list, sx, sy, sw)
+                local cols = math.max(1, math.floor((sw + pad) / (Skin.S(190) + pad)))
+                local colW = math.floor((sw - (cols - 1) * pad) / cols)
+                local rows = 0
+                local i = 0
+                for _, sl in list do
+                    local col = math.mod(i, cols)
+                    local row = math.floor(i / cols)
+                    sl:Place(sx + col * (colW + pad), sy + row * Skin.S(46), colW)
+                    rows = row + 1
+                    i = i + 1
+                end
+                return sy + rows * Skin.S(46)
+            end
+
+            -- ---- Generate: picture and statistics, presets, choices, sliders ----
+            W.Place(self.gHead, group, pad, y)
+            y = y + Skin.S(22)
+            W.Place(self.gframe, group, pad, y, size, size)
+            W.Place(self.gpic, group, pad, y, size, size)
+            local rx = size + 2 * pad
+            local rw = w - rx - pad
+            local statsY = y
+            if rw < Skin.S(150) then
+                -- narrow panel: the statistics and the buttons go below the picture
+                rx, rw, statsY = pad, w - 2 * pad, y + size + gap
+            end
+            self.gTextW = math.max(Skin.S(60), rw)
+            for i, label in self.gLines do
+                W.Place(label, group, rx, statsY + (i - 1) * Skin.S(16))
+            end
+            local btnY = statsY + 3 * Skin.S(16) + gap
+            local flowEnd = W.Flow(group, { { self.bRefresh, Skin.S(106) }, { self.bGApply, Skin.S(114) }, { self.bShowGen, Skin.S(104) } }, rx, btnY, rw, rowH, gap)
+            y = math.max(flowEnd, rx == pad and flowEnd or (y + size)) + gap
+            local items = {}
+            for _, e in self.gPresets do table.insert(items, { e.button, e.button.Width() }) end
+            y = W.Flow(group, items, pad, y, w - 2 * pad, rowH, gap) + gap
+            y = W.Flow(group, { { self.bBlend, Skin.S(138) }, { self.bMaskSel, Skin.S(150) }, { self.bFlat, Skin.S(106) }, { self.bWater, Skin.S(116) }, { self.bRandom, Skin.S(92) } },
+                pad, y, w - 2 * pad, rowH, gap) + gap
+            y = Columns(self.gSliders, pad, y, w - 2 * pad)
+            W.Place(self.gMsg, group, pad, y)
+            y = y + Skin.S(26)
+
+            -- ---- Field operations (the debug front end of the engine) ----
+            W.Place(self.oHead, group, pad, y)
+            y = y + Skin.S(24)
             -- buttons flow into as many rows as the width needs
             local function Flow(buttons)
                 local bx = pad
@@ -370,7 +623,6 @@ Panels.Register{
                 y = y + Skin.S(26)
             end
             Flow({ self.bMap, self.bApply, self.bPreview, self.bBack, self.bClear, self.bLive, self.bRamp, self.bCommit, self.bMask })
-            local size = Skin.S(128)
             W.Place(self.frame, group, pad, y, size, size)
             W.Place(self.pic, group, pad, y, size, size)
             local wide = w >= Skin.S(620)
@@ -387,22 +639,10 @@ Panels.Register{
                 y = y + Skin.S(22)
                 sx, sy, sw = pad, y, w - 2 * pad
             end
-            -- sliders in as many columns as fit (at least 190 px each)
-            local cols = math.max(1, math.floor((sw + pad) / (Skin.S(190) + pad)))
-            local colW = math.floor((sw - (cols - 1) * pad) / cols)
-            local i = 0
-            local rowsUsed = 0
             local all = {}
             for _, sl in self.sliders do table.insert(all, sl) end
             table.insert(all, self.sLayer)
-            for _, sl in all do
-                local col = math.mod(i, cols)
-                local row = math.floor(i / cols)
-                sl:Place(sx + col * (colW + pad), sy + row * Skin.S(46), colW)
-                rowsUsed = row + 1
-                i = i + 1
-            end
-            local below = sy + rowsUsed * Skin.S(46)
+            local below = Columns(all, sx, sy, sw)
             local top = wide and (y + size + Skin.S(4)) or below
             y = math.max(top, below)
             W.Place(self.info, group, pad, y)
@@ -419,6 +659,7 @@ Panels.Register{
 
 --- Frees the panel's fields (a module reload or leaving the editor).
 function Release()
+    Gen.Free(gen.result) gen.result = false
     Drop(state.result) state.result = false
     for _, f in state.stack do Drop(f) end
     state.stack = {}

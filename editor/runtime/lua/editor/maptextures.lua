@@ -72,7 +72,7 @@ end
 
 --- An error message without the "file:line:" the interpreter put in front.
 local function Clean(err)
-    return (string.gsub(tostring(err), '^.-:%d+: ', ''))
+    return Fields.CleanError(err)       -- also drops the traceback the engine appends and the "file(line): " form
 end
 
 -- ---- the shader and its slots ----------------------------------------------------------------------------------------------------------------------
@@ -98,6 +98,17 @@ function Slot(kind, shaderId)
         return nil, string.format('%s does not use a map-wide %s (its layers are ordinary texture layers). Choose %s.', id ~= '' and id or 'This shader', string.lower(info and info.label or kind), 'Terrain000 or a later shader in the Layers panel')
     end
     return nil, string.format('%s does not use a map-wide %s. Used by: %s.', id ~= '' and id or 'This shader', string.lower(info and info.label or kind), info and info.usedBy or '?')
+end
+
+--- When the map's shader (or `shaderId`) does not read the map-wide texture `kind` ('normal' | 'light'): { kind, shader, noun, text }, `text` being one plain sentence for the user (the warning
+--- of a graph Build that skips the texture, the note of the output node); nil when the shader reads it.
+function Unsupported(kind, shaderId)
+    local id = shaderId or ShaderId()
+    if Slot(kind, id) then return nil end
+    local noun = (kind == 'light') and 'Map lighting' or 'Map normal map'
+    local name = (id ~= '') and id or 'The shader'
+    return { kind = kind, shader = id, noun = noun,
+        text = noun .. ' not applied: ' .. name .. ' does not use one. Choose Terrain000 or a later shader (Layers > Shader), or turn off Use it on the map to only write the file.' }
 end
 
 --- The side of the map in world units, or nil without a terrain.

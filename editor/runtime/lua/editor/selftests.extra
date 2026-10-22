@@ -39,3 +39,5 @@ selftest_peace
 selftest_selbox
 selftest_unitview2
 selftest_uniticons
+selftest_recipes
+selftest_fieldgen

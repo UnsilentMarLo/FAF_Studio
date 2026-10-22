@@ -9,7 +9,7 @@
 function Install(Kit, Covers)
     local Def, N, C, B, T, In, Out, One, Fit, SEED = Kit.Def, Kit.N, Kit.C, Kit.B, Kit.T, Kit.In, Kit.Out, Kit.One, Kit.Fit, Kit.SEED
 
-    for _, op in { 'musgrave', 'fbm_damped', 'cells', 'craters', 'dunes', 'cracks', 'island', 'dwarp', 'bilateral', 'diffuse', 'unsharp', 'edge', 'morph', 'convolve', 'blur_dir', 'blur_slope',
+    for _, op in { 'fractal', 'musgrave', 'fbm_damped', 'cells', 'craters', 'dunes', 'cracks', 'island', 'dwarp', 'bilateral', 'diffuse', 'unsharp', 'edge', 'morph', 'convolve', 'blur_dir', 'blur_slope',
                    'stratify', 'occlusion', 'hillshade', 'wetness', 'rockiness', 'color_ramp', 'thermal_map', 'erode_rocksoil', 'erode_snow', 'erode_wind', 'erode_glacier', 'settle' } do
         Covers[op] = true
     end
@@ -41,12 +41,21 @@ function Install(Kit, Covers)
 
     -- ---- generators ---------------------------------------------------------------------------------------------------------------------------------
 
+    NoiseNode('fractal', 'Terrain noise', 'terrain noise fractal natural fbm ridged billow warp slope detail gradient hills mountains', 'Gradient noise built to look like land: every octave in its own turned frame (no grid lines), an optional domain warp, rolling, rounded or sharp ridged shapes, and finer detail on steep or flat ground. 0..1.',
+        { SEED, N('scale', 'Feature size (units)', 8, 1000, 2, '%d', 160, { wire = true }), N('octaves', 'Octaves', 1, 12, 1, '%d', 8), N('finest', 'Smallest detail (units)', 2, 200, 1, '%d', 12),
+          N('persistence', 'Persistence', 0.2, 0.9, 0.05, '%.2f', 0.5), C('kind', 'Shape', { 'fbm', 'billow', 'ridged' }, { 'Rolling (fBm)', 'Rounded hills (billow)', 'Sharp crests (ridged)' }, 'fbm'),
+          N('sharpness', 'Ridge sharpness', 1, 5, 0.1, '%.1f', 2), N('warp', 'Warp (units)', 0, 300, 1, '%d', 20), N('slope_detail', 'Detail on slopes (- flat, + steep)', -1, 1, 0.05, '%.2f', 0) },
+        function(E, v, ins)
+            return One(E:Op('fractal', { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, finest = v.finest, persistence = v.persistence, kind = v.kind,
+                                         sharpness = v.sharpness, warp = v.warp, slope_detail = v.slope_detail }))
+        end)
+
     NoiseNode('musgrave', 'Multifractal (Musgrave)', 'musgrave multifractal ridged hybrid heterogeneous mountains terrain noise', 'Musgrave multifractals: ridged (sharp crests), hybrid (rough peaks over smooth valleys) and heterogeneous terrain.',
         { SEED, N('scale', 'Feature size (units)', 8, 1000, 2, '%d', 160, { wire = true }), N('octaves', 'Octaves', 1, 12, 1, '%d', 7), N('lacunarity', 'Lacunarity', 1.5, 3.5, 0.05, '%.2f', 2),
           N('h', 'Roughness exponent (H)', 0, 2, 0.05, '%.2f', 1), N('offset', 'Offset', 0.2, 1.5, 0.05, '%.2f', 1), N('gain', 'Gain', 0.5, 4, 0.1, '%.1f', 2),
           C('mode', 'Mode', { 'ridged', 'hybrid', 'hetero' }, { 'Ridged', 'Hybrid', 'Heterogeneous' }, 'ridged') },
         function(E, v, ins)
-            local f = E:Op('musgrave', { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, lacunarity = v.lacunarity, h = v.h, offset = v.offset, gain = v.gain, mode = v.mode })
+            local f = E:Op('musgrave', { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, lacunarity = v.lacunarity, h = v.h, offset = v.offset, gain = v.gain, mode = v.mode, rotate = 1 })
             if v.mode == 'ridged' then return One(Fit(E, f, 0.05, 0.95)) end
             if v.mode == 'hybrid' then return One(Fit(E, f, 0, 0.6)) end
             return One(Fit(E, f, 0, 0.9))
@@ -56,7 +65,7 @@ function Install(Kit, Covers)
         { SEED, N('scale', 'Feature size (units)', 8, 1000, 2, '%d', 160, { wire = true }), N('octaves', 'Octaves', 1, 12, 1, '%d', 8), N('persistence', 'Persistence', 0.2, 0.9, 0.05, '%.2f', 0.5),
           N('damp', 'Slope damping', 0, 8, 0.1, '%.1f', 1.5) },
         function(E, v, ins)
-            return One(Fit(E, E:Op('fbm_damped', { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, persistence = v.persistence, damp = v.damp }), 0.15, 0.82))
+            return One(Fit(E, E:Op('fbm_damped', { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, persistence = v.persistence, damp = v.damp, rotate = 1 }), 0.15, 0.82))
         end)
 
     NoiseNode('cells', 'Cells (Voronoi variants)', 'voronoi cells cellular plates crystal facets border distance metric manhattan chebyshev smooth', 'Cell noise with the usual variants: nearest distances, borders, smooth blends, a level per cell with bevelled borders (plates), tilted facets; several distance metrics; domain warp.',
@@ -114,9 +123,9 @@ function Install(Kit, Covers)
         { SEED, N('scale', 'Hill size (units)', 30, 1200, 5, '%d', 220, { wire = true }), N('roundness', 'Roundness', 0, 1, 0.05, '%.2f', 0.5), N('detail', 'Detail', 0, 1, 0.05, '%.2f', 0.3) },
         function(E, v, ins)
             local seed = E:Seed(v.seed)
-            local soft = E:Op('billow', { like = E.like, seed = seed, scale = v.scale, octaves = 3, persistence = 0.45 })
-            local base = E:Op('perlin', { like = E.like, seed = seed + 1, scale = v.scale * 1.4, octaves = 4, persistence = 0.5 })
-            local fine = E:Op('perlin', { like = E.like, seed = seed + 2, scale = v.scale * 0.25, octaves = 3, persistence = 0.5 })
+            local soft = E:Op('billow', { like = E.like, seed = seed, scale = v.scale, octaves = 3, persistence = 0.45, rotate = 1 })
+            local base = E:Op('perlin', { like = E.like, seed = seed + 1, scale = v.scale * 1.4, octaves = 4, persistence = 0.5, rotate = 1 })
+            local fine = E:Op('perlin', { like = E.like, seed = seed + 2, scale = v.scale * 0.25, octaves = 3, persistence = 0.5, rotate = 1 })
             local mix = E:Op('blend', { a = Fit(E, base, 0.25, 0.75), b = Fit(E, soft, 0, 0.5), mode = 'normal', opacity = v.roundness })
             return One(E:Op('blend', { a = mix, b = Fit(E, fine, 0.25, 0.75), mode = 'overlay', opacity = v.detail }))
         end)
@@ -125,10 +134,10 @@ function Install(Kit, Covers)
         { SEED, N('scale', 'Range size (units)', 60, 1500, 5, '%d', 320, { wire = true }), N('octaves', 'Octaves', 3, 10, 1, '%d', 7), N('warp', 'Warp (units)', 0, 300, 1, '%d', 60), N('peaks', 'Sharp peaks', 0.5, 3, 0.05, '%.2f', 1.5) },
         function(E, v, ins)
             local seed = E:Seed(v.seed)
-            local f = Fit(E, E:Op('musgrave', { like = E.like, seed = seed, scale = v.scale, octaves = v.octaves, mode = 'ridged' }), 0.05, 0.95)
+            local f = Fit(E, E:Op('musgrave', { like = E.like, seed = seed, scale = v.scale, octaves = v.octaves, mode = 'ridged', rotate = 1 }), 0.05, 0.95)
             if v.warp > 0 then
-                local dx = E:Op('perlin', { like = E.like, seed = seed + 11, scale = v.scale * 0.6, octaves = 3 })
-                local dz = E:Op('perlin', { like = E.like, seed = seed + 12, scale = v.scale * 0.6, octaves = 3 })
+                local dx = E:Op('perlin', { like = E.like, seed = seed + 11, scale = v.scale * 0.6, octaves = 3, rotate = 1 })
+                local dz = E:Op('perlin', { like = E.like, seed = seed + 12, scale = v.scale * 0.6, octaves = 3, rotate = 1 })
                 f = E:Op('warp', { a = f, dx = dx, dz = dz, strength = v.warp })
             end
             return One(E:Op('gamma', { a = f, gamma = v.peaks }))
@@ -138,9 +147,9 @@ function Install(Kit, Covers)
         { SEED, N('scale', 'Mesa size (units)', 40, 1200, 5, '%d', 240, { wire = true }), N('steps', 'Steps', 2, 24, 1, '%d', 6), N('sharpness', 'Sharpness', 0, 1, 0.05, '%.2f', 0.75), N('roughness', 'Roughness', 0, 1, 0.05, '%.2f', 0.3) },
         function(E, v, ins)
             local seed = E:Seed(v.seed)
-            local f = Fit(E, E:Op('perlin', { like = E.like, seed = seed, scale = v.scale, octaves = 4, persistence = 0.5 }), 0.25, 0.75)
+            local f = Fit(E, E:Op('perlin', { like = E.like, seed = seed, scale = v.scale, octaves = 4, persistence = 0.5, rotate = 1 }), 0.25, 0.75)
             f = E:Op('terrace', { a = f, steps = v.steps, sharpness = v.sharpness, lo = 0, hi = 1 })
-            local grit = E:Op('perlin', { like = E.like, seed = seed + 5, scale = v.scale * 0.12, octaves = 3 })
+            local grit = E:Op('perlin', { like = E.like, seed = seed + 5, scale = v.scale * 0.12, octaves = 3, rotate = 1 })
             return One(E:Op('blend', { a = f, b = Fit(E, grit, 0.25, 0.75), mode = 'overlay', opacity = v.roughness }))
         end)
 
@@ -242,8 +251,8 @@ function Install(Kit, Covers)
     Def('erode_rocksoil', { label = 'Rock and soil', cat = 'erosion', kw = 'rock soil weathering regolith slide split rockiness bedrock', inputs = { In('a', 'height'), In('b', 'mask', true) },
         outputs = { Out('out', 'height'), Out('soil', 'height'), Out('rock', 'mask'), Out('moved', 'mask') },
         desc = 'Two layers: rock weathers into soil, the soil slides off steep ground (never more than there is), the rock holds steeper faces. Outputs the soil thickness and a rock exposure mask. Wire a soil thickness into b to start from your own.',
-        params = { N('iterations', 'Iterations', 1, 400, 1, '%d', 60), N('soil', 'Start soil thickness (units)', 0, 20, 0.1, '%.1f', 0.6), N('weather', 'Weathering per step', 0, 0.2, 0.002, '%.3f', 0.01),
-                   N('depth0', 'Weathering slows at soil depth (units)', 0.1, 10, 0.1, '%.1f', 1), N('soil_talus', 'Soil talus (rise / run)', 0.05, 1.5, 0.05, '%.2f', 0.35), N('rock_talus', 'Rock talus (0 = rock holds)', 0, 4, 0.05, '%.2f', 1.2),
+        params = { N('iterations', 'Iterations', 1, 400, 1, '%d', 60), N('soil', 'Start soil thickness (units)', 0, 20, 0.1, '%.1f', 0.4), N('weather', 'Weathering per step', 0, 0.2, 0.002, '%.3f', 0.01),
+                   N('depth0', 'Weathering slows at soil depth (units)', 0.1, 10, 0.1, '%.1f', 1), N('soil_talus', 'Soil talus (rise / run)', 0.05, 1.5, 0.05, '%.2f', 0.7), N('rock_talus', 'Rock talus (0 = rock holds)', 0, 4, 0.05, '%.2f', 3),
                    N('rock_vis', 'Rock shows below soil depth (units)', 0.05, 5, 0.05, '%.2f', 0.4), N('rate', 'Rate', 0.05, 1, 0.05, '%.2f', 0.5) },
         eval = function(E, v, ins)
             return Multi(E, 'erode_rocksoil', { a = ins.a, b = ins.b, iterations = Iters(E, v.iterations), soil = v.soil, weather = v.weather, depth0 = v.depth0, soil_talus = v.soil_talus,

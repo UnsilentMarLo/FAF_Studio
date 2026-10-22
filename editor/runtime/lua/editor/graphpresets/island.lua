@@ -1,4 +1,4 @@
--- A noisy island: noise times a radial falloff, hydraulic erosion, a sand beach on the shore band.
+-- A noisy island: noise times a radial falloff, droplet erosion (valleys running down to the coast), a sand beach on the shore band.
 Graph = {
     ['name'] = 'Island (radial falloff, hills, beach)',
     ['nextId'] = 10,
@@ -23,15 +23,19 @@ Graph = {
         {
             ['id'] = 6,
             ['params'] = {
-                ['deposition'] = 0.08,
-                ['erosion'] = 0.06,
+                ['density'] = 2,
+                ['drop_vary'] = 0.8,
+                ['lifetime'] = 50,
+                ['max_change'] = 12,
                 ['protect'] = 0.3,
+                ['radius'] = 4,
                 ['rain_vary'] = 0.4,
-                ['talus'] = 0.6,
+                ['talus'] = 0.8,
                 ['thermal'] = 0.3,
+                ['thermal_steps'] = 2,
                 ['vary'] = 0.3,
             },
-            ['type'] = 'erode_hydraulic',
+            ['type'] = 'erode_droplet',
             ['x'] = 896,
             ['y'] = 0,
         },

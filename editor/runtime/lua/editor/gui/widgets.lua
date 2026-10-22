@@ -390,7 +390,7 @@ end
 
 --- Virtual list: `opts.getCount()` items, `opts.bind(row, index, selected)` fills a pooled row (row.text is a Text control;
 --- `row.bg` the row background), `opts.onSelect(index)`, `opts.onContext(index, x, y)` (right click), `opts.onHover(index)`, `opts.thumb = true` (a square `row.thumb` Bitmap at the left of each row), `opts.rowH` logical pixels,
---- `opts.onScroll()` (called on every wheel step / scrollbar move, before the rows are drawn). Scrolls by whole rows with the wheel
+--- `opts.rowTip(index)` (tooltip text of a row), `opts.onScroll()` (called on every wheel step / scrollbar move, before the rows are drawn). Scrolls by whole rows with the wheel
 --- and an overlay scrollbar on the right edge; several wheel steps within 30 ms are drawn once. Methods: SetRect(x, y, w, h), Refresh(), SetSelected(i), ScrollTo(i), Destroy().
 function VirtualList(parent, opts)
     local c = Skin.color
@@ -484,6 +484,8 @@ function VirtualList(parent, opts)
             end
             row.index = nil
             row.bg.HandleEvent = function(self, event)
+                -- opts.rowTip(index) -> text | nil: a tooltip per row (a long row is cut to the width: the tooltip has all of it)
+                if opts.rowTip then TipEvent(row.bg, event, function() return row.index and opts.rowTip(row.index) or nil end) end
                 if event.Type == 'WheelRotation' then
                     return Wheel(self, event)
                 elseif row.index == nil then
@@ -687,12 +689,19 @@ function TextField(parent, x, y, w, h, opts)
 end
 
 --- Cuts `text` with "..." so that it is at most `maxW` pixels wide as the text control's text (Maui does not clip, so text that is too
---- long would run into the next panel).
+--- long would run into the next panel). The text is ONE line: control characters (a newline, a tab, a carriage return: a Text control draws the lines of a many-line text over each other,
+--- which is what made a long error message with a traceback unreadable) become spaces. When even "..." does not fit the label shows nothing.
 function Fit(label, text, maxW)
+    text = string.gsub(tostring(text or ''), '%c+', ' ')
     label:SetText(text)
     if label.Width() <= maxW or string.len(text) < 2 then return end
-    -- the longest cut that fits (the width grows with the length: a binary search, a handful of measurements instead of one per character); at least one character and "..."
-    local lo, hi = 1, string.len(text) - 1
+    label:SetText('...')
+    if label.Width() > maxW then
+        label:SetText('')
+        return
+    end
+    -- the longest cut that fits (the width grows with the length: a binary search, a handful of measurements instead of one per character); "..." alone when no character fits with it
+    local lo, hi = 0, string.len(text) - 1
     while lo < hi do
         local mid = math.floor((lo + hi + 1) / 2)
         label:SetText(string.sub(text, 1, mid) .. '...')
