@@ -441,7 +441,9 @@ function Generate(kind, o)
                 f.nx, f.ny, f.nz = NormalFields(env, h, { strength = o.strength or 1 })
             end
             if pack == 'info7' or pack == 'light301' then
-                f.shadow = Lighting(env, h, { azimuth = o.azimuth or sun_az, altitude = o.altitude or sun_alt, soft = o.soft or 1, quality = o.quality or 5, reach = o.reach or 400 })
+                if o.shadow ~= false then          -- o.shadow = false: no baked shadow (alpha 1), only the water depth (Convert layers to a biplanar shader)
+                    f.shadow = Lighting(env, h, { azimuth = o.azimuth or sun_az, altitude = o.altitude or sun_alt, soft = o.soft or 1, quality = o.quality or 5, reach = o.reach or 400 })
+                end
                 if (o.ao or 0) > 0 then f.ao = Occlusion(env, h, o.ao, o.aoRadius) end
                 f.depth = WaterDepth(env, h)
             end

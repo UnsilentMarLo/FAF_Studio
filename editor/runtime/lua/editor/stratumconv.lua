@@ -514,15 +514,17 @@ local function StepMapData(ctx)
             ctx.Add('warn', what .. ' could not be made (' .. tostring(err) .. ').')
         end
     end
-    local function Quiet(f)
-        local n0 = table.getn(MT.State.created)
-        local entry, err = f()
-        -- conversion files are never pruned (undo and redo must find them; saving removes the unused ones)
-        while table.getn(MT.State.created) > n0 do table.remove(MT.State.created) end
-        return entry, err
+    -- the file a layer got from maptextures: conversion files are never pruned (undo and redo must find them; saving the map removes the unused ones)
+    local function Untrack(index)
+        local path = string.lower(ed_stratum_layer(index) or '')
+        local list = MT.State.created
+        for i = table.getn(list), 1, -1 do
+            if string.lower(list[i].vfs) == path then table.remove(list, i) end
+        end
     end
     if t.normal and not MapDataActive(18) then
-        local entry, err = Quiet(function() return MT.Generate('normal', { noPush = true }) end)
+        local entry, err = MT.Generate('normal', { noPush = true })
+        Untrack(18)
         Done('Layer 8 normal map: the map normal map (made from the terrain)', entry, err)
         if entry then
             ctx.files = ctx.files + 1
@@ -532,12 +534,13 @@ local function StepMapData(ctx)
     if t.light and not MapDataActive(8) then
         local entry, err
         if t.light == 'generate' then
-            entry, err = Quiet(function() return MT.Generate('light', { noPush = true, shadow = false }) end)
+            entry, err = MT.Generate('light', { noPush = true, shadow = false })
             Done('Layer 8 albedo: the water depth of the terrain (no baked shadow)', entry, err)
         else
-            entry, err = Quiet(function() return MT.Clear('light', { noPush = true }) end)
+            entry, err = MT.Clear('light', { noPush = true })
             Done('Layer 8 albedo: a neutral light texture (no shadow, no occlusion)', entry, err)
         end
+        Untrack(8)
         if entry then
             ctx.files = ctx.files + 1
             ctx.Add('file', Basename(ed_stratum_layer(8)) .. ': ' .. (t.light == 'generate' and 'water depth' or 'neutral light texture') .. ' (albedo of layer 8)')
