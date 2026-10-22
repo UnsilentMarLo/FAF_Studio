@@ -13,10 +13,14 @@
 --         (optional: reduce = true, with thumb = a big DDS: the list and grid show a 96 x 96 copy that assetthumbs.lua makes in the background and keeps on disk; the large preview loads the real texture once the
 --         pointer rests)
 --         facets: { { id, label }, ... } the categories (a facet nobody has a value for is left out)
+--         refresh: function() -> entries (optional): a Rescan button (and a look every 2 s at signature() -> string, when given) rebuilds the list, so files that appear while the browser is open are listed
+--         Pictures: only the rows on screen are asked for (assetthumbs.lua waves: what scrolled out of view is cancelled), the rest of a texture list is made in the background (warm-up) and kept on disk
 --         fav: a kind of favourites.lua ('units', 'textures' ...) switches Starred / Recent and the star on;  none: text of an extra "no choice" entry (key NONE)
 --         current: the key marked in the list;  view: 'list' | 'grid' (default);  memory: key to remember the view under;  done(entry) is called with the chosen entry
 --   OpenUnits{ title, current, ids, done }              unit blueprints (asset catalog: faction / tech / layer / type), `ids` restricts to a list of unit ids; done(id)
---   OpenTextures{ title, sources, match, none, thumbs, current, done }     the texpicker.lua spec; the folder tree comes from the paths; done(path)
+--   OpenTextures{ title, sources, match, none, thumbs, current, map, mapMatch, done }     the texpicker.lua spec; the folder tree comes from the paths; done(path). The textures of the open map's
+--         own folder (texmap.lua) are listed first under 'This map' (a Kind / From category and a folder at the top); the path done gets is the one the game reads (/maps/<folder>/env/layers/x.dds).
+--         map = false leaves them out; mapMatch(path, lowerPath, name) -> bool says which of them fit (default: the name fits a pattern of `sources` and match(path) agrees)
 --   OpenNames{ title, names, current, done }            any list of names: categories by prefix or initial letter are made automatically; done(name)
 --
 -- Lua 5.0 dialect.
@@ -52,12 +56,13 @@ local function Prepare(e)
 end
 
 local Cat = false
+local Texmap = import('/lua/editor/texmap.lua')
 
---- The picture of an entry: a texture path, or nil.
-local function ThumbOf(e)
+--- The picture of an entry: a texture path, or nil. `owner` names the view that asks (assetthumbs.lua waves).
+local function ThumbOf(e, owner)
     if e.thumb then
         -- a big texture is not loaded for a row: its reduced copy is (nil until the background worker made it)
-        if e.reduce and ed_dds_thumb then return Thumbs.Request('textures', e.thumb, e.thumb) end
+        if e.reduce and ed_dds_thumb then return Thumbs.Request('textures', e.thumb, e.thumb, owner) end
         return e.thumb
     end
     if e.kind and e.key and e.search then
@@ -92,38 +97,51 @@ function Open(spec)
     local d = Dialog.Open(spec.title or 'Choose', totalW, totalH, function()
         closed = true
         Thumbs.Unlisten('browser')
+        Thumbs.SetBudget(nil)
     end)
+    -- nobody scrolls while a pictures-only dialog waits for its pictures: the background worker may take a bigger share of every frame (30 ms) than the default (12 ms)
+    if not plain then Thumbs.SetBudget(0.03) end
     local entries = {}
-    for _, e in spec.entries or {} do table.insert(entries, Prepare(e)) end
-    if spec.none then
-        table.insert(entries, 1, Prepare({ key = NONE, name = '(none)', sub = spec.none, tags = {}, none = true }))
-    end
     local facets = {}
-    for _, f in spec.facets or {} do
-        local any = false
-        for _, e in entries do if e.tags[f[1]] then any = true break end end
-        if any then table.insert(facets, f) end
-    end
     local hasFolders = false
-    for _, e in entries do if e.folder and e.folder ~= '' then hasFolders = true break end end
-    -- the folders every entry shares (all of them below /env, say) are not offered: the tree starts where the paths part
     local rootDepth = 0
-    if hasFolders then
-        local first
-        for _, e in entries do
-            if e.folder and e.folder ~= '' then
-                local segs = Segments(e.folder)
-                if not first then
-                    first = segs
-                    rootDepth = table.getn(segs)
-                else
-                    local n = 0
-                    while n < rootDepth and n < table.getn(segs) and segs[n + 1] == first[n + 1] do n = n + 1 end
-                    rootDepth = n
+    -- the facets that have a value, whether there is a folder tree, and the folders every entry shares (all of them below /env, say: the tree starts where the paths part)
+    local function Analyze()
+        facets = {}
+        for _, f in spec.facets or {} do
+            local any = false
+            for _, e in entries do if e.tags[f[1]] then any = true break end end
+            if any then table.insert(facets, f) end
+        end
+        hasFolders = false
+        for _, e in entries do if e.folder and e.folder ~= '' then hasFolders = true break end end
+        rootDepth = 0
+        if hasFolders then
+            local first
+            for _, e in entries do
+                if e.folder and e.folder ~= '' then
+                    local segs = Segments(e.folder)
+                    if not first then
+                        first = segs
+                        rootDepth = table.getn(segs)
+                    else
+                        local n = 0
+                        while n < rootDepth and n < table.getn(segs) and segs[n + 1] == first[n + 1] do n = n + 1 end
+                        rootDepth = n
+                    end
                 end
             end
         end
     end
+    local function Load(list)
+        entries = {}
+        for _, e in list or {} do table.insert(entries, Prepare(e)) end
+        if spec.none then
+            table.insert(entries, 1, Prepare({ key = NONE, name = '(none)', sub = spec.none, tags = {}, none = true }))
+        end
+        Analyze()
+    end
+    Load(spec.entries)
     local memory = 'browser.view.' .. tostring(spec.memory or spec.fav or spec.title or 'any')
     local S = {
         filters = {}, folder = false, onlyFav = false, recent = false, query = '', shown = {}, rows = {}, collapsed = {},
@@ -281,34 +299,21 @@ function Open(spec)
         end
     end
 
-    -- The large picture is a big texture: loading it blocks the frame, so it is not loaded for every row the pointer passes while the list scrolls or the pointer sweeps over the grid, but once it
-    -- rests (the reduced copy of the entry, when there is one, is shown at once).
+    -- The large picture of a texture is its 256 x 256 copy from the thumbnail cache (assetthumbs.lua kind 'texprev'), never the texture itself: loading a 2048 x 2048 DDS blocks the frame for
+    -- tens of milliseconds, once for every row the pointer rests on. Until the copy is made the small picture of the row stands in. Only the latest copy asked for is made (a wave per hover).
     local function ShowPreview(e)
         if not preview then return end
         if not e then return end
         S.hover = e
-        local tex = (not e.none) and ThumbOf(e) or nil
+        local tex = (not e.none) and ThumbOf(e, 'browser-pv') or nil
         local full = (not e.none and e.reduce and e.thumb) or nil
-        local scrolling = GetSystemTimeSeconds() - S.scrolledAt < 0.25
         S.pvToken = S.pvToken + 1
-        local token = S.pvToken
-        local later, delay
-        if full and full ~= tex then
-            if S.pvTex ~= full then
-                SetPreviewPicture(tex, e.color or c.panelAlt)
-                later, delay = full, scrolling and 0.3 or 0.12
-            end
-        elseif tex and scrolling and S.pvTex ~= tex then
-            SetPreviewPicture(false, e.color or c.panelAlt)
-            later, delay = tex, 0.3
+        if full and ed_dds_thumb then
+            Thumbs.NewWave('browser-pv-big')
+            local big = Thumbs.Request('texprev', full, full, 'browser-pv-big')
+            SetPreviewPicture(big or tex, e.color or c.panelAlt)
         else
             SetPreviewPicture(tex, e.color or c.panelAlt)
-        end
-        if later then
-            ForkThread(function()
-                WaitSeconds(delay)
-                if token == S.pvToken and not closed then SetPreviewPicture(later, e.color or c.panelAlt) end
-            end)
         end
         W.FitCached(pName, e.name, Skin.S(previewW - 20))
         W.FitCached(pSub, e.sub or '', Skin.S(previewW - 20))
@@ -330,7 +335,7 @@ function Open(spec)
         local e = S.shown[index]
         if not e then return end
         local tx = Skin.S(8)
-        local tex = (not e.none) and ThumbOf(e) or nil
+        local tex = (not e.none and S.view == 'list') and ThumbOf(e, 'browser-list') or nil
         if row.thumb then
             if tex then
                 if row.tex ~= tex then
@@ -394,7 +399,7 @@ function Open(spec)
     local function CellBind(cell, index)
         local e = S.shown[index]
         if not e then return end
-        local tex = (not e.none) and ThumbOf(e) or nil
+        local tex = (not e.none and S.view == 'grid') and ThumbOf(e, 'browser-grid') or nil
         if tex then
             if cell.tex ~= tex then
                 cell.tex = tex
@@ -575,6 +580,12 @@ function Open(spec)
         onSelect = function(index) Take(S.shown[index]) end,
         onHover = function(index) if index then ShowPreview(S.shown[index]) end end,
     })
+    -- every draw of the rows is a wave of picture requests: the rows no longer on screen are cancelled in the worker (assetthumbs.lua NewWave)
+    local listRefresh = list.Refresh
+    list.Refresh = function(self, a, b)
+        Thumbs.NewWave('browser-list')
+        return listRefresh(self, a, b)
+    end
     list:SetRect(Skin.S(resX), Skin.S(resY), Skin.S(resW), Skin.S(resH))
 
     grid = Grid.Create(d.group, {
@@ -585,6 +596,11 @@ function Open(spec)
         onSelect = function(index) Take(S.shown[index]) end,
         onHover = function(index) if index then ShowPreview(S.shown[index]) end end,
     })
+    local gridRefresh = grid.Refresh
+    grid.Refresh = function(self, a, b)
+        Thumbs.NewWave('browser-grid')
+        return gridRefresh(self, a, b)
+    end
     grid:SetRect(Skin.S(resX), Skin.S(resY), Skin.S(resW), Skin.S(resH))
     -- the view that is not shown leaves the screen (Maui shows a hidden child again whenever its parent refreshes)
     ApplyView = function()
@@ -629,6 +645,39 @@ function Open(spec)
         end
     end
     d:Button('Cancel', totalW - 100, totalH - 34, 86, 24, function() Dialog.Close() end, { tip = 'Close without choosing.' })
+
+    -- a list that can change while it is open (the textures of the map folder): Rescan makes it again, and a look every 2 seconds does it when the files changed
+    local watched = false
+    local function Reload()
+        if not spec.refresh then return end
+        local ok, fresh = pcall(spec.refresh)
+        if not ok or not fresh then return end
+        Load(fresh)
+        if last and last.state == S then last.entries = entries end
+        Rebuild()
+        if spec.afterLoad then pcall(spec.afterLoad, entries) end
+    end
+    if spec.refresh then
+        d:Button('Rescan', totalW - 196, totalH - 34, 86, 24, function()
+            if spec.signature then local ok, sig = pcall(spec.signature) watched = ok and sig or false end
+            Reload()
+        end, { tip = 'Look at the folders again: files that were added or removed since the list was made show up.' })
+        if spec.signature then
+            local ok, sig = pcall(spec.signature)
+            watched = ok and sig or false
+            ForkThread(function()
+                while not closed do
+                    WaitSeconds(2)
+                    if closed then break end
+                    local ok2, now = pcall(spec.signature)
+                    if ok2 and now ~= watched then
+                        watched = now
+                        Reload()
+                    end
+                end
+            end)
+        end
+    end
     d:Label('Click an entry to take it. Enter takes the first result. Esc closes.', 14, totalH - 30, { color = c.textDim, size = 'small' })
 
     -- pictures that were made in the background: draw the visible rows again (assetthumbs.lua calls this at most every 0.2 s)
@@ -671,8 +720,36 @@ local function TextureKind(lower)
     return 'other'
 end
 
-function OpenTextures(spec)
+--- True when a file of the map folder belongs in this picker: the caller's mapMatch says so; else its name fits one of the patterns of `sources` and match(path) agrees.
+function MapAccepts(spec, f)
+    if spec.mapMatch then return spec.mapMatch(f.path, f.lower, f.name) and true or false end
+    if spec.sources and table.getn(spec.sources) > 0 then
+        local fits = false
+        for _, src in spec.sources do
+            if Texmap.GlobMatch(src[2], f.name) then fits = true break end
+        end
+        if not fits then return false end
+    end
+    if spec.match and not spec.match(f.path) then return false end
+    return true
+end
+
+--- The entries of a texture picker: the map folder's textures first (category 'This map'), then what the game data holds under the folders of spec.sources.
+function TextureEntries(spec)
     local seen, entries = {}, {}
+    local pictures = (spec.thumbs ~= false)
+    if spec.map ~= false then
+        for _, f in Texmap.Files() do
+            if not seen[f.lower] and MapAccepts(spec, f) then
+                seen[f.lower] = true
+                local folder = Texmap.LABEL
+                if f.staged then folder = folder .. '/' .. Texmap.STAGE_LABEL elseif f.rel ~= '' then folder = folder .. '/' .. f.rel end
+                table.insert(entries, { key = f.path, name = f.name, sub = folder, folder = folder, source = f.path, thumb = pictures and f.path or nil, reduce = pictures,
+                                        tags = { type = f.mapWide and 'map-wide' or TextureKind(f.lower), source = Texmap.LABEL } })
+            end
+        end
+    end
+    local game = {}
     for _, s in spec.sources or {} do
         for _, path in (DiskFindFiles(s[1], s[2]) or {}) do
             local key = string.lower(path)
@@ -680,14 +757,33 @@ function OpenTextures(spec)
                 seen[key] = true
                 local name = string.gsub(path, '^.*/', '')
                 local folder = string.gsub(string.gsub(path, '/[^/]*$', ''), '^/', '')
-                table.insert(entries, { key = path, name = name, sub = folder, folder = folder, source = path, thumb = (spec.thumbs ~= false) and path or nil, reduce = (spec.thumbs ~= false),
-                                        tags = { type = TextureKind(key) } })
+                table.insert(game, { key = path, name = name, sub = folder, folder = folder, source = path, thumb = pictures and path or nil, reduce = pictures,
+                                     tags = { type = TextureKind(key), source = 'Game' } })
             end
         end
     end
-    table.sort(entries, function(a, b) return string.lower(a.key) < string.lower(b.key) end)
-    Open{ title = spec.title or 'Texture', entries = entries, facets = { { 'type', 'Kind' } }, fav = 'textures', none = spec.none, current = spec.current, memory = 'textures',
+    table.sort(game, function(a, b) return string.lower(a.key) < string.lower(b.key) end)
+    for _, e in game do table.insert(entries, e) end
+    return entries
+end
+
+function OpenTextures(spec)
+    local entries = TextureEntries(spec)
+    -- the pictures of the whole list are made in the background (the rows on screen first: they ask for theirs as they are drawn), so the next time the picker opens, or scrolls, they are on disk
+    local function Warm(list)
+        if spec.thumbs == false or not ed_dds_thumb then return end
+        local items = {}
+        for _, e in list do
+            if e.thumb and table.getn(items) < 1500 then table.insert(items, { key = e.thumb, source = e.thumb }) end
+        end
+        Thumbs.Warm('textures', items)
+    end
+    Open{ title = spec.title or 'Texture', entries = entries, facets = { { 'type', 'Kind' }, { 'source', 'From' } }, fav = 'textures', none = spec.none, current = spec.current, memory = 'textures',
+          refresh = (spec.map ~= false) and function() return TextureEntries(spec) end or nil,
+          signature = (spec.map ~= false) and function() return Texmap.Signature() end or nil,
+          afterLoad = Warm,
           done = function(e) if spec.done then spec.done(e.key) end end }
+    Warm(entries)
 end
 
 -- ---- any list of names ------------------------------------------------------------------------------------------------------------------------

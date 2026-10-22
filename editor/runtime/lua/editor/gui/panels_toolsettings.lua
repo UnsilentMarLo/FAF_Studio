@@ -179,6 +179,7 @@ Panels.Register{
         --- Puts every control where the panel's width allows: rows wrap, sliders take the width.
         function P:Layout(w)
             P.w = w
+            W.BeginLayout(group)      -- the content height is measured anew: it only ever grew, so blocks that are hidden now (or a wider panel) left empty scroll space below
             for _, l in P.paras do l:Destroy() end
             P.paras = {}
             local pad = Skin.S(10)

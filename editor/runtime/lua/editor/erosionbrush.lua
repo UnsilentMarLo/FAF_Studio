@@ -13,6 +13,8 @@
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
+local Brushes = import('/lua/editor/brushes.lua')
+
 --- The brush values; the Erosion panel edits them.
 Values = {
     iterations = 4,        -- dabs run this many iterations per strength unit (Brush.strength 2 = 8 iterations)
@@ -72,11 +74,22 @@ function DabOptions(brush, mode, inverted)
     }
 end
 
---- One dab. `weights`: optional function (dx, dz) -> weight for shaped brushes (terrain.lua passes its Weight). Returns the samples changed and the changed window.
+--- One dab. `weight`: optional, for shaped brushes. A table { id = shape id, turn = degrees } (terrain.lua): the exe builds the window's weights from the shape mask
+--- (opts.shape / opts.angle, ed_brush_shape_set), or, without those natives, Brushes.Fill makes the list in a tight loop. A function (dx, dz) -> weight is the old callback
+--- (one Lua call per sample of the window), kept for other callers. Returns the samples changed and the changed window.
 function Dab(cx, cz, brush, mode, inverted, weight)
     if not active then return 0 end
     local opts = DabOptions(brush, mode, inverted)
-    if weight then
+    if type(weight) == 'table' then
+        local handle = Brushes.NativeShape(weight.id)
+        if handle then
+            opts.shape = handle
+            opts.angle = (Brushes.Angle or 0) + (weight.turn or 0)
+        else
+            local x0, z0, x1, z1 = ed_erode_window(cx, cz, brush.radius, { mode = opts.mode, margin = opts.margin })
+            opts.weights = Brushes.Fill(weight.id, brush.radius, weight.turn, cx, cz, x0, z0, x1, z1)
+        end
+    elseif weight then
         local x0, z0, x1, z1 = ed_erode_window(cx, cz, brush.radius, { mode = opts.mode, margin = opts.margin })
         local list = {}
         local i = 0

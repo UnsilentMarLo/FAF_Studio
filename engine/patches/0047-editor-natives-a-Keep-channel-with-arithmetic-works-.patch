@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 15:27:55 +0000
+Subject: [PATCH] editor natives: a Keep channel with arithmetic works on its
+ own channel in a full conversion (test)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdTexConv.h b/src/sdk/moho/editor/EdTexConv.h
+index 337925f..f7598d6 100644
+--- a/src/sdk/moho/editor/EdTexConv.h
++++ b/src/sdk/moho/editor/EdTexConv.h
+@@ -204,8 +204,13 @@ namespace moho::editor::texconv
+     out.px.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
+     static const From own[4] = {From::R, From::G, From::B, From::A};
+     for (int c = 0; c < 4; ++c) {
++      // a Keep channel with arithmetic (invert, scale, bias, centre, clamp) works on its own channel
++      Chan chan = chans[c];
++      if (chan.from == From::Keep && (chan.invert || chan.center || chan.scale != 1.0f || chan.bias != 0.0f || chan.lo != 0.0f || chan.hi != 1.0f)) {
++        chan.from = own[c];
++      }
+       Plane p;
+-      if (!MakePlane(chans[c], src.px, src.w, src.h, w, h, p)) {
++      if (!MakePlane(chan, src.px, src.w, src.h, w, h, p)) {
+         p = Resample(PlaneOf(src.px, src.w, src.h, own[c]), w, h);
+       }
+       for (std::size_t i = 0; i < out.px.size(); ++i) {
+diff --git a/src/sdk/moho/editor/tests/EdTexConvTest.cpp b/src/sdk/moho/editor/tests/EdTexConvTest.cpp
+index 8804e6c..a94ee8b 100644
+--- a/src/sdk/moho/editor/tests/EdTexConvTest.cpp
++++ b/src/sdk/moho/editor/tests/EdTexConvTest.cpp
+@@ -144,6 +144,13 @@ int main()
+       rok = rok && std::abs(static_cast<int>(rough.px[i].a) - static_cast<int>(want * 255.0f + 0.5f)) <= 1 && rough.px[i].r == src.px[i].r;
+     }
+     CHECK(rok, "roughness from spec alpha: scale -0.45, bias 0.92, clamp 0.45..0.92");
++    // a channel that keeps its source but has arithmetic (the converter's "invert the alpha") still works on that channel when the whole picture is converted
++    tc::Chan invA[4];
++    invA[3].invert = true;
++    const dds::Image ia = tc::Convert(src, 16, 8, invA);
++    bool iaok = true;
++    for (std::size_t i = 0; i < ia.px.size(); ++i) iaok = iaok && ia.px[i].a == 255 - src.px[i].a && ia.px[i].r == src.px[i].r && ia.px[i].b == src.px[i].b;
++    CHECK(iaok, "Keep + invert inverts the channel's own values");
+     // luminance
+     tc::Chan lum[4];
+     lum[1].from = tc::From::Lum;

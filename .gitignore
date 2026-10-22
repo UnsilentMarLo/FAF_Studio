@@ -24,3 +24,4 @@ editor/runtime/override/textures/editor/envthumbs/
 # a crash dump is never committed
 *.dmp
 faf_crash_*.txt
+/editor/runtime/lua/editor/buildinfo.lua

@@ -1,5 +1,5 @@
 -- Marker visuals, drawn in the UI lane so they follow the pointer every frame while a marker is dragged: the template's prop mesh
--- (what the GPG editor showed) as a WorldMesh, except for Mass / Hydrocarbon, which show what the game shows instead: the deposit mesh (the little rock) and the
+-- (what the GPG editor showed) as a WorldMesh, chosen by marker TYPE and tinted by the type's colour (Style below), except for Mass / Hydrocarbon, which show what the game shows instead: the deposit mesh (the little rock) and the
 -- ground splat of ScenarioUtilities.CreateResources (the splat is a ground decal of the overlay renderer, laid onto the terrain). Called every frame by overlay.lua
 -- while editing. (They used to be sim props: every move waited for a sim tick, and moved splats were left behind.)
 -- The game makes its own copy of the rock and the splat when a map loads; they cannot be moved or removed afterwards, so the editing sim does not make them
@@ -32,12 +32,83 @@ local syncFrame = 0
 local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 local Tools = import('/lua/editor/tools.lua')
 local syncedEpoch, seenChanged = -1, -1      -- what the last height sync and the last walk over the markers were done for
+local ended = false      -- Shutdown ran: the session is ending, nothing is built any more
 
 --- '/env/common/props/markers/M_Mass_prop.bp' -> '/env/common/props/markers/M_Mass_lod0.scm' (false for the mesh-less path marker).
 local function MeshOf(propBp)
     if not propBp or string.find(propBp, 'M_Path_prop', 1, true) then return false end
     local mesh = string.gsub(propBp, '_prop%.bp$', '_lod0.scm')
     return mesh
+end
+
+-- ---- what a marker looks like, by type --------------------------------------------------------------------------------------------------------
+-- Most saved markers carry the blank prop whatever their type (many FAF maps store only type, position and colour), so the stored `prop` cannot say what a marker is. The look is
+-- chosen by TYPE from this table (display only, nothing is written back to the save data): prop = the game's marker mesh, scale = factor on the blueprints' UniformScale
+-- (MARKER_SCALE), color = tint (default: the type's colour in /lua/MarkerTemplates.lua, shown through Tools.Templates). Game data has meshes for Blank, Camera, Combatzone, Defensive,
+-- Expansion, Mass and Hydrocarbon only (M_Path has none: path nodes are drawn by the overlay); the types sharing a mesh differ by tint and size.
+-- A type that is not in the table (a mod's) takes the stored prop, then its template's prop, then the blank marker.
+local PROPS = '/env/common/props/markers/M_'
+local BLANK_PROP = PROPS .. 'Blank_prop.bp'
+local STYLES = {
+    ['Blank Marker']                        = { prop = 'Blank', scale = 1.0 },
+    ['Mass']                                = { prop = 'Mass', scale = 1.0 },
+    ['Hydrocarbon']                         = { prop = 'Hydrocarbon', scale = 1.0 },
+    ['Combat Zone']                         = { prop = 'Combatzone', scale = 1.4 },
+    ['Island']                              = { prop = 'Combatzone', scale = 1.1 },
+    ['Naval Exclude']                       = { prop = 'Combatzone', scale = 0.9 },
+    ['Defensive Point']                     = { prop = 'Defensive', scale = 1.0 },
+    ['Naval Defensive Point']               = { prop = 'Defensive', scale = 1.0 },
+    ['Rally Point']                         = { prop = 'Defensive', scale = 0.8 },
+    ['Naval Rally Point']                   = { prop = 'Defensive', scale = 0.8 },
+    ['Effect']                              = { prop = 'Defensive', scale = 0.6 },
+    ['Weather Definition']                  = { prop = 'Defensive', scale = 1.3 },
+    ['Weather Generator']                   = { prop = 'Defensive', scale = 1.6 },
+    ['Expansion Area']                      = { prop = 'Expansion', scale = 1.0 },
+    ['Large Expansion Area']                = { prop = 'Expansion', scale = 1.7 },
+    ['Naval Area']                          = { prop = 'Expansion', scale = 1.0 },
+    ['Protected Experimental Construction'] = { prop = 'Expansion', scale = 1.3 },
+    ['Camera Info']                         = { prop = 'Camera', scale = 1.0 },
+    ['Transport Marker']                    = { prop = 'Blank', scale = 1.3 },
+    ['Naval Link']                          = { prop = 'Blank', scale = 0.8 },
+    ['Land Path Node']                      = { prop = 'Path', scale = 1.0 },
+    ['Water Path Node']                     = { prop = 'Path', scale = 1.0 },
+    ['Air Path Node']                       = { prop = 'Path', scale = 1.0 },
+    ['Amphibious Path Node']                = { prop = 'Path', scale = 1.0 },
+}
+local ARMY_STYLE = { prop = 'Blank', scale = 1.8, color = 'ffffd040' }      -- start positions (ARMY_<n>: Blank Marker type, told apart by name)
+local TINT_BOOST = 1.5          -- the templates' colours are half intensity (0x80): the lit mesh would look dull on the terrain
+local FALLBACK_COLOR = 'ff808080'
+
+local function IsBlankProp(propBp)
+    return not propBp or propBp == '' or string.find(string.lower(propBp), 'm_blank_prop', 1, true) ~= nil
+end
+
+--- 'ffRRGGBB' (or 'RRGGBB') brightened by TINT_BOOST, as 'ffRRGGBB'.
+local function Tint(argb)
+    local s = argb or FALLBACK_COLOR
+    local hex = string.sub(s, -6)
+    local r, g, b = tonumber(string.sub(hex, 1, 2), 16), tonumber(string.sub(hex, 3, 4), 16), tonumber(string.sub(hex, 5, 6), 16)
+    if not (r and g and b) then return FALLBACK_COLOR end
+    return string.format('ff%02x%02x%02x', math.min(255, math.floor(r * TINT_BOOST)), math.min(255, math.floor(g * TINT_BOOST)), math.min(255, math.floor(b * TINT_BOOST)))
+end
+
+--- The look of a marker: { prop = prop blueprint path (MeshOf turns it into the mesh), scale = UniformScale, color = 'ffRRGGBB' tint }. `markerType` / `storedProp` / `storedColor`
+--- are the marker's own fields, `markerName` its name (start positions are told by ARMY_<n>). Never nil; the fields of a marker are not changed.
+function Style(markerType, storedProp, storedColor, markerName)
+    local st = STYLES[markerType]
+    if markerName and string.find(markerName, '^ARMY_%d+$') and (not st or st.prop == 'Blank') then st = ARMY_STYLE end
+    local tpl = Tools.Templates()[markerType]
+    local prop, factor, color = false, 1.0, false
+    if st then
+        prop = PROPS .. st.prop .. '_prop.bp'
+        factor = st.scale or 1.0
+        color = st.color
+    end
+    if not prop and not IsBlankProp(storedProp) then prop = storedProp end
+    if not prop and tpl and tpl.prop then prop = tpl.prop end
+    if not prop then prop = BLANK_PROP end
+    color = color or (tpl and tpl.color) or storedColor or FALLBACK_COLOR
+    return { prop = prop, scale = MARKER_SCALE * factor, color = Tint(color) }
 end
 
 local function NameHash(name)
@@ -60,10 +131,11 @@ local function Build(name, m)
     local e = { shapeProp = m.prop, shapeType = m.type, x = x, y = y, z = z, yaw = yaw, prop = false, deposit = false }
     local pos = Vector(x, y, z)
 
-    local meshName = MeshOf(m.prop)
+    local style = Style(m.type, m.prop, m.color, name)
+    local meshName = MeshOf(style.prop)
     if meshName and not dep then          -- a resource marker is its deposit mesh and splat, no marker prop on top
         local mesh = WorldMesh()
-        mesh:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = MARKER_SCALE, LODCutoff = LOD_CUTOFF })
+        mesh:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = style.scale, Color = style.color, LODCutoff = LOD_CUTOFF })
         mesh:SetStance(pos, EulerToQuaternion(0, yaw, 0))
         mesh:SetHidden(false)
         e.prop = mesh
@@ -94,14 +166,16 @@ local function Move(name, e, m)
 end
 
 local ghosts = {}          -- pool of WorldMesh: the previews of the Start position tool (see Ghost)
-local ghostMesh = false       -- the mesh the pool was made for
+local ghostMesh = false       -- what the pool was made for: mesh, scale and tint
 local ghostShown = 0
 
 --- The prop of a marker about to be placed, at each { x, y, z } of `spots` (the Start position tool: pointer and symmetry images); nil or an empty list hides them.
---- `propBp` is the template's prop blueprint path, as a placed marker's `prop` field.
-function Ghost(spots, propBp)
+--- `propBp` is the template's prop blueprint path, as a placed marker's `prop` field; `markerType` / `markerName` (optional) give the look the marker will have once placed (Style).
+function Ghost(spots, propBp, markerType, markerName)
+    if ended then return end
     local n = spots and table.getn(spots) or 0
-    local meshName = n > 0 and MeshOf(propBp)
+    local style = n > 0 and Style(markerType, propBp, nil, markerName)
+    local meshName = style and MeshOf(style.prop)
     if n == 0 or not meshName then
         if ghostShown > 0 then
             for i = 1, table.getn(ghosts) do ghosts[i]:SetHidden(true) end
@@ -109,16 +183,17 @@ function Ghost(spots, propBp)
         end
         return
     end
-    if ghostMesh ~= meshName then
+    local key = meshName .. '|' .. style.scale .. '|' .. style.color
+    if ghostMesh ~= key then
         for i = 1, table.getn(ghosts) do ghosts[i]:Destroy() end
         ghosts = {}
-        ghostMesh = meshName
+        ghostMesh = key
     end
     for i = 1, n do
         local g = ghosts[i]
         if not g then
             g = WorldMesh()
-            g:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = MARKER_SCALE, LODCutoff = LOD_CUTOFF })
+            g:SetMesh({ MeshName = meshName, TextureName = MARKER_ALBEDO, ShaderName = 'EditorMarker', UniformScale = style.scale, Color = style.color, LODCutoff = LOD_CUTOFF })
             ghosts[i] = g
         end
         g:SetStance(Vector(spots[i][1], spots[i][2], spots[i][3]), EulerToQuaternion(0, 0, 0))
@@ -155,7 +230,32 @@ function Clear()
     ghosts, ghostMesh, ghostShown = {}, false, 0
 end
 
+--- The session is ending (control.lua Teardown: another map is opened, the editor leaves): destroys every mesh and splat and builds no more. A WorldMesh is an engine object that
+--- keeps its Lua table alive itself, so it is NOT freed when this module is dropped with the Lua modules of the next session (uimain.lua): without Destroy the rocks of the
+--- previous map's resource markers stayed in the world of the next one, at their old heights.
+function Shutdown()
+    Clear()
+    ended = true
+end
+
+--- Takes the editor back into use after Shutdown (the self test only: a real session that shut down is replaced).
+function Resume()
+    ended = false
+end
+
+--- How many marker objects (resource meshes, marker props, ghosts) are alive: { entries, meshes }.
+function Count()
+    local n, meshes = 0, 0
+    for _, e in entries do
+        n = n + 1
+        if e.prop then meshes = meshes + 1 end
+        if e.deposit then meshes = meshes + 1 end
+    end
+    return n, meshes + table.getn(ghosts)
+end
+
 function Update()
+    if ended then return end
     local doc = Map.Doc
     if not doc then
         return

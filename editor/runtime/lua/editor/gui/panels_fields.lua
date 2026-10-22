@@ -340,7 +340,7 @@ Panels.Register{
 
         function Pn:Refresh()
             local work = Work()
-            local text = state.text
+            local text = string.gsub(tostring(state.text or ''), '[%c]+', ' ')      -- one line: an error text with line breaks must not make the label taller
             W.Fit(self.status, 'fields ' .. table.getn(state.stack) .. '   ' .. text, (self.w or 300) - Skin.S(16))
             W.Fit(self.opLabel, 'Op: ' .. state.op .. '  -  ' .. OPS[state.op].kind, (self.w or 300) - Skin.S(16))
             for _, s in self.sliders do s:Refresh() end
@@ -350,6 +350,9 @@ Panels.Register{
         function Pn:OnResize(w, h)
             if not w then return end
             self.w, self.h = w, h
+            -- The scroll host only ever raises the content height it has seen (widgets.lua Extent): without this the height of the narrowest layout, or of the op with the most sliders, stayed
+            -- after the panel got wider or another op was picked, and the panel scrolled on into empty space below the status line.
+            W.BeginLayout(group)
             local pad = Skin.S(8)
             local y = pad
             -- buttons flow into as many rows as the width needs
@@ -406,6 +409,7 @@ Panels.Register{
             y = y + Skin.S(18)
             W.Place(self.status, group, pad, y)
             self:Refresh()
+            W.EndLayout(group)
         end
 
         Pn:Build()

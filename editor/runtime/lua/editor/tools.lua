@@ -361,22 +361,62 @@ function NewArea(x0, z0, x1, z1)
     return name
 end
 
---- Deletes everything selected (one undo step).
+--- The marker lists of the chains (save.Chains) with the names in `rename` swapped for their new name (a table old -> new; a nil new drops the marker from the chain).
+--- Returns a list of { chain, before, after } for the chains that changed, without touching them; ApplyChains puts the `after` or the `before` lists in.
+local function ChainEdits(rename)
+    local edits = {}
+    local chains = Map.Doc and Map.Doc.save and Map.Doc.save.Chains
+    for _, c in chains or {} do
+        local before, after, changed = {}, {}, false
+        for i, m in c.Markers or {} do
+            before[i] = m
+            if rename[m] ~= nil then
+                changed = true
+                if rename[m] then table.insert(after, rename[m]) end
+            else
+                table.insert(after, m)
+            end
+        end
+        if changed then table.insert(edits, { chain = c, before = before, after = after }) end
+    end
+    return edits
+end
+
+local function ApplyChains(edits, which)
+    for _, e in edits do
+        local list = {}
+        for i, m in e[which] do list[i] = m end
+        e.chain.Markers = list
+    end
+    if table.getn(edits) > 0 then
+        local C = import('/lua/editor/chains.lua')
+        C.Revision = C.Revision + 1       -- the Chains panel and the chain lines follow it
+    end
+end
+
+--- Deletes everything selected (one undo step). A deleted marker also leaves every chain that listed it.
 function DeleteSelection()
     if not Map.Doc or ReadOnly or table.getn(Items) == 0 then return false end
     local removed = {}
+    local gone = {}
     for _, it in Items do
         local obj = Table(it.kind)[it.name]
-        if obj then table.insert(removed, { kind = it.kind, name = it.name, obj = obj }) end
+        if obj then
+            table.insert(removed, { kind = it.kind, name = it.name, obj = obj })
+            if it.kind == 'marker' then gone[it.name] = false end
+        end
     end
     if table.getn(removed) == 0 then return false end
+    local chainEdits = ChainEdits(gone)
     local function Remove()
         for _, r in removed do Table(r.kind)[r.name] = nil end
+        ApplyChains(chainEdits, 'after')
         Prune()
         Bump()
     end
     local function Restore()
         for _, r in removed do Table(r.kind)[r.name] = r.obj end
+        ApplyChains(chainEdits, 'before')
         Items = {}
         for _, r in removed do table.insert(Items, { kind = r.kind, name = r.name }) end
         SyncPrimary()
@@ -566,9 +606,11 @@ local function Rename(kind, old, new)
     local tbl = Table(kind)
     local obj = tbl[old]
     if not obj then return false end
+    local chainEdits = (kind == 'marker') and ChainEdits({ [old] = new }) or {}
     local function Swap(from, to)
         tbl[to] = obj
         tbl[from] = nil
+        ApplyChains(chainEdits, (to == new) and 'after' or 'before')
         for _, it in Items do
             if it.kind == kind and it.name == from then it.name = to end
         end

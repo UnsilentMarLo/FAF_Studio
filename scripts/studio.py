@@ -11,6 +11,8 @@
     python scripts/studio.py engine stage           copy the built exe and DLLs, FAF's init files and the editor's init_editor.lua into engine/run, brand the exe (FAFStudio.exe)
     python scripts/studio.py engine export          write the commits of engine/faf-re on top of the base back to engine/patches (commit them here)
     python scripts/studio.py edtext                 build edtext.dll (DirectWrite text backend, xmake) and stage it
+    python scripts/studio.py version                show the version (editor/VERSION, major.minor.patch); a successful `build` raises the patch number (--no-bump keeps it);
+                                                    `version --bump minor|major` or `--set X.Y.Z` change it. The number goes into the exe's properties and the editor's start screen
     python scripts/studio.py generate               the generated, git-ignored assets: marker icons, cursors, layer textures, brush masks, blank map templates
     python scripts/studio.py check                  the checks that need no engine: Lua name lint, generated files up to date
     python scripts/studio.py check --full           + the nightly QA run (scripts/editor_nightly.py) on a staged engine
@@ -350,6 +352,62 @@ def engine_export(a):
     return 0
 
 
+VERSION_FILE = os.path.join(P.ROOT, 'editor', 'VERSION')
+BUILDINFO = os.path.join(P.ROOT, 'editor', 'runtime', 'lua', 'editor', 'buildinfo.lua')
+
+
+def read_version():
+    try:
+        parts = [int(x) for x in open(VERSION_FILE, encoding='utf-8').read().strip().split('.')[:3]]
+    except (OSError, ValueError):
+        parts = []
+    return (parts + [0, 0, 0])[:3]
+
+
+def write_version(parts):
+    with open(VERSION_FILE, 'w', encoding='utf-8', newline='\n') as f:
+        f.write('%d.%d.%d\n' % tuple(parts))
+
+
+def bump_version(level='patch'):
+    """The version number of the next build: editor/VERSION is major.minor.patch, a build raises the patch (a `studio.py version minor|major` raises the others and resets what follows)."""
+    major, minor, patch = read_version()
+    if level == 'major':
+        major, minor, patch = major + 1, 0, 0
+    elif level == 'minor':
+        minor, patch = minor + 1, 0
+    else:
+        patch += 1
+    write_version([major, minor, patch])
+    return '%d.%d.%d' % (major, minor, patch)
+
+
+def write_buildinfo():
+    """The number, date and git revision of this build for a development run (editor/runtime/lua/editor/buildinfo.lua, git-ignored; version.lua shows it instead of "development")."""
+    version = '%d.%d.%d' % tuple(read_version())
+    rev = run(['git', '-C', P.ROOT, 'rev-parse', '--short', 'HEAD'], check=False, capture_output=True, text=True)
+    revision = (rev.stdout or '').strip() if rev.returncode == 0 else ''
+    with open(BUILDINFO, 'w', encoding='utf-8', newline='\n') as f:
+        f.write("-- written by `python scripts/studio.py engine build / stage`; not part of the repository\nVersion = '%s'\nBuild = '%s'\nRevision = '%s'\n" % (version, time.strftime('%Y-%m-%d'), revision))
+    return version
+
+
+def cmd_version(a):
+    if a.set:
+        try:
+            parts = [int(x) for x in a.set.split('.')]
+            assert len(parts) == 3
+        except (ValueError, AssertionError):
+            raise SystemExit('give the version as major.minor.patch, e.g. 0.5.0')
+        write_version(parts)
+        print('version set to %s (the next build raises the patch number)' % a.set)
+    elif a.bump:
+        print('version is now', bump_version(a.bump))
+    else:
+        print('%d.%d.%d' % tuple(read_version()))
+    return 0
+
+
 def engine_build(a):
     vc = find_vcvars()
     dx = find_dxsdk()
@@ -383,6 +441,11 @@ def engine_build(a):
         print('MSBuild reported success but %s was not rebuilt (its time is older than this build). Nothing was staged: the exe in %s stays the old one.' % (exe, P.ENGINE_BIN))
         return 1
     print('built %s (%s, %d bytes)' % (exe, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(exe))), os.path.getsize(exe)))
+    # a build that compiled is a new version: the number is raised before the exe is staged, so the exe's properties and the editor's start screen carry it
+    if getattr(a, 'no_bump', False):
+        print('version stays %d.%d.%d (--no-bump)' % tuple(read_version()))
+    else:
+        print('version %d.%d.%d -> %s' % (tuple(read_version()) + (bump_version(),)))
     if shutil.which('xmake'):
         try:
             cmd_edtext(a)        # the text DLL is part of the editor: build it with it, so it cannot be left behind
@@ -438,7 +501,8 @@ def engine_stage(a):
     if os.path.isfile(fa_path):
         copy(fa_path, os.path.join(P.ENGINE_RUN, 'fa_path.lua'))
     copy(os.path.join(P.ROOT, 'editor', 'runtime', 'init_editor.lua'), os.path.join(P.ENGINE_BIN, 'init_editor.lua'))
-    r = run([sys.executable, os.path.join(HERE, 'brand_exe.py')], check=False, capture_output=True, text=True)
+    version = write_buildinfo()
+    r = run([sys.executable, os.path.join(HERE, 'brand_exe.py'), '--version', version], check=False, capture_output=True, text=True)
     print((r.stdout or '').strip())
     if (r.stdout or '').find('running or locked') >= 0 or r.returncode != 0:
         locked.append('FAFStudio.exe')
@@ -513,10 +577,17 @@ def main():
     sub = ap.add_subparsers(dest='c', required=True)
     sub.add_parser('doctor').set_defaults(f=cmd_doctor)
     sub.add_parser('deps').set_defaults(f=cmd_deps)
-    sub.add_parser('build').set_defaults(f=engine_build)
+    p = sub.add_parser('build')
+    p.add_argument('--no-bump', action='store_true', help='keep the version number (a build normally raises the patch number of editor/VERSION)')
+    p.set_defaults(f=engine_build)
     p = sub.add_parser('engine')
     p.add_argument('what', choices=['setup', 'sync', 'build', 'stage', 'export'])
+    p.add_argument('--no-bump', action='store_true', help='with build: keep the version number')
     p.set_defaults(f=cmd_engine)
+    p = sub.add_parser('version', help='show or change the version (editor/VERSION)')
+    p.add_argument('--set', metavar='X.Y.Z')
+    p.add_argument('--bump', choices=['patch', 'minor', 'major'])
+    p.set_defaults(f=cmd_version)
     sub.add_parser('edtext').set_defaults(f=cmd_edtext)
     sub.add_parser('generate').set_defaults(f=cmd_generate)
     p = sub.add_parser('check')

@@ -36,6 +36,6 @@ prints the timestamps of what it staged. `engine build` alone does the engine pa
 
 ## Packaging and release
 
-`python scripts/package_editor.py` writes `dist/FAFStudio/` and a zip (the version is `editor/VERSION`; build date and git revision are stamped in). `docs/projects/editor/PACKAGING.md`
+`python scripts/package_editor.py` writes `dist/FAFStudio/` and a zip (the version is `editor/VERSION`, `major.minor.patch`, started at 0.5.0: every successful `python scripts/studio.py build` raises the patch number before it stages and brands the exe, `build --no-bump` keeps it, `studio.py version --bump minor|major` / `--set X.Y.Z` change it; build date and git revision are stamped in). `docs/projects/editor/PACKAGING.md`
 describes the package, `RELEASE.md` the map release flow, `BRANDING.md` the name, icon and title bar. The ffmpeg DLLs next to the exe are LGPL / GPL builds: a distribution has to
 carry their license texts and source offer. Whether and where to publish a built exe is the owner's decision.

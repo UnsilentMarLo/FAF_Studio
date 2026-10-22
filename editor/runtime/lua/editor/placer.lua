@@ -25,12 +25,14 @@ local lastTool = false
 local ghosts = {}           -- pool of WorldMesh
 local ghostKeys = {}        -- ghost number -> what it was made for (blueprint and colour)
 local anyShown = false      -- something of the placement preview is on screen
+local ended = false         -- Shutdown ran: the session is ending, no ghost is made any more
 local decalIds = {}         -- overlay decal ids in use
 local footIds = {}          -- overlay ids of the footprint quads in use
 local MAX_GHOSTS = 80
 local FOOT_MAX = 60         -- footprints are drawn for the first ones only
 local frame = 0
 local ctxs = {}             -- name -> { frame, rev, ctx }: unitfit contexts (the structures of the map), re-read a few times a second
+local diag = { place = '', move = '', key = '', at = -100, err = '' }   -- why the preview is red: the status line text (Hint) of the Place tools and of a move, and what the log last said
 
 local GREEN, RED = 'ff50ff50', 'ffff4040'
 
@@ -280,12 +282,39 @@ local function SweepFootprints(prefix, used)
     end
 end
 
+-- ---- why a preview is red ---------------------------------------------------------------------------------------------------------------------
+
+--- Says why the thing(s) shown are red: sets the status line text of `which` ('place' or 'move'; Hint) and writes ONE log line when the reason changes (numbers do not count as a
+--- change, and at most one line every half second: moving the pointer over rough ground would else fill the log). red / total: how many of the shown things cannot go where
+--- they are; why: the first reason; x, z: where the first red one is.
+local function Report(which, id, red, total, why, x, z)
+    local text = ''
+    if red > 0 then
+        if total > 1 then text = red .. ' of ' .. total .. ' cannot go there: ' .. why else text = 'Cannot go here: ' .. why end
+    end
+    diag[which] = text
+    local key = (string.gsub(text, '[%d%.%-]+', '#'))
+    local now = GetSystemTimeSeconds()
+    if key ~= diag.key and now - diag.at >= 0.5 then
+        diag.key = key
+        diag.at = now
+        LOG(string.format('EDITOR placer: %s %s at %.1f, %.1f: %s', which == 'place' and 'placing' or 'moving', tostring(id), x or 0, z or 0, text == '' and 'it fits' or text))
+    end
+end
+
+--- The sentence for the status line: why the preview of the Place tools (or of what is being moved) is red; '' when it fits or there is no preview.
+function Hint()
+    if diag.place ~= '' then return diag.place end
+    return diag.move
+end
+
 -- ---- ghosts ---------------------------------------------------------------------------------------------------------------------------------
 
 local lastDrawSig = false      -- what the ghosts were last drawn for (Update draws again only when it changed)
 
 function Clear()
     lastDrawSig = false
+    diag.place = ''
     for _, g in ghosts do g:SetHidden(true) end
     for id in decalIds do ed_overlay_remove(id) end
     decalIds = {}
@@ -312,20 +341,29 @@ local function Draw(info, positions)
     local Sym = Symmetry()
     local used, decalUsed, footUsed = 0, {}, {}
     local ctx = info.unit and info.bp and Ctx('place', 0, nil) or nil
-    local why = ''
+    local why, red, redX, redZ = '', 0, 0, 0
     for _, pos in positions do
         for _, p in Sym.Points(pos[1], pos[2]) do
             if used >= MAX_GHOSTS then break end
             used = used + 1
+            if used == 1 then redX, redZ = p.x, p.z end       -- where the log line says the preview is, unless a red one comes
             local y = GroundAt(p.x, p.z)
             local heading = Sym.Heading(0, p)
             local valid = InMap(p.x, p.z)
+            local reason = 'too close to the map edge'
             if valid and ctx then
-                local ok, fits, reason = pcall(Fit().Check, info.bp, p.x, p.z, heading, ctx)
+                local ok, fits, r = pcall(Fit().Check, info.bp, p.x, p.z, heading, ctx)
                 if ok and not fits then
                     valid = false
-                    if why == '' then why = reason end
+                    reason = r
+                elseif not ok and diag.err ~= tostring(fits) then
+                    diag.err = tostring(fits)
+                    LOG('EDITOR placer: the placement check failed (the preview stays green): ' .. diag.err)
                 end
+            end
+            if not valid then
+                red = red + 1
+                if red == 1 then why, redX, redZ = reason, p.x, p.z end
             end
             if info.decal then
                 local id = 'plc:' .. used
@@ -361,6 +399,7 @@ local function Draw(info, positions)
     decalIds = decalUsed
     SweepFootprints('pl:', footUsed)
     anyShown = true
+    Report('place', info.id, red, used, why, redX, redZ)
 end
 
 -- ---- placing --------------------------------------------------------------------------------------------------------------------------------
@@ -473,6 +512,7 @@ end
 
 --- Every frame: the ghosts at the pointer / along the line.
 function Update(ui, view)
+    if ended then return end
     frame = frame + 1
     local tool = ui.State.tool
     local kind = KIND[tool]
@@ -540,19 +580,26 @@ end
 
 --- Shows ghosts for list of { id, x, z, heading, unit } (blueprint ids of units or props); an empty list hides them. skip: set of 'army|name' of the units being moved.
 function ShowMoves(list, skip)
+    if ended then return end
     local n = 0
     local footUsed = {}
     local ctx
+    local why, red, redX, redZ, redId = '', 0, 0, 0, ''
     for _, it in list do
         if n >= MAX_GHOSTS then break end
         n = n + 1
+        if n == 1 then redX, redZ = it.x, it.z end
         local heading = it.heading or 0
         local valid = true
         local bp = it.unit and Fit().Blueprint(it.id) or nil
         if bp then
             ctx = ctx or Ctx('move', Units().SelRevision, skip)
-            local ok, fits = pcall(Fit().Check, bp, it.x, it.z, heading, ctx)
-            if ok and not fits then valid = false end
+            local ok, fits, reason = pcall(Fit().Check, bp, it.x, it.z, heading, ctx)
+            if ok and not fits then
+                valid = false
+                red = red + 1
+                if red == 1 then why, redX, redZ, redId = reason, it.x, it.z, it.id end
+            end
         end
         local mesh = MeshOf(it.id)
         if mesh then
@@ -570,10 +617,16 @@ function ShowMoves(list, skip)
     for i = n + 1, table.getn(moveGhosts) do moveGhosts[i]:SetHidden(true) end
     SweepFootprints('mv:', footUsed)
     moveFoot = next(footUsed) ~= nil
+    if n > 0 then
+        Report('move', redId ~= '' and redId or (list[1] and list[1].id) or '', red, n, why, redX, redZ)
+    else
+        diag.move = ''
+    end
 end
 
 --- What the select tools are dragging right now, as ghosts: called every frame by overlay.lua.
 function UpdateMoves(ui)
+    if ended then return end
     local tool = ui.State.tool
     local Gizmo = import('/lua/editor/gizmo.lua')
     local turn = Gizmo.Preview and Gizmo.Preview.turn
@@ -603,4 +656,25 @@ function UpdateMoves(ui)
         end
     end
     if table.getn(list) > 0 or table.getn(moveGhosts) > 0 or moveFoot then ShowMoves(list, skip) end
+end
+
+--- The session is ending (control.lua Teardown): destroys every ghost mesh (a WorldMesh outlives the Lua modules of the session unless it is destroyed) and makes no more.
+function Shutdown()
+    Clear()
+    for i, g in ghosts do g:Destroy() end
+    ghosts, ghostKeys = {}, {}
+    for i, g in moveGhosts do g:Destroy() end
+    moveGhosts, moveKeys = {}, {}
+    diag.place, diag.move = '', ''
+    ended = true
+end
+
+--- Takes the placer back into use after Shutdown (the self test only).
+function Resume()
+    ended = false
+end
+
+--- How many ghost meshes exist.
+function GhostCount()
+    return table.getn(ghosts) + table.getn(moveGhosts)
 end

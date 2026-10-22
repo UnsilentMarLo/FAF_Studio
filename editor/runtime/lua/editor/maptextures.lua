@@ -441,7 +441,9 @@ function Generate(kind, o)
                 f.nx, f.ny, f.nz = NormalFields(env, h, { strength = o.strength or 1 })
             end
             if pack == 'info7' or pack == 'light301' then
-                f.shadow = Lighting(env, h, { azimuth = o.azimuth or sun_az, altitude = o.altitude or sun_alt, soft = o.soft or 1, quality = o.quality or 5, reach = o.reach or 400 })
+                if o.shadow ~= false then          -- o.shadow = false: no baked shadow (alpha 1), only the water depth (Convert layers to a biplanar shader)
+                    f.shadow = Lighting(env, h, { azimuth = o.azimuth or sun_az, altitude = o.altitude or sun_alt, soft = o.soft or 1, quality = o.quality or 5, reach = o.reach or 400 })
+                end
                 if (o.ao or 0) > 0 then f.ao = Occlusion(env, h, o.ao, o.aoRadius) end
                 f.depth = WaterDepth(env, h)
             end
@@ -752,7 +754,7 @@ end
 
 -- ---- saving ---------------------------------------------------------------------------------------------------------------------------------------------
 
---- Called by map.lua before the map is written to `diskDir` (mounted at `mount`): the layers' maptex_* files are copied into <diskDir>/env/layers and the layers point there; maptex_* files
+--- Called by map.lua before the map is written to `diskDir` (mounted at `mount`): the layers' maptex_* files (and any texture of another map folder) are copied into <diskDir>/env/layers and the layers point there; maptex_* files
 --- of that folder that no layer uses are deleted. An autosave folder only gets the copies for the file it writes: the returned function puts the layers back. Never raises.
 function PrepareSave(diskDir, mount)
     local restore = nil
@@ -761,23 +763,54 @@ function PrepareSave(diskDir, mount)
         local moved = {}
         local used = {}
         local mounted = false
-        for _, i in { 8, 9, 18, 19 } do
+        -- A texture of the map's own folder (/maps/<folder>/...) or of the staging folder stays with the map: a layer that points into ANOTHER map folder (the map was saved as a new
+        -- folder, or opened from one and saved elsewhere, or a texture was picked from the browser's "This map" list of a map that is gone) gets a copy in this folder.
+        local copied = {}          -- lower case source path -> the path the layer points to now
+        local function Relocate(path)
+            local lowerPath = string.lower(path)
+            if copied[lowerPath] then return copied[lowerPath] end
+            local base = Basename(path)
+            local target = mount .. '/env/layers/' .. base
+            if lowerPath == string.lower(target) then
+                copied[lowerPath] = target
+                return target
+            end
+            local src = ed_vfs_to_disk(path)
+            local data = src and ed_read_file(src)
+            if not data then return nil end
+            local name, n = base, 1
+            local same = false
+            local managed = Managed(path)
+            while not managed do
+                local existing = ed_file_exists(diskDir .. '/env/layers/' .. name) and ed_read_file(diskDir .. '/env/layers/' .. name)
+                if not existing then break end
+                if existing == data then same = true break end
+                n = n + 1
+                name = string.gsub(base, '%.[dD][dD][sS]$', '') .. '_' .. n .. '.dds'      -- another texture of that name is in the folder already
+            end
+            if not same and not ed_write_file(diskDir .. '/env/layers/' .. name, data) then return nil end
+            target = mount .. '/env/layers/' .. name
+            if not ed_vfs_to_disk(target) then ed_vfs_mount(diskDir, mount) mounted = true end
+            copied[lowerPath] = target
+            return target
+        end
+        local function Foreign(path)
+            local lower = string.lower(path)
+            return string.sub(lower, 1, 6) == '/maps/' and string.sub(lower, 1, string.len(mount) + 1) ~= string.lower(mount) .. '/'
+        end
+        for i = 0, 19 do
             local path, size = ed_stratum_layer(i)
-            if path and Managed(path) then
-                local base = Basename(path)
-                local target = mount .. '/env/layers/' .. base
-                if string.lower(path) ~= string.lower(target) then
-                    local src = ed_vfs_to_disk(path)
-                    local data = src and ed_read_file(src)
-                    if data and ed_write_file(diskDir .. '/env/layers/' .. base, data) then
-                        if not ed_vfs_to_disk(target) then ed_vfs_mount(diskDir, mount) mounted = true end
+            if path and path ~= '' and (Managed(path) or Foreign(path)) then
+                local target = Relocate(path)
+                if target then
+                    if string.lower(target) ~= string.lower(path) then
                         if ed_stratum_set_layer(i, target, size) then
                             table.insert(moved, { layer = i, path = path, size = size })
-                            used[string.lower(base)] = true
+                            used[string.lower(Basename(target))] = true
                         end
+                    else
+                        used[string.lower(Basename(target))] = true
                     end
-                else
-                    used[string.lower(base)] = true
                 end
             end
         end

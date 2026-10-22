@@ -18,6 +18,7 @@
 
 local Fav = import('/lua/editor/favourites.lua')
 local Thumbs = import('/lua/editor/assetthumbs.lua')
+local Texmap = import('/lua/editor/texmap.lua')
 
 Kinds = {
     { id = 'units', label = 'Units' },
@@ -132,19 +133,60 @@ local function BuildProps()
     return list
 end
 
+-- The map's own folder (texmap.lua): its textures are listed beside the game's, in the group 'This map' (a capital letter sorts before the lower case environment names).
+local sigs = {}       -- kind -> { sig, at }: what the map folder held when the list was made
+
+local function NoteMapFolder(kind)
+    sigs[kind] = { sig = Texmap.Signature(), at = GetSystemTimeSeconds() }
+end
+
+--- True when files came or went in the map folder since the list of `kind` was made (looked at most every 2 seconds).
+local function MapChanged(kind)
+    local s = sigs[kind]
+    if not s then return false end
+    local now = GetSystemTimeSeconds()
+    if now - s.at < 2 then return false end
+    s.at = now
+    local sig = Texmap.Signature()
+    if sig ~= s.sig then
+        s.sig = sig
+        return true
+    end
+    return false
+end
+
 local function BuildDecals()
     local list = {}
     local Decals = import('/lua/editor/decals.lua')
+    for _, f in Texmap.Files{ staged = false } do
+        if string.find(f.lower, '/decals/', 1, true) and not string.find(f.lower, 'normal', 1, true) then
+            local name = string.gsub(string.gsub(f.name, '%.[dD][dD][sS]$', ''), '_[aA][lL][bB][eE][dD][oO]$', '')
+            table.insert(list, Finish({ kind = 'decals', key = f.path, name = name, sub = Texmap.LABEL, source = f.path, group = Texmap.LABEL,
+                tags = { group = Texmap.LABEL, type = TypeOf(f.lower, DECAL_TYPES, 'other') } }))
+        end
+    end
     for _, e in Decals.Catalog() do
         local lower = Lower(e.path)
         table.insert(list, Finish({ kind = 'decals', key = e.path, name = e.name, sub = e.group, source = e.path, group = e.group,
             tags = { group = e.group, type = TypeOf(lower, DECAL_TYPES, 'other') } }))
     end
+    NoteMapFolder('decals')
     return list
 end
 
 local function BuildTextures()
     local list = {}
+    for _, f in Texmap.Files() do
+        if not string.find(f.lower, '/decals/', 1, true) then
+            local kind = string.find(f.lower, 'normal', 1, true) and 'normal' or 'albedo'
+            local name = string.gsub(f.name, '%.[dD][dD][sS]$', '')
+            name = string.gsub(name, '_[aA][lL][bB][eE][dD][oO]$', '')
+            name = string.gsub(name, '_[nN][oO][rR][mM][aA][lL][sS]?$', '')
+            table.insert(list, Finish({ kind = 'textures', key = f.path, name = name .. (kind == 'normal' and ' (normals)' or ''), sub = Texmap.LABEL, source = f.path, group = Texmap.LABEL,
+                tags = { group = Texmap.LABEL, type = kind } }))
+        end
+    end
+    NoteMapFolder('textures')
     for _, f in DiskFindFiles('/env', '*.dds') or {} do
         local lower = Lower(f)
         if string.find(lower, '/layers/', 1, true) then
@@ -211,6 +253,14 @@ end
 local BUILDERS = { units = BuildUnits, props = BuildProps, decals = BuildDecals, markers = BuildMarkers, textures = BuildTextures, effects = BuildEffects, mods = BuildMods }
 
 function Entries(kind)
+    if cache[kind] and (kind == 'textures' or kind == 'decals') and MapChanged(kind) then
+        cache[kind] = nil
+        cache.all = nil
+    end
+    if kind == 'all' and cache.all then
+        Entries('textures')            -- (a changed map folder drops the cache of 'all' too)
+        Entries('decals')
+    end
     if cache[kind] then return cache[kind] end
     local list
     if kind == 'all' then
@@ -307,7 +357,7 @@ function Thumb(entry)
         end
         return ok and path or nil
     elseif entry.kind == 'props' or entry.kind == 'decals' or entry.kind == 'textures' then
-        return Thumbs.Request(entry.kind, entry.key, entry.source)
+        return Thumbs.Request(entry.kind, entry.key, entry.source, 'assets')
     end
     return nil
 end

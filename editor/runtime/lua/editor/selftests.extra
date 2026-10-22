@@ -28,3 +28,10 @@ selftest_symdetect
 selftest_strataconv
 selftest_maptextures
 selftest_texscale
+selftest_brushshape
+selftest_normalpreview
+selftest_texbrowser
+selftest_unitfit
+selftest_camframe
+selftest_console
+selftest_layout_fields

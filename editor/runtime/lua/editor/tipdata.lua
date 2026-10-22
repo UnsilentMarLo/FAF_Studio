@@ -396,6 +396,8 @@ Widget = {
     ["layers/texture set"] = "Gives all layers the textures of a ready-made set (temperate, desert, tropical ...): grass, rock, sand, dirt, wet ground, high rock, dark rock and snow on layers 1 to 8. The paint is not changed.",
     ["layers/shader"] = "The terrain shader of the map: how the layers are blended and what the textures must contain. Opens the shader browser with notes on every shader.",
     ["layers/up"] = "Move the layer one place up (it covers the layers below).",
+    ["layers/relief"] = "Show the normal map as a shaded relief, lit from the upper left: bumps and dents are easy to see. Made once per texture.",
+    ["layers/raw"] = "Show the normal map texture as it is stored (mostly blue and purple; flat ground is plain blue).",
     ["lighting/[field]"] = "Type a value and press Enter.",
     ["lighting/bloom"] = "How much bright areas glow.",
     ["lighting/lighting multiplier"] = "How bright the sun light is.",
@@ -875,6 +877,12 @@ Widget = {
     ["properties/rotate -#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
     ["properties/rotate +#.#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
     ["properties/rotate -#.#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
+    ["console/errors"] = "Show or hide error lines (red): things that failed, and Lua errors from the command line.",
+    ["console/warnings"] = "Show or hide warning lines (yellow).",
+    ["console/status"] = "Show or hide the messages of the status line at the bottom of the editor (blue).",
+    ["console/info"] = "Show or hide ordinary log lines and the results of commands.",
+    ["console/copy"] = "Copy the lines that are shown (with time and level) to the clipboard.",
+    ["console/scroll lock"] = "When on, the list stays where it is instead of jumping to new lines. When off it follows new lines until you scroll up.",
 }
 
 Command = {

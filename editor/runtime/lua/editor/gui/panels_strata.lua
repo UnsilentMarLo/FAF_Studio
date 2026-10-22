@@ -8,6 +8,10 @@
 --   Convert layers...   the shader browser asking for the shader to convert the layers to (paint masks, layer 8, Upper layer: stratumconv.lua, convertdialog.lua)
 --   Tile size           world units one texture tile covers; Enter applies
 --   right click a row   the same as menu entries ('context.list')
+--   Relief / Raw        the normal picture: a shaded relief made from the normals (normalpreview.lua, the default) or the texture as it is
+--
+-- Layout: the list takes the height the panel has left over (up to all ten layers; at least MIN_ROWS rows, then it scrolls itself); everything below it keeps its size, and the panel
+-- scrolls (widgets.lua ScrollContent) when the whole is taller than the panel. The pictures stand side by side when the panel is wide enough, else one above the other.
 
 local Bitmap = import('/lua/maui/bitmap.lua').Bitmap
 local Group = import('/lua/maui/group.lua').Group
@@ -24,6 +28,18 @@ local Shaders = import('/lua/editor/shaders.lua')
 live = {}
 picker = false     -- the open texture picker { group }
 NONE = '*none*'    -- the picker's "no texture" entry
+MIN_ROWS = 6       -- fewest list rows the layout keeps before the whole panel scrolls instead
+
+--- 'relief' or 'raw': what the normal map picture shows (remembered in the user settings).
+function NormalView()
+    local ok, v = pcall(function() return import('/lua/editor/userdata.lua').Get('layers_normalview', 'relief') end)
+    if ok and v == 'raw' then return 'raw' end
+    return 'relief'
+end
+
+function SetNormalView(v)
+    pcall(function() import('/lua/editor/userdata.lua').Set('layers_normalview', v) end)
+end
 
 -- ---- texture picker ----------------------------------------------------------------------------------------------------------------------
 
@@ -38,6 +54,12 @@ function OpenPicker(kind, title, done)
         title = title,
         sources = { { '/env', kind == 'albedo' and '*_albedo.dds' or '*_normals.dds' } },
         match = function(path) return string.find(string.lower(path), '/layers/', 1, true) ~= nil end,
+        -- the map's own textures (category 'This map'): any .dds of its folder that is not a decal; a normal map is one with 'normal' in its name, everything else is an albedo texture
+        mapMatch = function(path, lower)
+            if string.find(lower, '/decals/', 1, true) then return false end
+            local normal = string.find(lower, 'normal', 1, true) ~= nil
+            return (kind == 'albedo') ~= normal
+        end,
         done = done,
     }
 end
@@ -149,7 +171,7 @@ Panels.Register{
             b:SetSolidColor(Skin.color.panelAlt)
             b.HandleEvent = function(self, event)
                 if event.Type == 'MouseEnter' then
-                    pcall(function() import('/lua/editor/gui/tooltip.lua').Hover(self, function() return tip end, event) end)
+                    pcall(function() import('/lua/editor/gui/tooltip.lua').Hover(self, function() if type(tip) == 'function' then return tip() end return tip end, event) end)
                     return true
                 elseif event.Type == 'MouseExit' then
                     pcall(function() import('/lua/editor/gui/tooltip.lua').Leave(self) end)
@@ -163,10 +185,63 @@ Panels.Register{
             end
             return b
         end
-        P.preview = Picture('albedo', 'The albedo (colour) texture of the layer. Click to pick another one; the matching normal map follows.')
-        P.previewNormal = Picture('normal', 'The normal map of the layer. Click to pick another one.')
-        P.previewName = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
-        P.previewNormalName = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
+        -- the full texture names, for the tooltips of the pictures (the captions below them wrap, but a very long name still ends in "...")
+        P.full = { albedo = '', normal = '' }
+        local function FullTip(kind, text)
+            return function()
+                if P.full[kind] ~= '' then return text .. '\n' .. P.full[kind] end
+                return text
+            end
+        end
+        P.preview = Picture('albedo', FullTip('albedo', 'The albedo (colour) texture of the layer. Click to pick another one; the matching normal map follows.'))
+        P.previewNormal = Picture('normal', FullTip('normal', 'The normal map of the layer, drawn as a shaded relief (Raw shows the texture itself). Click to pick another one.'))
+
+        -- a caption under a picture: a heading line and the file name over two lines (cut at _ - . where it can, "..." only when two lines are not enough)
+        local function Caption()
+            local function Line() return W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' }) end
+            return { head = Line(), l1 = Line(), l2 = Line() }
+        end
+        P.cap = { albedo = Caption(), normal = Caption() }
+        local function SetCaption(c, head, name, maxW)
+            c.head:SetText(head)
+            c.l1:SetText('')
+            c.l2:SetText('')
+            if name == '' then return end
+            c.l1:SetText(name)
+            if c.l1.Width() <= maxW then return end
+            local cut = 0
+            for i = 1, string.len(name) - 1 do
+                local ch = string.sub(name, i, i)
+                if ch == '_' or ch == '-' or ch == '.' or ch == ' ' then
+                    c.l1:SetText(string.sub(name, 1, i))
+                    if c.l1.Width() > maxW then break end
+                    cut = i
+                end
+            end
+            if cut == 0 then                      -- no break point fits: as many letters as fit
+                cut = 1
+                for i = 2, string.len(name) - 1 do
+                    c.l1:SetText(string.sub(name, 1, i))
+                    if c.l1.Width() > maxW then break end
+                    cut = i
+                end
+            end
+            c.l1:SetText(string.sub(name, 1, cut))
+            W.Fit(c.l2, string.sub(name, cut + 1), maxW)
+        end
+
+        -- what the normal picture shows: a relief made from the normals, or the raw texture
+        P.viewLabel = W.Label(group, 'Normal picture', 0, 0, { color = Skin.color.textDim, size = 'small' })
+        P.viewRelief = W.Button(group, 'Relief', 0, 0, Skin.S(60), Skin.S(22), function()
+            SetNormalView('relief')
+            P.shownKey = nil
+            P:Refresh()
+        end, { toggle = true })
+        P.viewRaw = W.Button(group, 'Raw', 0, 0, Skin.S(50), Skin.S(22), function()
+            SetNormalView('raw')
+            P.shownKey = nil
+            P:Refresh()
+        end, { toggle = true })
 
         -- tile sizes: field, bar and - / + like every other number setting
         local function SizeSlider(which, label)
@@ -324,23 +399,38 @@ Panels.Register{
             end
             local l = Selected()
             -- the preview and the size fields only change when the selected layer or its texture does (a field may be mid-edit)
-            local key = l and (l.index .. '|' .. l.albedo .. '|' .. l.normal .. '|' .. tostring(l.size) .. '|' .. tostring(l.nsize)) or ''
+            local view = NormalView()
+            local key = l and (l.index .. '|' .. l.albedo .. '|' .. l.normal .. '|' .. tostring(l.size) .. '|' .. tostring(l.nsize) .. '|' .. view) or view
+            P.viewRelief:SetOn(view == 'relief')
+            P.viewRaw:SetOn(view == 'raw')
             if key ~= P.shownKey then
                 P.shownKey = key
                 local pw = P.previewW or Skin.S(72)
                 if l and l.albedo ~= '' and l.albedo ~= Strata.CLEAR then
                     P.preview:SetTexture(l.albedo)
-                    W.Fit(P.previewName, 'Albedo: ' .. l.file, pw)
+                    P.full.albedo = l.file or ''
+                    SetCaption(P.cap.albedo, 'Albedo', l.file or '', pw)
                 else
                     P.preview:SetSolidColor(Skin.color.panelAlt)
-                    P.previewName:SetText(l and 'Albedo: none' or '')
+                    P.full.albedo = ''
+                    SetCaption(P.cap.albedo, l and 'Albedo: none' or '', '', pw)
                 end
                 if l and l.normal ~= '' and l.normal ~= Strata.NONE_NORMAL then
-                    P.previewNormal:SetTexture(l.normal)
-                    W.Fit(P.previewNormalName, 'Normal: ' .. (l.normalFile or ''), pw)
+                    -- the relief picture is made once per texture and kept (normalpreview.lua); when it cannot be made the texture itself is shown
+                    local shown, mode = l.normal, 'Normal'
+                    if view == 'relief' then
+                        local ok, relief = pcall(function()
+                            return import('/lua/editor/normalpreview.lua').Preview(l.normal, { albedo = (l.albedo ~= Strata.CLEAR) and l.albedo or nil })
+                        end)
+                        if ok and relief then shown, mode = relief, 'Normal relief' end
+                    end
+                    P.previewNormal:SetTexture(shown)
+                    P.full.normal = l.normalFile or ''
+                    SetCaption(P.cap.normal, mode, l.normalFile or '', pw)
                 else
                     P.previewNormal:SetSolidColor(Skin.color.panelAlt)
-                    P.previewNormalName:SetText(l and 'Normal: none' or '')
+                    P.full.normal = ''
+                    SetCaption(P.cap.normal, l and 'Normal: none' or '', '', pw)
                 end
                 P.size:Refresh()
                 P.nsize:Refresh()
@@ -358,12 +448,80 @@ Panels.Register{
             end
         end
 
+        --- Lays out everything below the list from `y`: the two pictures with their captions (side by side, or one above the other), the Relief / Raw buttons, the tile sliders, Optimal and
+        --- the buttons. `place` false only measures. Returns the y below the last control.
+        local function Below(y, w, ps, side, place)
+            local pad, lineH = Skin.S(8), Skin.S(15)
+            local capH = lineH * 3 + Skin.S(2)
+            local function Pic(pic, cap, x, py)
+                if place then
+                    W.Place(pic, group, x, py, ps, ps)
+                    W.Place(cap.head, group, x, py + ps + Skin.S(2))
+                    W.Place(cap.l1, group, x, py + ps + Skin.S(2) + lineH)
+                    W.Place(cap.l2, group, x, py + ps + Skin.S(2) + 2 * lineH)
+                end
+                return py + ps + Skin.S(2) + capH
+            end
+            local y1 = Pic(P.preview, P.cap.albedo, pad, y)
+            local y2
+            if side then
+                y2 = Pic(P.previewNormal, P.cap.normal, 2 * pad + ps, y)
+            else
+                y2 = Pic(P.previewNormal, P.cap.normal, pad, y1 + Skin.S(4))
+            end
+            y = math.max(y1, y2) + Skin.S(4)
+            -- Relief / Raw: beside their label when there is room, else under it
+            local items = { { P.viewRelief, Skin.S(60) }, { P.viewRaw, Skin.S(50) } }
+            local bx = pad + P.viewLabel.Width() + Skin.S(8)
+            if w - pad - bx >= Skin.S(114) then
+                if place then W.Place(P.viewLabel, group, pad, y + Skin.S(4)) end
+                y = W.Flow(group, items, bx, y, w - pad - bx, Skin.S(22), Skin.S(4), not place) + Skin.S(8)
+            else
+                if place then W.Place(P.viewLabel, group, pad, y) end
+                y = W.Flow(group, items, pad, y + Skin.S(16), w - 2 * pad, Skin.S(22), Skin.S(4), not place) + Skin.S(8)
+            end
+            if place then P.size:Place(pad, y, w - 2 * pad) end
+            y = y + Skin.S(50)
+            if place then P.nsize:Place(pad, y, w - 2 * pad) end
+            y = y + Skin.S(54)
+            local ow = Skin.S(70)
+            if place then
+                W.Place(P.optimal, group, pad, y, ow, Skin.S(24))
+                W.Center(P.optimal.label, P.optimal, 0, 0, ow, Skin.S(24))
+            end
+            if w - 2 * pad - ow - Skin.S(8) >= Skin.S(150) then
+                if place then
+                    P.densityW = w - 2 * pad - ow - Skin.S(8)
+                    W.Place(P.density, group, pad + ow + Skin.S(8), y + Skin.S(5))
+                end
+                y = y + Skin.S(30)
+            else
+                if place then
+                    P.densityW = w - 2 * pad
+                    W.Place(P.density, group, pad, y + Skin.S(28))
+                end
+                y = y + Skin.S(48)
+            end
+            y = W.Flow(group, { { P.up, P.up.Width() }, { P.down, P.down.Width() }, { P.clearMask, P.clearMask.Width() }, { P.fillMask, P.fillMask.Width() } },
+                       pad, y, w - 2 * pad, Skin.S(24), Skin.S(4), not place) + Skin.S(6)
+            local sw = math.min(Skin.S(220), w - 2 * pad)
+            for _, b in { P.texset, P.shader, P.convert } do
+                if place then
+                    W.Place(b, group, pad, y, sw, Skin.S(24))
+                    W.Center(b.label, b, 0, 0, sw, Skin.S(24))
+                end
+                y = y + Skin.S(30)
+            end
+            return y + pad
+        end
+
         function P:OnResize(w, h)
             P.w, P.h = w, h
             P.laidOut = true
+            W.BeginLayout(group)          -- the height of the content is measured anew (it shrinks when the panel gets wider)
+            Reload()                      -- the number of layers sets the height the list wants
             local pad = Skin.S(8)
             local rowH = Skin.S(26)
-            local detail = Skin.S(396)
             local top = pad
             for _, l in P.warnParas do l:Destroy() end
             P.warnParas = {}
@@ -377,49 +535,29 @@ Panels.Register{
             else
                 W.Place(P.warnBtn, group, -4000, 0, Skin.S(150), Skin.S(24))
             end
-            local listH = math.max(rowH * 3, math.min(rowH * 10, h - top - pad - detail))
-            P.list:SetRect(pad, top, w - 2 * pad, listH)
-            local y = top + listH + Skin.S(8)
-            local ps = math.max(Skin.S(56), math.min(Skin.S(120), math.floor((w - 3 * pad) / 2)))
-            P.previewW = ps
-            W.Place(P.preview, group, pad, y, ps, ps)
-            W.Place(P.previewNormal, group, 2 * pad + ps, y, ps, ps)
-            W.Place(P.previewName, group, pad, y + ps + Skin.S(2))
-            W.Place(P.previewNormalName, group, 2 * pad + ps, y + ps + Skin.S(2))
-            P.shownKey = nil          -- the file names are fitted to the picture width
-            y = y + ps + Skin.S(24)
-            P.size:Place(pad, y, w - 2 * pad)
-            y = y + Skin.S(50)
-            P.nsize:Place(pad, y, w - 2 * pad)
-            y = y + Skin.S(54)
-            local ow = Skin.S(70)
-            W.Place(P.optimal, group, pad, y, ow, Skin.S(24))
-            W.Center(P.optimal.label, P.optimal, 0, 0, ow, Skin.S(24))
-            if w - 2 * pad - ow - Skin.S(8) >= Skin.S(150) then
-                P.densityW = w - 2 * pad - ow - Skin.S(8)
-                W.Place(P.density, group, pad + ow + Skin.S(8), y + Skin.S(5))
-                y = y + Skin.S(30)
+            -- The pictures are as large as the width allows (side by side, or one above the other in a narrow panel), but shrink step by step while the list would not get its ten rows;
+            -- what the list is then given is what remains (at least MIN_ROWS rows; below that the panel scrolls, widgets.lua ScrollContent).
+            local rows = math.max(1, table.getn(P.rows))
+            local wantRows = math.max(MIN_ROWS, rows)
+            local avail = h - top - pad - Skin.S(8)
+            local side = math.floor((w - 3 * pad) / 2) >= Skin.S(80)
+            local maxPs, minPs
+            if side then
+                maxPs, minPs = math.min(Skin.S(150), math.floor((w - 3 * pad) / 2)), Skin.S(72)
             else
-                P.densityW = w - 2 * pad
-                W.Place(P.density, group, pad, y + Skin.S(28))
-                y = y + Skin.S(48)
+                maxPs, minPs = math.max(Skin.S(48), math.min(Skin.S(130), w - 2 * pad)), Skin.S(64)
             end
-            P.shownKey = nil          -- the density line is fitted to its width
-            local bx = pad
-            for _, b in { P.up, P.down, P.clearMask, P.fillMask } do
-                W.Place(b, group, bx, y, b.Width(), Skin.S(24))
-                bx = bx + b.Width() + Skin.S(4)
+            minPs = math.min(minPs, maxPs)
+            local ps = maxPs
+            while ps > minPs and avail - (Below(0, w, ps, side, false)) < wantRows * rowH do
+                ps = math.max(minPs, ps - Skin.S(10))
             end
-            y = y + Skin.S(30)
-            local sw = math.min(Skin.S(220), w - 2 * pad)
-            W.Place(P.texset, group, pad, y, sw, Skin.S(24))
-            W.Center(P.texset.label, P.texset, 0, 0, sw, Skin.S(24))
-            y = y + Skin.S(30)
-            W.Place(P.shader, group, pad, y, sw, Skin.S(24))
-            W.Center(P.shader.label, P.shader, 0, 0, sw, Skin.S(24))
-            y = y + Skin.S(30)
-            W.Place(P.convert, group, pad, y, sw, Skin.S(24))
-            W.Center(P.convert.label, P.convert, 0, 0, sw, Skin.S(24))
+            local lowerH = Below(0, w, ps, side, false)
+            local listH = math.max(MIN_ROWS * rowH, math.min(wantRows * rowH, avail - lowerH))
+            P.list:SetRect(pad, top, w - 2 * pad, listH)
+            P.previewW = ps
+            P.shownKey = nil              -- the file names are cut to the picture width, the density line to its width
+            Below(top + listH + Skin.S(8), w, ps, side, true)
             P:Refresh()
         end
 

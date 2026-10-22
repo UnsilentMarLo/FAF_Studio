@@ -95,6 +95,31 @@ function Run()
         table.insert(out, '  skip no overlay natives in this engine')
     end
 
+    -- ---- the marker meshes are destroyed when a map is queued (the rocks of a map's resource markers stayed in the next map: a WorldMesh outlives the Lua modules) ----------------
+    do
+        local MV = import('/lua/editor/markervis.lua')
+        local Placer = import('/lua/editor/placer.lua')
+        local Control = import('/lua/editor/control.lua')
+        chain.ZZ_MASS = { type = 'Mass', resource = true, amount = 100, size = 1, prop = '/env/common/props/markers/M_Mass_prop.bp', position = { 40, ed_terrain_get(40, 40) or 0, 40, type = 'VECTOR3' } }
+        table.insert(added, 'ZZ_MASS')
+        MV.Update()
+        local entries, meshes = MV.Count()
+        Check(entries > 0 and meshes > 0, 'a resource marker has its deposit mesh (' .. entries .. ' entries, ' .. meshes .. ' meshes)')
+        Control.Teardown()
+        entries, meshes = MV.Count()
+        Check(entries == 0 and meshes == 0 and Placer.GhostCount() == 0, 'control.Teardown destroys every marker mesh and placement ghost (' .. entries .. ' / ' .. meshes .. ')')
+        if rawget(_G, 'ed_overlay_count') then Check(ed_overlay_count() == 0, 'and empties the engine overlay') end
+        MV.Update()
+        entries, meshes = MV.Count()
+        Check(entries == 0 and meshes == 0, 'nothing is built again while the session ends (' .. entries .. ' / ' .. meshes .. ')')
+        MV.Resume()
+        Placer.Resume()
+        MV.Update()
+        entries = MV.Count()
+        Check(entries > 0, 'after Resume the markers are drawn again')
+        MV.Clear()
+    end
+
     -- clean up
     for _, name in added do chain[name] = nil end
     doc.save.Areas.AREA_1 = oldArea

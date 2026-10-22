@@ -1,6 +1,13 @@
 do
     -- editor: after SessionEndGame() the engine asks for the front end; open the queued map instead
     local baseStartFrontEndUI = StartFrontEndUI
+
+    -- The editor modules of the session that just ended free what they made in the engine (world meshes, overlay objects) before the module cache is dropped: a WorldMesh keeps its
+    -- own Lua table alive, so dropping the module that holds it does not free it (lua/editor/control.lua Teardown; it only looks at modules that are loaded).
+    local function EditorTeardown()
+        local control = __modules and __modules['/lua/editor/control.lua']
+        if control and control.Teardown then pcall(control.Teardown) end
+    end
     function StartFrontEndUI()
         if HasCommandLineArg('/editor') then
             if rawget(_G, 'ed_overlay_clear') then ed_overlay_clear() end         -- the previous session's overlay objects (icons, lines) outlive it
@@ -12,6 +19,7 @@ do
                 -- UI modules keep per-session state in file-level locals (score.lua caches the scenario
                 -- table). A new game normally starts from a fresh Lua state; here the state is reused, so drop
                 -- the module cache and let everything load again for the new session.
+                EditorTeardown()
                 __modules = {}
                 import('/lua/SinglePlayerLaunch.lua').StartCommandLineSession(nextMap, false)
                 return
@@ -21,6 +29,7 @@ do
         -- then offers what to do. After that, an empty queue means the session was ended for some other reason: the front end as before.
         if HasCommandLineArg('/editor') and not HasCommandLineArg('/map') and ed_read_file('editor_boot.txt') == '0' then
             LOG('EDITOR: no map given, opening the blank map with the start screen')
+            EditorTeardown()
             __modules = {}
             import('/lua/SinglePlayerLaunch.lua').StartCommandLineSession('editor_blank', false)
             return

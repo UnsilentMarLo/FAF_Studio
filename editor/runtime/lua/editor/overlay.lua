@@ -623,12 +623,17 @@ local function BrushPreview(p, r, mode, slot)
     -- A round brush's weights depend on the pointer only through its offset inside a sample cell: that is snapped to 1/4 unit, and the table of values is kept per radius /
     -- falloff / strength / offset, so moving the pointer over the map rebuilds nothing but the position (the table used to be rebuilt, ~10000 weight calls for a radius of 50, on
     -- every frame the pointer moved, also while a stroke was dragged).
+    -- A shaped brush (brushes.lua) is the same: its weights depend on the offset inside a cell, the shape, the turn and the radius, and the last 16 offsets' tables are kept
+    -- (Brushes.Fill makes one in a tight loop; the old loop called Terrain.BrushWeight per sample).
     local round = (Brushes.Active == 'round') and mode ~= 'stamp' and mode ~= 'stamp_paint'
+    local shaped = (not round) and mode ~= 'stamp' and mode ~= 'stamp_paint'
+    local turn = shaped and Terrain.StrokeTurn() or 0
     local px, pz = p[1], p[3]
-    if round then
+    if round or shaped then
         px = math.floor(px * 4 + 0.5) / 4
         pz = math.floor(pz * 4 + 0.5) / 4
     end
+    if shaped then extra = string.format('%.1f', turn) end
     local key = string.format('%.2f|%.2f|%.2f|%.2f|%.2f|%s|%s|%d|%s', px, pz, r, B.falloff, scale, mode, Brushes.Active, Brushes.Angle, extra)
     if key == previewKeys[slot] then return end
     previewKeys[slot] = key
@@ -637,11 +642,14 @@ local function BrushPreview(p, r, mode, slot)
     local nw, nh = x1 - x0 + 1, z1 - z0 + 1
     local values
     local valuesKey
-    if round then
+    if round or shaped then
         valuesKey = string.format('%.2f|%.2f|%.2f|%s|%.2f|%.2f', r, B.falloff, scale, mode, px - math.floor(px), pz - math.floor(pz))
+        if shaped then valuesKey = valuesKey .. '|' .. Brushes.Active .. '|' .. Brushes.Angle .. '|' .. extra end
         local cached = previewValues[slot]
         if cached and cached.key == valuesKey then
             values = cached.values
+        elseif shaped and cached and cached.multi then
+            values = cached.multi[valuesKey]
         end
     end
     if not values then
@@ -671,6 +679,8 @@ local function BrushPreview(p, r, mode, slot)
                     end
                 end
             end
+        elseif shaped then
+            values = Brushes.Fill(Brushes.Active, r, turn, px, pz, x0, z0, x1, z1, 255 * scale)
         else
             for z = z0, z1 do
                 for x = x0, x1 do
@@ -682,7 +692,16 @@ local function BrushPreview(p, r, mode, slot)
             end
         end
         if valuesKey then
-            previewValues[slot] = { key = valuesKey, values = values }
+            local old = previewValues[slot]
+            local entry = { key = valuesKey, values = values }
+            if shaped then
+                local multi = old and old.multi
+                if not multi or old.count >= 16 then multi = {} ; entry.count = 0 else entry.count = old.count end
+                multi[valuesKey] = values
+                entry.count = entry.count + 1
+                entry.multi = multi
+            end
+            previewValues[slot] = entry
         end
     end
     ed_overlay_nodes('cur:brush' .. slot, x0, z0, nw, nh, values, 'FFFFFF', 190)
@@ -985,7 +1004,7 @@ local function ArmyGhost(p)
         Remove('cur:armyr' .. i)
     end
     armyGhosts = count
-    MarkerVis.Ghost(spots, tpl and tpl.prop)
+    MarkerVis.Ghost(spots, tpl and tpl.prop, 'Blank Marker', 'ARMY_1')
 end
 
 --- The Draw chain tool's preview: the ring and cross of a marker at the pointer, and a line from the end of the chain being drawn (chains.lua DrawTail) to it.
@@ -1169,6 +1188,7 @@ function Clear()
     TerrainEpoch.Bump()
     pcall(function() import('/lua/editor/pathtool.lua').Forget() end)
     pcall(function() import('/lua/editor/chains.lua').Forget() end)
+    pcall(function() import('/lua/editor/camframe.lua').Forget() end)
     pcall(function() import('/lua/editor/unitrings.lua').Forget() end)
     pcall(function() import('/lua/editor/gizmo.lua').Forget() end)
     pcall(function() import('/lua/editor/placer.lua').Clear() end)
@@ -1202,6 +1222,7 @@ local function DrawLayers(ui, view, px)
     Perf.End('overlay: pathtool', t0)
     t0 = Perf.Begin()
     pcall(function() import('/lua/editor/chains.lua').Draw(ui) end)        -- marker chains (parity audit)
+    pcall(function() import('/lua/editor/camframe.lua').Update(ui, view) end)      -- the field of view of a selected Camera Info marker
     Perf.End('overlay: chains', t0)
     t0 = Perf.Begin()
     pcall(function() import('/lua/editor/unitrings.lua').Draw(ui) end)     -- range rings of the selected units

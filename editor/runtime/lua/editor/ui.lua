@@ -165,6 +165,8 @@ end
 --- was silently dropped under its pcall (and raised where it had none) while this was local.
 function Say(text)
     State.message = text
+    -- the Console panel lists the status line messages too (consolelog.lua; a repeat of the newest line only raises its count)
+    if text ~= nil and text ~= '' then pcall(function() import('/lua/editor/consolelog.lua').Add('status', text, 'status') end) end
 end
 
 local function FindTool(id)
@@ -1120,6 +1122,11 @@ function StatusText()
     local sel = ObjectTools.SelectionText()
     if sel ~= '' then
         brush = brush .. '   |   ' .. sel
+    end
+    -- why the preview of a unit being placed or moved is red (placer.lua)
+    local why = import('/lua/editor/placer.lua').Hint()
+    if why ~= '' then
+        brush = brush .. '   |   ' .. why
     end
     return string.format('%s   |   %s%s   |   undo %d redo %d   |   %s', pos, tool and tool.label or '?',
         brush, undo, redo, State.message)

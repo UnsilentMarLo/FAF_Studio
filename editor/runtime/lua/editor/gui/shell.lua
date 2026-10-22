@@ -20,6 +20,7 @@ local Menu = import('/lua/editor/gui/menu.lua')
 local UserData = import('/lua/editor/userdata.lua')
 import('/lua/editor/gui/menus.lua')
 local Perf = import('/lua/editor/perf.lua')
+pcall(function() import('/lua/editor/consolelog.lua').Install() end)      -- the Console panel records LOG, WARN, SPEW and print (once per process)
 -- Every gui/panels_*.lua registers its panels when imported: a new panel file needs no edit here (builtin first, the rest by file name).
 -- A panel module may define a module-level Refresh(), which the tick below calls about four times a second (set NoAutoRefresh = true to opt out).
 PanelModules = {}
