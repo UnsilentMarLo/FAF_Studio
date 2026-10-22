@@ -1,5 +1,5 @@
 -- Editor worlds have no commanders: the map's own INITIAL groups are map content and stay, but no ACU is
--- created for any army and the armies get no AI.
+-- created for any army and the armies get no AI. Nothing fires while editing: units hold fire and the armies are neutral (CreateResources below, editorsim/peace.lua).
 do
     local baseCreateInitialArmyGroup = CreateInitialArmyGroup
 
@@ -11,6 +11,8 @@ do
                 if u and not u.Dead and u.SetImmobile then
                     u.EdFrozen = true
                     pcall(function() u:SetImmobile(true) end)
+                    -- ... and does not fire (hold fire; the armies are made neutral in CreateResources below, editorsim/peace.lua)
+                    pcall(function() import('/lua/editorsim/peace.lua').Hold(u) end)
                 end
             end
             return group, cdr
@@ -29,6 +31,11 @@ do
 
     function CreateResources()
         if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then
+            -- Editing is quiet: nothing fires. BeginSession calls this after InitializeArmies, the map script's OnPopulate / OnStart and BeginSessionTeams (the places that set the
+            -- diplomacy), so this is the first point where every army pair can be made neutral for good; Callbacks.EdSetPlay (simcallbacks.lua) gives the scenario's own diplomacy back
+            -- for a test run. No wait inside the pcall (Enter only forks its sweep thread).
+            local ok, err = pcall(function() import('/lua/editorsim/peace.lua').Enter() end)
+            if not ok then WARN('editor: armies could not be made neutral: ' .. tostring(err)) end
             for _, tblData in GetMarkers() do
                 if tblData.resource then
                     local x, y, z = unpack(tblData.position)

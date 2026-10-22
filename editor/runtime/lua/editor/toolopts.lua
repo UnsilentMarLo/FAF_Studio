@@ -10,6 +10,7 @@
 --   Quantize(kind, degrees) -> degrees              a turn rounded to the step (unchanged when free)
 --   RandomHeading(kind) -> radians                  a random heading, rounded to the step when stepped
 --   LimitAreas() -> bool | nil                      the areas' "limit to map bounds" (tools.lua LimitAreas, when it exists); SetLimitAreas(on)
+--   SelectBoxCamera() -> bool | nil                 "Selection box follows the camera" (tools.lua SelectBoxFollowsCamera: the select tools' box is a rectangle on the screen); SetSelectBoxCamera(on)
 --
 -- Lua 5.0 dialect.
 
@@ -130,5 +131,20 @@ function SetLimitAreas(on)
         local set = rawget(Tools, 'SetLimitAreas')
         if type(set) == 'function' then set(on and true or false)      -- tools.lua keeps its own saved copy (the Properties panel reads the same switch)
         elseif type(f) ~= 'function' and f ~= nil then Tools.LimitAreas = on and true or false end
+    end)
+end
+
+--- Whether the box of the select tools is a rectangle on the screen (true) or on the ground, aligned with the world (false); nil when this editor has no such setting.
+--- tools.lua keeps the switch in the user settings itself.
+function SelectBoxCamera()
+    local ok, v = pcall(function() return import('/lua/editor/tools.lua').SelectBoxFollowsCamera end)
+    if ok and type(v) == 'boolean' then return v end
+    return nil
+end
+
+function SetSelectBoxCamera(on)
+    pcall(function()
+        local set = rawget(import('/lua/editor/tools.lua'), 'SetSelectBoxFollowsCamera')
+        if type(set) == 'function' then set(on and true or false) end
     end)
 end

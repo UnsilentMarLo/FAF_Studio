@@ -516,20 +516,20 @@ local function ScreenToWorld(x, y)
     return nil
 end
 
---- Selects every unit inside the world box { x0, z0, x1, z1 } (replacing the selection, or adding to it); nil box = a click on empty ground.
+--- Selects every unit inside the selection box (tools.lua BoxHas: a rectangle on the screen, or the world box { x0, z0, x1, z1 }; replacing the selection, or adding to it);
+--- nil box = a click on empty ground.
 function SelectBox(box, additive)
     if not box then
         if not additive then ClearSelection() end
         return
     end
-    local minx, maxx = math.min(box[1], box[3]), math.max(box[1], box[3])
-    local minz, maxz = math.min(box[2], box[4]), math.max(box[2], box[4])
+    local BoxHas = import('/lua/editor/tools.lua').BoxHas
     if not additive then Selection = {} end
     local have = {}          -- (the selection grows in the loop: IsSelected would rebuild its set for every unit)
     for _, q in Selection do have[q.army .. '\1' .. q.name] = true end
     for _, u in CachedAll() do
         local key = u.army .. '\1' .. u.name
-        if u.x >= minx and u.x <= maxx and u.z >= minz and u.z <= maxz and not have[key] then
+        if not have[key] and BoxHas(box, u.x, u.z, u.y) then
             have[key] = true
             table.insert(Selection, { army = u.army, name = u.name })
         end

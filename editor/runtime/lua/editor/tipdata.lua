@@ -550,6 +550,7 @@ Widget = {
     ["properties/[field]"] = "Value of the selected object: type a new value and press Enter.",
     ["properties/delete"] = "Delete the selected object. Undo brings it back.",
     ["properties/limit to map bounds"] = "Keep areas inside the map while you draw, move, resize or type them. Turn off to place an area partly or fully off the map.",
+    ["toolsettings/selection box follows the camera"] = "The box you drag with a Select tool is a rectangle on the screen and selects what lies inside it, however the view is turned. Off: a box on the ground, aligned with the map axes.",
     ["properties/limit to playable area"] = "With Limit to map bounds on, keep areas inside the playable area (AREA_1) instead of the whole map.",
     ["properties/mass"] = "The type of the selected marker.",
     ["props/[field]"] = "Type to filter the props by name or folder.",

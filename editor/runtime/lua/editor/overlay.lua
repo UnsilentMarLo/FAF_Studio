@@ -1123,12 +1123,23 @@ local function Pointer(view, ui, mouseX, mouseY)
     end
 
     -- the selection box being dragged out with the select tool
+    -- (a camera-aligned box is a rectangle on the screen: its outline is the sides dropped onto the ground, in one closed line or, where a side reaches the sky, in pieces)
     local mq = Tools.Marquee
-    if mq then
+    local runs = mq and Tools.MarqueeRuns()
+    local shown = 0
+    if runs then
+        for _, run in runs do
+            if shown >= 4 then break end
+            shown = shown + 1
+            local pts = {}
+            for i = 1, table.getn(run), 2 do Push(pts, run[i], run[i + 1], true) end
+            Line(nil, shown == 1 and 'cur:marquee' or ('cur:marquee' .. shown), pts, '80F0FF', 0.4, 2, 3, run.closed)
+        end
+    elseif mq then
+        shown = 1
         Line(nil, 'cur:marquee', Box(math.min(mq[1], mq[3]), math.min(mq[2], mq[4]), math.max(mq[1], mq[3]), math.max(mq[2], mq[4])), '80F0FF', 0.4, 2, 3, true)
-    else
-        Remove('cur:marquee')
     end
+    for i = shown + 1, 4 do Remove(i == 1 and 'cur:marquee' or ('cur:marquee' .. i)) end
 
     -- the area being dragged out
     local s, e = ui.State.areaStart, ui.State.areaEnd
