@@ -727,6 +727,16 @@ The engine rates slope in two ways, both read from its own code and computed nat
   `BiasedDepth` / `VertexZ`), moved towards the camera by 0.25 + 0.008 x distance world units so the overlay wins over the coarser terrain mesh. `ed_overlay_depth(false)` switches the
   test off again. Lines, icons and decals are still drawn without depth. Node grids (`ed_overlay_nodes`, terrain type layers) share one projection per window, project only the nodes a drawn cell needs, draw
   merged runs of flat cells and take `ed_overlay_nodes_rect` for a dab. Tests: `EdOverlaySlopeTest`, `EdOverlayNodesTest` (`scripts/ed_native_tests.py`).
+- **Field overlay (2026-10-22):** `ed_overlay_field(id, fieldHandle, rgb, maxAlpha [, {scale, bias, invert, cutoff, reduce='avg'|'max', px}])` (EdOverlay.cpp, pure parts in
+  `EdOverlayField.h`) shows a field-engine grid (the mask preview of the Mask generator, Recipes "Show", the graph's "show on map") without Lua touching a sample (before: a Lua
+  table of up to 290 x 290 numbers per update, uploaded through `ed_overlay_nodes`). The engine keeps the grid (a shared pointer: Lua may free the handle), maps it to alpha levels
+  (`t = v * scale + bias`, invert, cutoff 0.02) and builds a mip chain of average and maximum levels once per handle and mapping (a few ms; the call is a no-op for the same handle and
+  options). The drawn blocks are a quadtree like the slope view's (leaves cut up from 8 px on screen, merged below 5.5 px, nearest first, 24000 leaves, down to the field's own sample
+  size; blocks with no alpha in or around them are dropped), each leaf corner carries the field reduced over the leaf-sized box centred on it (so leaves of one level agree on shared
+  corners), draped over the ground and depth tested like the other ground layers. While the camera moves the tree is built coarser (2.5 x the size, a quarter of the leaves) and once
+  at full detail when it stops. There is no 300 node limit and no window in Lua. `throttle.lua` (`New(ms, clock)`, `Defer`, `Pump`) coalesces slider updates to one per 80 ms (the last
+  one always runs) for the Mask generator's live preview, its overlay upload and the Fields panel's live previews. Without the native `maskgen.lua` falls back to the old node grid, at the
+  same pace. Tests: `EdOverlayFieldTest`, `selftest_overlayfield`.
 - **Not covered yet:** terrain-type "blocking" cells (`STIMap::IsBlockingTerrain`, from TerrainTypes.lua and the terrain-type layer), water depth limits, and the
   `FlattenSkirt` perimeter check (`OCCUPY_CheckEdgeFlatness`) that normal structures use on top of the flatness rule.
 - The grid and slope views draw without a map document (they used to wait for the first edit).

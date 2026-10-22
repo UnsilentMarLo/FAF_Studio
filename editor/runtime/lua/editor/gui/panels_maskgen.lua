@@ -119,7 +119,8 @@ Panels.Register{
         end
 
         local function Changed()
-            if state.live then Pn:Evaluate() end
+            -- a slider that is being dragged changes many times a second: the preview is evaluated at most once per 80 ms, the last setting always (throttle.lua)
+            if state.live then MaskGen.Defer(function() Pn:Evaluate() Pn:Refresh() end) end
             Pn:Refresh()
         end
 
