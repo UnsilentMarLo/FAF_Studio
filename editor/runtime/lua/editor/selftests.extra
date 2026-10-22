@@ -33,3 +33,5 @@ selftest_normalpreview
 selftest_texbrowser
 selftest_unitfit
 selftest_camframe
+selftest_console
+selftest_layout_fields

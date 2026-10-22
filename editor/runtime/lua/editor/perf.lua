@@ -62,7 +62,9 @@ function Set(on)
     sections, started, frames = {}, false, 0
     local line = 'perf: timing ' .. (Enabled and 'on, a report every 5 s' or 'off')
     LOG('EDITOR ' .. line)
-    pcall(function() import('/lua/editor/gui/model.lua').Log(line) end)
+    pcall(function()
+        if not import('/lua/editor/consolelog.lua').Installed() then import('/lua/editor/gui/model.lua').Log(line) end     -- LOG above already reaches the Console panel
+    end)
 end
 
 function Toggle()
@@ -78,9 +80,12 @@ function Report()
     table.sort(list, function(a, b) return a.s.total > b.s.total end)
     local Model
     pcall(function() Model = import('/lua/editor/gui/model.lua') end)
+    -- the Console panel records LOG itself once consolelog.lua is installed: a second copy through Model.Log would show every line twice
+    local captured = false
+    pcall(function() captured = import('/lua/editor/consolelog.lua').Installed() end)
     local function Out(text)
         LOG('EDITOR perf: ' .. text)
-        if Model then pcall(Model.Log, text) end
+        if Model and not captured then pcall(Model.Log, text) end
     end
     local fps = (span > 0) and (frames / span) or 0
     Out(string.format('--- %.1f s, %.0f frames/s ---', span, fps))

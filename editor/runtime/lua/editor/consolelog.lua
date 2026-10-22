@@ -128,14 +128,16 @@ function JoinArgs(args)
     return table.concat(parts, ' ')
 end
 
+local function Record(level, source, args)
+    local text = JoinArgs(args)
+    if level == 'info' and source == 'LOG' and ErrorLike(text) then level = 'error' end
+    Add(level, text, source)
+end
+
 function Capture(level, source, args)
-    if S.busy then return end
+    if S.busy then return false end
     S.busy = true
-    local ok = pcall(function()
-        local text = JoinArgs(args)
-        if level == 'info' and source == 'LOG' and ErrorLike(text) then level = 'error' end
-        Add(level, text, source)
-    end)
+    local ok = pcall(Record, level, source, args)
     S.busy = false
     return ok
 end
@@ -243,6 +245,7 @@ function ParseCommand(text)
     text = Trim(tostring(text or ''))
     if text == '' then return nil end
     local kind = 'ui'
+    if text == 'sim' then return nil end
     if string.find(text, '^sim%s') then
         kind = 'sim'
         text = Trim(string.sub(text, 4))
@@ -308,7 +311,10 @@ end
 function Execute(text, hooks)
     hooks = hooks or {}
     local kind, code = ParseCommand(text)
-    if not kind then return false end
+    if not kind then
+        if Trim(tostring(text or '')) == 'sim' then Add('error', 'sim needs code after it, for example: sim LOG("hi")', 'command') end
+        return false
+    end
     Remember(text)
     Add('info', '> ' .. Trim(text), 'command')
     if kind == 'sim' then

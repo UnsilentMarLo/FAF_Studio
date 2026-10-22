@@ -877,6 +877,12 @@ Widget = {
     ["properties/rotate -#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
     ["properties/rotate +#.#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
     ["properties/rotate -#.#"] = "Turn the whole selection to the left or right by the rotation step of the Tool Settings panel (15 degrees when stepped rotation is off). The number on the button is the step.",
+    ["console/errors"] = "Show or hide error lines (red): things that failed, and Lua errors from the command line.",
+    ["console/warnings"] = "Show or hide warning lines (yellow).",
+    ["console/status"] = "Show or hide the messages of the status line at the bottom of the editor (blue).",
+    ["console/info"] = "Show or hide ordinary log lines and the results of commands.",
+    ["console/copy"] = "Copy the lines that are shown (with time and level) to the clipboard.",
+    ["console/scroll lock"] = "When on, the list stays where it is instead of jumping to new lines. When off it follows new lines until you scroll up.",
 }
 
 Command = {

@@ -165,6 +165,8 @@ end
 --- was silently dropped under its pcall (and raised where it had none) while this was local.
 function Say(text)
     State.message = text
+    -- the Console panel lists the status line messages too (consolelog.lua; a repeat of the newest line only raises its count)
+    if text ~= nil and text ~= '' then pcall(function() import('/lua/editor/consolelog.lua').Add('status', text, 'status') end) end
 end
 
 local function FindTool(id)
