@@ -18,6 +18,7 @@ local Graph = import('/lua/editor/graph.lua')
 local Nodes = import('/lua/editor/graphnodes.lua')
 local History = import('/lua/editor/history.lua')
 local Terrain = import('/lua/editor/terrain.lua')
+local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 local World = import('/lua/editor/world.lua')
 
 -- ---- the map's ground before the graph (the "Map heights" node reads this) -----------------------------------------------------------------------------
@@ -36,7 +37,9 @@ local function Size()
     return w, h
 end
 
---- The untouched heights at full resolution (a field owned here), checking whether the terrain was edited since.
+--- The untouched heights at full resolution (a field owned here), checking whether the terrain was edited since. The check is always against a fresh read of the document's heights (Fields.Height
+--- + Checksum), never against a revision or a history version, so whoever wrote the ground (brush, generator, tool, import, undo) is seen the next time this runs; when it runs is decided by
+--- Refresh (terrainepoch.lua Stamp).
 function EnsureBase()
     local f = Fields.Height(1)
     local sum = Fields.Checksum(f)
@@ -532,7 +535,22 @@ end
 Main = false
 local mainRevision = -1
 local mainDoc = -1
+local mainHeights = ''        -- TerrainEpoch.Stamp() when the live run last looked at the map heights (or when this module itself last wrote them)
 Report = false
+
+--- True when a "Map heights" node is in the graph (the only node whose result follows the map heights).
+local function ReadsTerrain()
+    for _, n in Graph.Current.nodes do
+        if n.type == 'terrain' then return true end
+    end
+    return false
+end
+
+--- True while a brush stroke is being dragged: every dab moves the document's revision, and the graph catches up when the stroke ends (that pushes a history entry).
+local function Stroking()
+    local ok, v = pcall(function() return import('/lua/editor/ui.lua').State.strokeDepth ~= nil end)
+    return ok and v
+end
 
 function GetMain()
     if not Main then
@@ -547,9 +565,16 @@ function Refresh(force)
     if not Fields.IsAvailable() or not Size() then return nil end
     local run = GetMain()
     local doc = History.Version
-    if not force and mainRevision == Graph.DataRevision and mainDoc == doc then return nil end
+    -- The map heights count as changed when the document's revision moved (terrainepoch.lua Stamp: every height write of any kind), not only when a history entry was pushed: a write that
+    -- records no entry (a generator commit that merged into an open stroke or hit the stack limit, a tool, an import, undo of a preview) left the "Map heights" node on the old ground.
+    -- A graph without that node does not care; a stroke being dragged waits for its end.
+    local heights = TerrainEpoch.Stamp()
+    if not force and mainRevision == Graph.DataRevision and mainDoc == doc then
+        if mainHeights == heights or not ReadsTerrain() or Stroking() then return nil end
+    end
     mainRevision = Graph.DataRevision
     mainDoc = doc
+    mainHeights = heights
     local ok, report = pcall(run.Evaluate, run)
     if not ok then
         Report = { evaluated = 0, cached = 0, errors = {}, ms = 0, fatal = Strip(report) }
@@ -598,8 +623,10 @@ function RevertTerrain()
     if not shown then return false end
     local info = shown
     shown = false
+    Base.shownSum = false        -- the preview is off the ground (or part of it now): a terrain that looks like it again is no longer "ours"
     if Terrain.UndoDepth() == info.depth then
         Terrain.Undo()
+        mainHeights = TerrainEpoch.Stamp()       -- our own write: the live run does not read the ground again for it
         return true
     end
     return false
@@ -634,6 +661,7 @@ function ShowOnTerrain()
             Base.shownSum = Fields.Checksum(now)
             Fields.Free(now)
         end
+        mainHeights = TerrainEpoch.Stamp()       -- our own write (the preview): not a reason to evaluate again, or the preview would be written again and again
         return changed or 0
     end)
 end

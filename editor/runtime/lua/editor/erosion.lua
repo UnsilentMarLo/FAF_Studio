@@ -19,6 +19,9 @@
 --   droplet     32 feedback rounds (was 4): every round the steering surface is refreshed, so the droplets of a round see the valleys the earlier ones dug and join them. With 4 rounds every drop
 --               carved a lone groove (a smear of worms on the plains, soft cliffs, no branching); with 32 the gullies capture their neighbours, branch downhill and leave sharp ridges between
 --               them. 2 droplets per cell, life 40, 1 filter pass, downhill acceleration 1
+--               + hillslope creep 2: with rounds the droplets dug evenly spaced razor thin grooves with the old ridge left standing between them (a comb along every crest and mound edge that
+--               grew deeper with every run: terrain 'veins'); after every round the change made so far is now smoothed (3 x 3 binomial passes, 2 at density 2 and 32 rounds, scaled with
+--               density / rounds), so walls slump into the grooves, spurs round off and valleys widen. Presets: Mountain 1, Alpine 0.75 (sharper), the Fields panel's Gullies 1.5.
 --   hydraulic   iterations 60 (was 150), rain 0.004, dissolving 0.08, settling 0.05: the grid solver moves material slowly and smooths: after 150 steps it had flattened the 16 - 64 unit
 --               relief of a droplet result by a third; 60 steps keep it and still crisp up the gullies. It is the finishing step (soft deposits, rounded basins), not the carver
 --   stream      erodibility 0.05 (was 0.5) with 20 steps: one step removes the share F / (1 + F) of the drop to the lowest neighbour, F = k * catchment ^ m, so rivers of different size cut at
@@ -96,6 +99,7 @@ Solvers = {
             P('seed', 'Seed', 0, 9999, 1, '%d', 1),
             P('accel', 'Downhill acceleration', 0, 1, 0.05, '%.2f', 1, 'How much a drop speeds up going downhill. 1 = like a real drop (fast on steep ground, so it digs there); 0 = the old rule, which slowed drops down on slopes so they dug almost nothing.'),
             P('drop_vary', 'Droplet variation', 0, 1, 0.05, '%.2f', 0.5, 'Every drop gets its own size, lifetime, inertia and load, so the gullies are no longer evenly spaced copies of each other. 0 = identical drops.'),
+            P('creep', 'Hillslope creep', 0, 8, 0.1, '%.1f', 2, 'After every round the ground slumps a little: what the droplets dug so far is smoothed, so steep walls slide into the grooves and the ridges between grooves round off. Without creep the droplets leave razor thin grooves with the old ridge standing between them (a comb that gets deeper with every run); with it grooves widen into rounded valleys, spurs round off and the erosion spreads over the whole slope. 0 = off. It grows with the droplet count (more erosion creeps more), the ground you started with is not smoothed.'),
             P('rounds', 'Feedback rounds', 1, 64, 1, '%d', 32, 'The droplets are released in this many rounds; between rounds the water surface is recomputed, so later drops follow the valleys earlier ones dug (gullies join and branch). Few rounds = every drop digs a lone groove; more rounds cost time.'),
         },
     },
@@ -127,13 +131,13 @@ SolverOrder = { 'hydraulic', 'droplet', 'stream' }
 Presets = {
     -- Values not listed are the solver's defaults (accel 1, drop_vary 0.5, vary 0.4, rain_vary 0.5, protect 0.5, keep_range 1, jitter 0.4). Each preset names the settings that give it its look.
     -- Mountain: tall ridges kept (protect), hard and soft rock side by side, every drop different; max_change stops the faster droplets (accel 1) from cutting the peaks down.
-    { id = 'mountain', label = 'Mountain', solver = 'droplet', values = { density = 3, lifetime = 60, inertia = 0.3, capacity = 8, erode = 0.45, deposit = 0.15, gravity = 5, thermal = 0.4, thermal_steps = 3, talus = 0.9, vary = 0.55, protect = 0.7, drop_vary = 0.6, max_change = 25 } },
+    { id = 'mountain', label = 'Mountain', solver = 'droplet', values = { density = 3, lifetime = 60, inertia = 0.3, capacity = 8, erode = 0.45, deposit = 0.15, gravity = 5, thermal = 0.4, thermal_steps = 3, talus = 0.9, vary = 0.55, protect = 0.7, drop_vary = 0.6, creep = 1, max_change = 25 } },
     -- Hills: soft, rounded; the grid solver finishes smooth hills with gentle gullies at the steep ground (100 steps, a little thermal slumping that keeps cliffs steeper than talus 0.9).
     { id = 'hills', label = 'Hills', solver = 'hydraulic', values = { iterations = 100, rain = 0.006, deposition = 0.08, thermal = 0.25, talus = 0.9 } },
     -- Canyon: straight, deep gorges (low jitter) in a plateau whose rim stays (protect), rock layers of different hardness.
     { id = 'canyon', label = 'Canyon', solver = 'stream', values = { iterations = 14, k = 1.5, max_cut = 0.7, diffusion = 0.05, widen = 2, talus = 1.2, area_min = 40, jitter = 0.3, protect = 0.6, vary = 0.5 } },
     -- Alpine: sharp, strongly protected crests and long steep flanks with scree (thermal), the most varied of the droplet presets.
-    { id = 'alpine', label = 'Alpine', solver = 'droplet', values = { density = 2.5, lifetime = 80, inertia = 0.2, capacity = 6, erode = 0.4, deposit = 0.05, gravity = 6, thermal = 0.6, thermal_steps = 6, talus = 0.7, vary = 0.6, protect = 0.8, drop_vary = 0.7, max_change = 30 } },
+    { id = 'alpine', label = 'Alpine', solver = 'droplet', values = { density = 2.5, lifetime = 80, inertia = 0.2, capacity = 6, erode = 0.4, deposit = 0.05, gravity = 6, thermal = 0.6, thermal_steps = 6, talus = 0.7, vary = 0.6, protect = 0.8, drop_vary = 0.7, creep = 0.75, max_change = 30 } },
     -- Desert: dry, rare and patchy rain (flash floods): few drops (0.6 per cell) with very different sizes cut sparse washes and fans into the mesa flanks, slides (talus 0.7) lay scree aprons, the rims stay steep.
     -- (Before: the hydraulic solver with thermal slides every step at talus 0.35, which turned every cliff into a soft ramp.)
     { id = 'desert', label = 'Desert', solver = 'droplet', values = { density = 0.6, lifetime = 60, capacity = 6, erode = 0.4, deposit = 0.2, thermal = 0.6, thermal_steps = 6, talus = 0.7, vary = 0.3, rain_vary = 0.8, protect = 0.3, drop_vary = 0.8 } },
@@ -202,6 +206,7 @@ function OpParams(solver, values, step, seed)
             p.radius = math.max(1, math.floor(p.radius / step + 0.5))
             p.density = math.max(0.05, p.density / (1.5 * step))
             p.thermal_steps = math.max(0, math.floor(p.thermal_steps / step + 0.5))
+            p.creep = (p.creep or 2) * 1.5 / step        -- smoothing passes of a coarse cell reach step times farther (the density scaling above already gives 1 / (1.5 step) of the passes)
         end
         if solver ~= 'stream' then p.smooth_passes = (step >= 4) and 0 or math.max(0, p.smooth_passes - 1) end
     end

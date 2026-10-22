@@ -125,6 +125,10 @@ end
 function Describe(node)
     local d = Defs[node.type]
     if not d then return tostring(node.type) end
+    if d.describe then
+        local ok, text = pcall(d.describe, node)
+        if ok and text then return text end
+    end
     local parts = {}
     for _, p in d.params do
         if table.getn(parts) < 2 and (p.kind == 'number' or p.kind == 'choice') and not p.seed then
@@ -835,17 +839,42 @@ Def('pad_flatten', { label = 'Base pads', cat = 'sc', kw = 'pad flatten base sta
         return out
     end })
 
-Def('symmetrize', { label = 'Symmetrize', cat = 'sc', kw = 'symmetry symmetrize mirror rotate wedge master copy competitive fair turn',
-    desc = 'Copies a master part of the map over the rest by a symmetry group (mirrors, diagonals, 2 / 4 / N-fold turns). Averaging or max / min over the images and a soft seam are options.',
+--- How many wedges (master part choices) a symmetry has: mirrors 2 (x, z, diagonals) or 4 (both axes / both diagonals), turns by 180 / 90 / N: 2 / 4 / n. Matches EdFieldSc.cpp BuildGroup.
+function SymWedges(mode, n)
+    if mode == 'mirror_xz' or mode == 'diag_both' or mode == 'rot4' then return 4 end
+    if mode == 'rot2' or mode == 'mirror_x' or mode == 'mirror_z' or mode == 'diag' or mode == 'adiag' then return 2 end
+    return math.max(2, math.min(12, math.floor((tonumber(n) or 3) + 0.5)))
+end
+
+Def('symmetrize', { label = 'Symmetrize', cat = 'sc', kw = 'symmetry symmetrize mirror rotate wedge master copy competitive fair turn pinwheel seam',
+    desc = 'Copies a master part of the map over the rest by a symmetry group (mirrors, diagonals, 2 / 4 / N-fold turns). A turn cannot match the contents of two neighbouring parts, so the soft seam cross-fades every border (the master continuing over it); Average / Larger / Smaller combine all copies instead of copying the master (superposed copies: shapes appear several times and detail washes out). Turn by 90 and the diagonal mirrors need a square map: beyond the square the map is not symmetric.',
     inputs = { In('a', 'height') },
+    describe = function(node)
+        local pr = node.params or {}
+        local mode = pr.mode or 'mirror_x'
+        local d = Defs.symmetrize
+        local label = mode
+        for i, id in d.params[1].ids do
+            if id == mode then label = d.params[1].labels[i] end
+        end
+        local count = SymWedges(mode, pr.n)
+        local text = label .. '  part ' .. math.min(math.max(math.floor((pr.side or 0) + 0.5), 0), count - 1) .. ' of ' .. count
+        if (pr.combine or 'copy') == 'copy' and (pr.seam or 0) > 0 then text = text .. '  seam ' .. string.format('%d', pr.seam) end
+        return text
+    end,
     params = { C('mode', 'Symmetry', { 'mirror_x', 'mirror_z', 'mirror_xz', 'diag', 'adiag', 'diag_both', 'rot2', 'rot4', 'rotn' },
                  { 'Mirror x', 'Mirror z', 'Mirror x and z', 'Diagonal', 'Anti-diagonal', 'Both diagonals', 'Turn by 180', 'Turn by 90', 'N-fold turn' }, 'mirror_x'),
-               N('side', 'Master part (side / sector)', 0, 7, 1, '%d', 0), N('n', 'Turns (N-fold)', 2, 12, 1, '%d', 3), N('angle', 'Start angle (N-fold, degrees)', 0, 360, 1, '%d', 0),
+               N('side', 'Master part (0 to parts - 1)', 0, 11, 1, '%d', 0, { tip = 'Which part of the map is copied onto the rest. Mirrors across one line have 2 parts (0, 1), Turn by 180 has 2, Turn by 90 and the two-line mirrors have 4 (0 to 3), an N-fold turn has N. A larger value is brought back to the last part. The canvas shows "part k of n".' }),
+               N('n', 'Turns (N-fold)', 2, 12, 1, '%d', 3, { tip = 'N-fold turn only: the number of copies around the centre.' }),
+               N('angle', 'Start angle (turns, degrees)', 0, 360, 1, '%d', 0, { tip = 'Turns the whole layout of parts around the centre. 0 is the default: Turn by 180 / 90 start at the left (part 0 is the upper half / upper left quarter), an N-fold turn starts to the right.' }),
                B('centred', 'Own centre (otherwise the middle of the map)', false), N('cx', 'Centre x (share)', 0, 1, 0.01, '%.2f', 0.5), N('cz', 'Centre z (share)', 0, 1, 0.01, '%.2f', 0.5),
                C('combine', 'Where images meet', { 'copy', 'avg', 'max', 'min' }, { 'Copy the master', 'Average', 'Larger', 'Smaller' }, 'copy'),
-               N('seam', 'Soft seam (units)', 0, 100, 1, '%d', 0), B('nearest', 'Nearest sample (codes, no blending)', false) },
+               N('seam', 'Soft seam (units)', 0, 200, 1, '%d', 24, { tip = 'Width of the soft border on each side of every part border when copying the master. 0 gives hard cuts (a turn then shows the two borders of the master side by side). Around 3 to 8 percent of the map is a good start.' }),
+               B('nearest', 'Nearest sample (codes, no blending)', false) },
     eval = function(E, v, ins)
-        local p = { a = ins.a, mode = v.mode, side = v.side, sector = v.side, n = v.n, angle = v.angle, combine = v.combine, seam = v.seam, nearest = v.nearest and 1 or 0 }
+        local count = SymWedges(v.mode, v.n)
+        local side = math.min(math.max(math.floor((v.side or 0) + 0.5), 0), count - 1)
+        local p = { a = ins.a, mode = v.mode, side = side, sector = side, n = v.n, angle = v.angle, combine = v.combine, seam = v.seam, nearest = v.nearest and 1 or 0 }
         if v.centred then p.cx, p.cz = v.cx * E.W, v.cz * E.H end
         return One(E:Op('symmetrize', p))
     end })

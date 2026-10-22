@@ -186,7 +186,14 @@ function Run(verbose)
     nGrass, rGrass = RuleCount(roles, 'grass')
     nSand, rSand = RuleCount(roles, 'sand')
     check('base grass: grass is what is left (no rules)', rGrass.base and nGrass == 0)
-    check('base grass: sand keeps its beach rule', not rSand.base and nSand >= 2)
+    Recipes.SelectPreset(3)
+    roles = Recipes.Roles(Recipes.Context(plan))
+    nSand, rSand = RuleCount(roles, 'sand')
+    check('base grass: sand keeps a rule (the beach, or dry basins in the desert style)', not rSand.base and nSand >= 2)
+    Recipes.SelectPreset(1)
+    roles = Recipes.Roles(Recipes.Context(plan))
+    nSand, rSand = RuleCount(roles, 'sand')
+    check('base grass: sand is a beach: with no water the natural style has none, with water it has rules', rSand.off or nSand >= 2)
 
     plan = PlanOf({ [3] = 'rock', [5] = 'grass' })
     check('empty base: no kind assumed for it', plan.base == nil and plan.has.grass and plan.has.rock)
@@ -312,8 +319,27 @@ function Run(verbose)
             for layer = 1, 7 do
                 if cov.mask[layer] and cov.mask[layer] > 0.001 then used = used + 1 else table.insert(empty, A[layer] or layer) end
             end
-            check('eight kinds: at least six of the seven kind layers are painted on a varied terrain', used >= 6, 'unpainted: ' .. table.concat(empty, ', '))
+            check('eight kinds: at least five of the seven kind layers are painted on a dry varied terrain (sand needs water, wet ground drainage)', used >= 5, 'unpainted: ' .. table.concat(empty, ', '))
             check('eight kinds: the second grass layer holds patches inside the grass', cov.mask[8] ~= nil and cov.mask[8] > 0.001, tostring(cov.mask[8]))
+            -- smooth: what each layer shows changes by at most 0.3 per cell (a transition is at least 4 cells wide), and no line one cell wide (the second difference stays small)
+            local worstGrad, worstLap = Fields.Run(function(S)
+                local free
+                local g, l = 0, 0
+                for layer = 8, 1, -1 do
+                    if cov.mask[layer] and cov.mask[layer] > 0.001 then
+                        local m = S:Stratum(layer)
+                        free = free or S:Op('const', { like = m, value = 1 })
+                        local seen = S:Op('mul', { a = m, b = free })
+                        local _, gmax = Fields.Stats(S:Op('edge', { a = seen, mode = 'sobel' }))
+                        local _, lmax = Fields.Stats(S:Op('edge', { a = seen, mode = 'laplace' }))
+                        g, l = math.max(g, gmax), math.max(l, lmax)
+                        free = S:Op('mul', { a = free, b = S:Op('invert', { a = m, lo = 0, hi = 1 }) })
+                    end
+                end
+                return g, l
+            end)
+            check('smooth: what a layer shows changes by at most 0.3 per cell', worstGrad <= 0.3, worstGrad)
+            check('smooth: no line one cell wide (second difference at most 0.25)', worstLap <= 0.25, worstLap)
             -- no cell with two layers at full opacity
             local worstFull = Fields.Run(function(S)
                 local sum1
@@ -360,7 +386,7 @@ function Run(verbose)
         end
 
         -- kinds with no texture are skipped: their layers are not touched
-        local M = { [0] = 'grass', [1] = 'rock', [2] = 'sand' }
+        local M = { [0] = 'grass', [1] = 'rock', [2] = 'dirt' }
         local sumM = Run1(M, 'three kinds')
         if sumM then
             local cov = Recipes.Coverage()

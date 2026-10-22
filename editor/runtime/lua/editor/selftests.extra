@@ -42,3 +42,4 @@ selftest_uniticons
 selftest_recipes
 selftest_fieldgen
 selftest_overlayfield
+selftest_graphbase
