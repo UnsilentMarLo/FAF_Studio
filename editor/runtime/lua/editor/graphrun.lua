@@ -362,7 +362,9 @@ function Run:EvaluateNode(graph, node, wanted, report, live, baseKey)
     local v = {}
     for _, p in def.params do
         local val = node.params[p.key]
-        if val == nil then val = p.default end
+        if val == nil then
+            if p.legacy ~= nil then val = p.legacy else val = p.default end
+        end
         if p.kind == 'number' and p.wire and type(ins[p.key]) == 'number' then val = ins[p.key] end
         v[p.key] = val
     end
@@ -485,7 +487,9 @@ local function V(run, node, key)
     local val = node.params[key]
     if val == nil then
         for _, p in def.params do
-            if p.key == key then val = p.default end
+            if p.key == key then
+                if p.legacy ~= nil then val = p.legacy else val = p.default end
+            end
         end
     end
     local wire = Graph.WireInto(node.id, key)

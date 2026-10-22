@@ -91,6 +91,7 @@ Panel = {
     erosion = 'Erosion presets and solvers, with a live preview; Apply is one undo step.',
     fields = 'Low level field engine: step-by-step terrain shaping.',
     maskgen = 'Makes masks from slope, height, curvature and more, and applies them to layers.',
+    maptextures = 'The pictures that cover the whole map and that newer terrain shaders read: normal map, baked shadow, specular and macrotexture. Generate, import, export or clear each.',
     recipes = 'Terrain texturing presets: grass, dirt, rock, snow from slope and height rules.',
     scatter = 'Fills the map with props by rules: density, slope, spacing.',
     sctools = 'Base pads and resource rings, symmetry, slope limits, skeleton generator.',

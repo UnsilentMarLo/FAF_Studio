@@ -25,6 +25,8 @@ local BRUSH = {
     { 'thermal', 'Thermal slides', 0, 1, 0.05, '%.2f' },
     { 'margin', 'Window around the brush', 0.1, 1.5, 0.05, '%.2f' },
     { 'amount', 'Deposit amount (units)', 0.05, 5, 0.05, '%.2f' },
+    { 'vary', 'Hardness variation', 0, 1, 0.05, '%.2f' },
+    { 'vary_scale', 'Hardness feature size (units)', 4, 200, 2, '%d' },
 }
 
 pv = { result = false, text = '', seconds = 0, dirty = false, last = 0 }      -- the coarse result of the last preview (module level: the controls come and go)

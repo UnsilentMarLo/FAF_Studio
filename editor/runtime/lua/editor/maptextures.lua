@@ -19,6 +19,7 @@
 --   Order, Kinds                  the four kinds and what they are
 --   ShaderClass(id) / Slot(kind[, shaderId]) -> slot | nil, why        which layer slot the shader reads the kind from
 --   Current(kind) -> info         { slot, path, size, file, empty, active, managed, class }
+--   Stale(kind) -> bool       made from the terrain here, and the terrain (or the sun) changed since
 --   Generate(kind, o) -> entry | nil, message         from the map's heights and lighting (o: size, strength, soft, quality, reach, ao, ambient); one undo entry
 --   FromGraph(kind, pieces, o) -> entry | nil, message   from the graph's fields (pieces: nx, nz | shadow, ao); o: size, assign
 --   Import(kind, file) / Export(kind, file) / Clear(kind) -> entry | true | nil, message
@@ -36,7 +37,7 @@ local World = import('/lua/editor/world.lua')
 STAGE = '../maptex'
 MOUNT = '/edmaptex'
 
-State = { serial = 0, mounted = false, created = {}, thumbs = {}, thumbSerial = 0 }
+State = { serial = 0, mounted = false, created = {}, thumbs = {}, made = {}, sumVersion = -1, nowSum = '' }
 
 Order = { 'normal', 'light', 'specular', 'macro' }
 
@@ -444,10 +445,11 @@ function Generate(kind, o)
     if not W then return nil, 'no terrain' end
     local size = TextureSize(o.size, W)
     local sun_az, sun_alt = World.SunAngles()
-    local vfs, disk
+    local vfs, disk, heightSum
     local ok, err = pcall(function()
         Fields.Run(function(S)
             local h = S:Height(1)
+            heightSum = Fields.Checksum(h)
             local env = ScopeEnv(S)
             local f = {}
             local pack = slot.pack
@@ -475,7 +477,30 @@ function Generate(kind, o)
     if not ok then return nil, Clean(err) end
     local entry, aerr = Assign(kind, slot, vfs, o)
     if not entry then return nil, aerr end
+    State.made[string.lower(vfs)] = { heights = heightSum, sun = string.format('%.2f,%.2f', sun_az, sun_alt) }
     return entry
+end
+
+--- Whether the texture of `kind` was made from the terrain here and the terrain (or, for the lighting texture, the sun) has changed since: it is out of date then. Cheap: the heights are
+--- compared only after the document changed.
+function Stale(kind)
+    local cur = Current(kind)
+    if not cur.slot or cur.empty then return false end
+    local made = State.made[string.lower(cur.path or '')]
+    if not made then return false end
+    local v = History.Version
+    if State.sumVersion ~= v then
+        State.sumVersion = v
+        local f = Fields.Height(1)
+        State.nowSum = Fields.Checksum(f)
+        Fields.Free(f)
+    end
+    if made.heights ~= State.nowSum then return true end
+    if cur.slot.pack ~= 'normal7' then
+        local az, alt = World.SunAngles()
+        if made.sun ~= string.format('%.2f,%.2f', az, alt) then return true end
+    end
+    return false
 end
 
 --- From the fields of the terrain graph (Build): kind 'normal' with pieces.nx and pieces.nz, kind 'light' with pieces.shadow and pieces.ao (optional). o.size (choice or number), o.assign

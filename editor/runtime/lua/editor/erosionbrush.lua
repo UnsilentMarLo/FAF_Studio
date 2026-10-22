@@ -8,7 +8,8 @@
 --   Rain     water only under the brush; it erodes along its way down (outside the brush too, within the window)
 --   Deposit  sediment is dumped under the brush and settles (with a little water it also slides downhill)
 --
--- Values (sliders in the Erosion panel): iterations per strength unit, rain, evaporation, capacity, erosion, deposition, thermal slides, window margin.
+-- Values (sliders in the Erosion panel): iterations per strength unit, rain, evaporation, capacity, erosion, deposition, thermal slides, window margin, hardness variation.
+-- At the map edge the brush works like anywhere else (the edge cells are solved, water and sediment run out over the edge); only the sides of its window that lie inside the map are fixed.
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
@@ -25,6 +26,8 @@ Values = {
     talus = 0.8,
     margin = 0.35,         -- extra window around the brush as a share of the radius
     amount = 0.5,          -- deposit brush: sediment depth dumped at the centre per dab (world units)
+    vary = 0.3,            -- hard and soft ground under the brush (0 = even): noise on the erodibility and the rain, the same pattern for every dab
+    vary_scale = 30,       -- feature size of that pattern (samples)
 }
 
 local active = false
@@ -47,7 +50,7 @@ function Begin()
     if not IsAvailable() then return false end
     local v = Values
     local ok = ed_erode_begin({ rain = v.rain, evaporation = v.evaporation, gain = v.gain, capacity = v.capacity, erosion = v.erosion, deposition = v.deposition,
-                                thermal = v.thermal, talus = v.talus })
+                                thermal = v.thermal, talus = v.talus, vary = v.vary, vary_scale = v.vary_scale })
     active = ok and true or false
     return active
 end

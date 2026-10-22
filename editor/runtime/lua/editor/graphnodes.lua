@@ -113,6 +113,18 @@ function DefaultParams(id)
     return params
 end
 
+--- The values a saved graph gets for parameters it does not have: a setting added after the graph was saved takes its `legacy` value (the one that reproduces the old result), else its default.
+function LegacyParams(id)
+    local params = {}
+    local d = Defs[id]
+    if d then
+        for _, p in d.params do
+            if p.legacy ~= nil then params[p.key] = p.legacy else params[p.key] = CopyValue(p.default) end
+        end
+    end
+    return params
+end
+
 function ParamInfo(id, key)
     local d = Defs[id]
     if not d then return nil end
@@ -366,6 +378,8 @@ local function ErodeNode(solver, label, kw, desc, presetsOf)
     for _, p in def.params do
         local c = N(p.key, p.label, p.min, p.max, p.step, p.fmt, p.default)
         if p.key == 'seed' then c.seed = true end
+        c.legacy = p.legacy      -- the value of a setting added later, for graphs saved before it existed (LegacyParams)
+        c.tip = p.tip
         table.insert(params, c)
     end
     local presets = {}
@@ -383,9 +397,7 @@ local function ErodeNode(solver, label, kw, desc, presetsOf)
         eval = function(E, v, ins)
             local values = {}
             for _, p in def.params do values[p.key] = v[p.key] end
-            local seed = nil
-            if solver == 'droplet' then seed = E:Seed(v.seed) end
-            local p = Erosion.OpParams(solver, values, E.step, seed)
+            local p = Erosion.OpParams(solver, values, E.step, E:Seed(v.seed))
             p.a = ins.a
             if ins.mask then p.mask = ins.mask end
             local wantMasks = E.wanted.wear or E.wanted.deposit or E.wanted.flow or E.wanted.accum

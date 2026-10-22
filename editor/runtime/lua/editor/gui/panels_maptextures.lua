@@ -104,6 +104,7 @@ Panels.Register{
             state.size = SIZES[math.mod(at, table.getn(SIZES)) + 1]
             Again()
         end)
+        P.info = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
         P.note = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
         P.status = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
 
@@ -142,7 +143,7 @@ Panels.Register{
             card.line1 = W.Label(group, '', 0, 0, { color = c.text, size = 'small' })
             card.line2 = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
             card.line3 = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
-            card.used = W.Label(group, 'Used by: ' .. info.usedBy, 0, 0, { color = c.textDim, size = 'small' })
+            card.used = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
             if k == 'normal' then
                 table.insert(card.sliders, W.Slider(group, { label = 'Slope strength', min = 0.2, max = 4, step = 0.1, fmt = '%.1f',
                     get = function() return state.strength end, set = function(v) state.strength = v end }))
@@ -156,14 +157,14 @@ Panels.Register{
             end
             if info.generate then
                 card.generate = W.Button(group, 'Generate', 0, 0, Skin.S(78), Skin.S(24), function() Generate(k) end)
-                table.insert(card.buttons, { card.generate, 78 })
+                table.insert(card.buttons, { card.generate, Skin.S(78) })
             end
             card.import = W.Button(group, 'Import...', 0, 0, Skin.S(76), Skin.S(24), function() Import(k) end)
             card.export = W.Button(group, 'Export...', 0, 0, Skin.S(76), Skin.S(24), function() Export(k) end)
             card.clear = W.Button(group, 'Clear', 0, 0, Skin.S(58), Skin.S(24), function() Clear(k) end)
-            table.insert(card.buttons, { card.import, 76 })
-            table.insert(card.buttons, { card.export, 76 })
-            table.insert(card.buttons, { card.clear, 58 })
+            table.insert(card.buttons, { card.import, Skin.S(76) })
+            table.insert(card.buttons, { card.export, Skin.S(76) })
+            table.insert(card.buttons, { card.clear, Skin.S(58) })
             table.insert(P.cards, card)
         end
 
@@ -176,9 +177,15 @@ Panels.Register{
                 P.shaderKey = shaderKey
                 P.shader:SetText('Shader: ' .. (id ~= '' and id or '?'))
                 P.size:SetText('Size: ' .. tostring(state.size))
-                local line = 'Map size ' .. tostring(MT.MapSize() or '?')
-                P.noteText = line
                 W.Fit(P.note, 'Pictures that cover the whole map. Click one to import another.', P.w - 2 * Skin.S(10))
+                -- what the shader is (shaders.lua, read only) and which of the pictures it reads
+                local okS, entry = pcall(function() return import('/lua/editor/shaders.lua').Find(id) end)
+                local reads = {}
+                for _, kind in MT.Order do
+                    if MT.Slot(kind, id) then table.insert(reads, string.lower(MT.Kinds[kind].label)) end
+                end
+                local reading = table.getn(reads) > 0 and ('reads: ' .. table.concat(reads, ', ')) or 'reads none of these'
+                W.Fit(P.info, (okS and entry and entry.summary and (entry.summary .. ' ') or '') .. '(' .. reading .. ')', P.w - 2 * Skin.S(10))
             end
             local statusText = state.status or ''
             if force or statusText ~= P.statusShown then
@@ -188,9 +195,11 @@ Panels.Register{
             local textW = math.max(Skin.S(40), P.w - (P.picW or Skin.S(100)) - 3 * Skin.S(10))
             for _, card in P.cards do
                 local cur = MT.Current(card.kind)
-                local key = tostring(cur.path) .. '|' .. tostring(cur.size) .. '|' .. id .. '|' .. tostring(textW)
+                local stale = (not cur.empty) and MT.Stale(card.kind)
+                local key = tostring(cur.path) .. '|' .. tostring(cur.size) .. '|' .. id .. '|' .. tostring(textW) .. '|' .. tostring(stale)
                 if force or key ~= card.key then
                     card.key = key
+                    W.Fit(card.used, 'Used by: ' .. MT.Kinds[card.kind].usedBy, textW)
                     if not cur.slot then
                         W.Fit(card.state, 'Not used by ' .. (id ~= '' and id or 'this shader'), P.w - 2 * Skin.S(10))
                         card.state:SetColor(c.textDim)
@@ -208,8 +217,13 @@ Panels.Register{
                             W.Fit(card.line2, '', textW)
                             W.Fit(card.line3, cur.slot.layout, textW)
                         else
-                            W.Fit(card.state, 'In use (' .. where .. ')', P.w - 2 * Skin.S(10))
-                            card.state:SetColor(c.ok)
+                            if stale then
+                                W.Fit(card.state, 'Out of date: the terrain or the sun changed. Generate again.', P.w - 2 * Skin.S(10))
+                                card.state:SetColor(c.warn)
+                            else
+                                W.Fit(card.state, 'In use (' .. where .. ')', P.w - 2 * Skin.S(10))
+                                card.state:SetColor(c.ok)
+                            end
                             local vfs, why = MT.Preview(card.kind, 96)
                             if vfs then card.pic:SetTexture(vfs) else card.pic:SetSolidColor(c.panelAlt) end
                             W.Fit(card.line1, cur.file .. (cur.managed and '' or '  (not made here)'), textW)
@@ -227,11 +241,13 @@ Panels.Register{
             local pad = Skin.S(10)
             local y = pad
             y = W.Flow(group, { { P.shader, Skin.S(210) }, { P.size, Skin.S(120) } }, pad, y, w - 2 * pad, Skin.S(24), Skin.S(4)) + Skin.S(6)
+            W.Place(P.info, group, pad, y)
+            y = y + Skin.S(18)
             W.Place(P.note, group, pad, y)
             y = y + Skin.S(18)
             W.Place(P.status, group, pad, y)
             y = y + Skin.S(22)
-            local ps = math.max(Skin.S(56), math.min(Skin.S(112), math.floor((w - 3 * pad) / 2)))
+            local ps = math.max(Skin.S(76), math.min(Skin.S(112), math.floor((w - 3 * pad) / 2)))
             P.picW = ps
             for _, card in P.cards do
                 W.Place(card.title, group, pad, y)

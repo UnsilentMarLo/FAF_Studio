@@ -302,7 +302,11 @@ function SaveAsCore(diskDir, stem, opts)
     end
 
     EnsureDefaultEnvCube()
-    if not ed_map_save(diskDir .. '/' .. stem .. '.scmap') then
+    local restoreTextures = nil
+    pcall(function() restoreTextures = import('/lua/editor/maptextures.lua').PrepareSave(diskDir, mount) end)       -- the map-wide textures made in the editor go into this map folder
+    local savedScmap = ed_map_save(diskDir .. '/' .. stem .. '.scmap')
+    if restoreTextures then pcall(restoreTextures) end            -- (an autosave only borrows the paths)
+    if not savedScmap then
         return nil, 'ed_map_save failed'
     end
     if opts and opts.preview then

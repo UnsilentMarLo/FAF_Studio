@@ -17,19 +17,39 @@
 local Fields = import('/lua/editor/fields.lua')
 local Terrain = import('/lua/editor/terrain.lua')
 
-local function P(key, label, min, max, step, fmt, default) return { key = key, label = label, min = min, max = max, step = step, fmt = fmt, default = default } end
+--- A solver parameter. `default` is what a new node / the panel starts with; `legacy` (optional) is the value of a parameter that was added later: a saved graph that does not have the
+--- key gets the legacy value, so it keeps the result it had (graph.lua Normalize through graphnodes.LegacyParams); `tip` is the tooltip.
+local function P(key, label, min, max, step, fmt, default, legacy, tip) return { key = key, label = label, min = min, max = max, step = step, fmt = fmt, default = default, legacy = legacy, tip = tip } end
+
+--- The settings every solver shares (they add variation and keep the terrain's character). All of them are off in `legacy`.
+local function Shared()
+    return {
+        P('vary', 'Hardness variation', 0, 1, 0.05, '%.2f', 0.4, 0, 'Hard and soft ground side by side: the erodibility follows a noise pattern, so the erosion is uneven instead of the same everywhere. 0 = uniform.'),
+        P('vary_scale', 'Hardness feature size (units)', 8, 400, 2, '%d', 60, 60, 'Size of the hard and soft patches, and of the rain variation, in map units.'),
+        P('rain_vary', 'Rain variation', 0, 1, 0.05, '%.2f', 0.5, 0, 'The water differs from place to place (wetter and drier patches), so channels and gullies come in different sizes. 0 = even rain.'),
+        P('protect', 'Protect ridges', 0, 1, 0.05, '%.2f', 0.5, 0, 'Ridges and summits are harder than the slopes: they keep their height and shape while the flanks are carved. 0 = no protection.'),
+        P('keep_range', 'Keep height range (0 / 1)', 0, 1, 1, '%d', 1, 0, '1 = the result is stretched so its lowest and highest ground match the input again (erosion no longer flattens the map overall).'),
+        P('max_change', 'Largest change (units, 0 = off)', 0, 80, 0.5, '%.1f', 0, 0, 'No sample moves further than this from the input height, up or down. 0 = unlimited.'),
+        P('conserve', 'Keep volume', 0, 1, 0.05, '%.2f', 0, 0, 'Puts the share of the removed material that left the map or was carried off back where sediment settles (valleys), so the terrain keeps its mass. 0 = off.'),
+    }
+end
+
+local function Join(a, b)
+    for _, p in b do table.insert(a, p) end
+    return a
+end
 
 Solvers = {
     hydraulic = {
         op = 'erode_hydraulic', label = 'Hydraulic (grid)',
         params = {
-            P('iterations', 'Iterations', 10, 2000, 10, '%d', 200),
-            P('rain', 'Rain per step (units)', 0.0005, 0.05, 0.0005, '%.4f', 0.006),
+            P('iterations', 'Iterations', 10, 2000, 10, '%d', 150, 200),
+            P('rain', 'Rain per step (units)', 0.0005, 0.05, 0.0005, '%.4f', 0.004, 0.006),
             P('evaporation', 'Evaporation', 0.002, 0.15, 0.002, '%.3f', 0.02),
             P('gain', 'Water speed (pipe gain)', 0.01, 0.25, 0.01, '%.2f', 0.08),
             P('capacity', 'Sediment capacity', 0.05, 4, 0.05, '%.2f', 1),
-            P('erosion', 'Dissolving rate', 0.01, 0.6, 0.01, '%.2f', 0.12),
-            P('deposition', 'Settling rate', 0.01, 0.6, 0.01, '%.2f', 0.06),
+            P('erosion', 'Dissolving rate', 0.01, 0.6, 0.01, '%.2f', 0.08, 0.12),
+            P('deposition', 'Settling rate', 0.01, 0.6, 0.01, '%.2f', 0.05, 0.06),
             P('depth_max', 'Full capacity depth (units)', 0.01, 0.5, 0.01, '%.2f', 0.05),
             P('min_slope', 'Minimum slope', 0, 0.2, 0.005, '%.3f', 0.02),
             P('cut_limit', 'Cut limit (0 = off)', 0, 1, 0.05, '%.2f', 0.5),
@@ -38,13 +58,14 @@ Solvers = {
             P('thermal_every', 'Slide every n steps', 1, 10, 1, '%d', 2),
             P('smooth', 'Cell noise filter', 0, 1, 0.05, '%.2f', 1),
             P('smooth_passes', 'Filter passes', 0, 4, 1, '%d', 1),
+            P('seed', 'Seed', 0, 9999, 1, '%d', 1, 1, 'The random seed of the hardness and rain variation.'),
         },
     },
     droplet = {
         op = 'erode_droplet', label = 'Droplets (particles)',
         params = {
-            P('density', 'Droplets per cell', 0.05, 8, 0.05, '%.2f', 1),
-            P('lifetime', 'Droplet life (steps)', 5, 120, 1, '%d', 30),
+            P('density', 'Droplets per cell', 0.05, 8, 0.05, '%.2f', 2, 1),
+            P('lifetime', 'Droplet life (steps)', 5, 120, 1, '%d', 40, 30),
             P('inertia', 'Inertia', 0, 0.5, 0.01, '%.2f', 0.05),
             P('capacity', 'Sediment capacity', 0.5, 16, 0.25, '%.2f', 4),
             P('erode', 'Dissolving rate', 0.02, 1, 0.02, '%.2f', 0.3),
@@ -58,8 +79,10 @@ Solvers = {
             P('thermal_steps', 'Slide steps', 0, 50, 1, '%d', 0),
             P('talus', 'Talus (rise / run)', 0.1, 2, 0.05, '%.2f', 0.8),
             P('smooth', 'Cell noise filter', 0, 1, 0.05, '%.2f', 1),
-            P('smooth_passes', 'Filter passes', 0, 4, 1, '%d', 2),
+            P('smooth_passes', 'Filter passes', 0, 4, 1, '%d', 1, 2),
             P('seed', 'Seed', 0, 9999, 1, '%d', 1),
+            P('accel', 'Downhill acceleration', 0, 1, 0.05, '%.2f', 1, 0, 'How much a drop speeds up going downhill. 1 = like a real drop (fast on steep ground, so it digs there); 0 = the old rule, which slowed drops down on slopes so they dug almost nothing.'),
+            P('drop_vary', 'Droplet variation', 0, 1, 0.05, '%.2f', 0.5, 0, 'Every drop gets its own size, lifetime, inertia and load, so the gullies are no longer evenly spaced copies of each other. 0 = identical drops.'),
         },
     },
     stream = {
@@ -75,9 +98,12 @@ Solvers = {
             P('diffusion', 'Hillslope diffusion', 0, 1, 0.05, '%.2f', 0.2),
             P('talus', 'Talus (rise / run)', 0.1, 2, 0.05, '%.2f', 0.7),
             P('uplift', 'Uplift per step (units)', 0, 2, 0.05, '%.2f', 0),
+            P('seed', 'Seed', 0, 9999, 1, '%d', 1, 1, 'The random seed of the flow jitter and the hardness and rain variation.'),
+            P('jitter', 'Flow jitter', 0, 1.5, 0.05, '%.2f', 0.4, 0, 'The water is routed over the ground plus a little smooth noise: rivers pick their own paths, branch and bend instead of running side by side straight down the slope. 0 = routed on the plain ground.'),
         },
     },
 }
+for _, name in { 'hydraulic', 'droplet', 'stream' } do Join(Solvers[name].params, Shared()) end
 
 SolverOrder = { 'hydraulic', 'droplet', 'stream' }
 
