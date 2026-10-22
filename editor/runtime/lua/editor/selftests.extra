@@ -36,3 +36,4 @@ selftest_camframe
 selftest_console
 selftest_layout_fields
 selftest_peace
+selftest_selbox
