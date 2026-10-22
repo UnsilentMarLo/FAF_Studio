@@ -2,7 +2,8 @@
 -- panels_strata.lua is limited to /env layers; this one takes the folders and patterns of the caller: sky atlases, cirrus, water ramps and wave maps, cube maps ...)
 --
 --   Open{ title, sources = { { '/textures/environment', '*.dds' }, ... }, match = function(path) -> bool (optional), none = 'text of a "no texture" entry' (optional),
---         thumbs = false (cube maps cannot be shown as a picture), current = path (selected first), done = function(path) }
+--         thumbs = false (cube maps cannot be shown as a picture), current = path (selected first), done = function(path),
+--         map = false (leave out the textures of the open map's folder, which are listed first under 'This map'), mapMatch = function(path, lowerPath, name) -> bool (which of them fit) }
 --   Close()
 --
 -- A click on a row calls done(path) and closes; Esc or a click outside closes.

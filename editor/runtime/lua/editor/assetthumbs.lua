@@ -13,6 +13,7 @@
 --   NewWave(owner)             a list calls it before it binds its visible rows again: what the owner asked in an earlier wave and did not ask again (scrolled out of view, the list changed) is
 --                              cancelled. Nothing is made for it, so a long scroll does not leave seconds of useless decoding behind
 --   Warm(kind, items)          items = { { key, source }, ... }: pictures made in the background when nothing visible waits (the whole layer texture set the first time a picker opens), never cancelled
+--   Order() -> keys             what the worker makes next, in order (tests)
 --   SetBudget(seconds)         how long the worker may work per tick (default 12 ms; the open browser raises it, nobody scrolls while a modal dialog waits for its pictures)
 --   Cached(kind, key, source)  -> vfs path | nil   only what is on disk
 --   Listen(id, fn) / Unlisten(id)  fn is called (at most every 0.2 s) when pictures were made, so a panel can redraw
@@ -538,6 +539,18 @@ function CancelWarm()
         end
     end
     warmQ, warmHead = {}, 1
+end
+
+--- The keys of the requests the worker would make next, in that order (stale ones left out). For tests and the perf report.
+function Order()
+    local list = {}
+    for _, r in wanted do
+        if not Stale(r) then table.insert(list, r) end
+    end
+    table.sort(list, function(a, b) return a.rank < b.rank end)
+    local keys = {}
+    for _, r in list do table.insert(keys, r.key) end
+    return keys
 end
 
 --- How long the worker may work per tick (nil: the default 12 ms).

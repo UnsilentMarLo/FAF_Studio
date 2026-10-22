@@ -30,3 +30,4 @@ selftest_maptextures
 selftest_texscale
 selftest_brushshape
 selftest_normalpreview
+selftest_texbrowser
