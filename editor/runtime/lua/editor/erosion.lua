@@ -12,6 +12,15 @@
 --   Apply(solver, values, opts)     full resolution run + commit: heights and, when chosen, masks to texture layers as ONE history entry
 --   Masks(result)                   -> { wear = f, deposit = f, flow = f } normalised to 0..1
 --
+-- Settings added later (every solver; see Shared() below): Hardness variation + feature size (hard and soft ground), Rain variation, Protect ridges, Keep height range, Largest change,
+-- Keep volume, and per solver Downhill acceleration + Droplet variation (droplets), Flow jitter (stream), Seed (all). Each has a `legacy` value (all off, droplet speed rule as it was): a saved
+-- graph without the key keeps its result (graphnodes.LegacyParams). A NEW node / the panel starts from `default`, which changed on purpose:
+--   hydraulic   iterations 150 (was 200), rain 0.004 (0.006), dissolving 0.08 (0.12), settling 0.05 (0.06): a default run changes the ground moderately instead of filling the valleys and
+--               smoothing the hills (the old defaults lowered the relief by a quarter on the test terrain)
+--   droplet     2 droplets per cell (1), life 40 (30), 1 filter pass (2), downhill acceleration 1 (0: with the old rule droplets slowed down on slopes and dug almost nothing)
+--   all         hardness variation 0.4, rain variation 0.5, protect ridges 0.5, keep height range on
+-- The map edge: the solvers no longer pin the outer ring (edge = open in the native ops); the old behaviour left a wall of untouched ground at the map border (EdErosion.h).
+--
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
 local Fields = import('/lua/editor/fields.lua')
