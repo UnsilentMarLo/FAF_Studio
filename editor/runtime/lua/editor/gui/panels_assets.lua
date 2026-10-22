@@ -412,7 +412,7 @@ Panels.Register{
                 local y = ControlsStrip(w)
                 local pw = Skin.S(200)
                 local gridH = math.max(Skin.S(50), h - y - pad)
-                cell = math.max(36, math.min(State.size, math.floor(gridH / Skin.S(1)) - 26))
+                cell = math.max(36, math.min(State.size, math.floor(gridH / Skin.scale) - 26))
                 if State.list then P.grid:SetCellSize(100, 26, true) else P.grid:SetCellSize(cell, cell + 22, false) end
                 P.grid:SetRect(pad, y, w - 3 * pad - pw, gridH)
                 PlacePreview(w - pad - pw, y, pw, false, gridH - Skin.S(8))

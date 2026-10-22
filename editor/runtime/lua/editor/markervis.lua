@@ -32,6 +32,7 @@ local syncFrame = 0
 local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 local Tools = import('/lua/editor/tools.lua')
 local syncedEpoch, seenChanged = -1, -1      -- what the last height sync and the last walk over the markers were done for
+local ended = false      -- Shutdown ran: the session is ending, nothing is built any more
 
 --- '/env/common/props/markers/M_Mass_prop.bp' -> '/env/common/props/markers/M_Mass_lod0.scm' (false for the mesh-less path marker).
 local function MeshOf(propBp)
@@ -100,6 +101,7 @@ local ghostShown = 0
 --- The prop of a marker about to be placed, at each { x, y, z } of `spots` (the Start position tool: pointer and symmetry images); nil or an empty list hides them.
 --- `propBp` is the template's prop blueprint path, as a placed marker's `prop` field.
 function Ghost(spots, propBp)
+    if ended then return end
     local n = spots and table.getn(spots) or 0
     local meshName = n > 0 and MeshOf(propBp)
     if n == 0 or not meshName then
@@ -155,7 +157,32 @@ function Clear()
     ghosts, ghostMesh, ghostShown = {}, false, 0
 end
 
+--- The session is ending (control.lua Teardown: another map is opened, the editor leaves): destroys every mesh and splat and builds no more. A WorldMesh is an engine object that
+--- keeps its Lua table alive itself, so it is NOT freed when this module is dropped with the Lua modules of the next session (uimain.lua): without Destroy the rocks of the
+--- previous map's resource markers stayed in the world of the next one, at their old heights.
+function Shutdown()
+    Clear()
+    ended = true
+end
+
+--- Takes the editor back into use after Shutdown (the self test only: a real session that shut down is replaced).
+function Resume()
+    ended = false
+end
+
+--- How many marker objects (resource meshes, marker props, ghosts) are alive: { entries, meshes }.
+function Count()
+    local n, meshes = 0, 0
+    for _, e in entries do
+        n = n + 1
+        if e.prop then meshes = meshes + 1 end
+        if e.deposit then meshes = meshes + 1 end
+    end
+    return n, meshes + table.getn(ghosts)
+end
+
 function Update()
+    if ended then return end
     local doc = Map.Doc
     if not doc then
         return

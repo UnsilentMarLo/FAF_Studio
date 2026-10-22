@@ -44,9 +44,20 @@ function SaveSessionUI()
     ed_write_file(SessionFile, text)
 end
 
+--- Everything the editor made in the engine that does not go away with the Lua modules: the overlay objects, and the world meshes (a WorldMesh keeps its own Lua table alive, so
+--- the next session's module reset does not free it: the rock meshes of a map's resource markers showed up in the next map, floating at their old heights). Called when a map
+--- is queued (LoadMap) and by the front-end hook (schook/lua/ui/uimain.lua) before the modules are dropped; it does nothing the second time.
+function Teardown()
+    for _, name in { 'markervis', 'placer' } do
+        local mod = __modules and __modules['/lua/editor/' .. name .. '.lua']      -- only a module that is loaded: nothing is imported here
+        if mod and mod.Shutdown then pcall(mod.Shutdown) end
+    end
+    ClearOverlays()
+end
+
 function LoadMap(name)
     pcall(SaveSessionUI)
-    ClearOverlays()
+    Teardown()
     FreeNativeStores()
     ed_write_file(NextMapFile, name)
     ExitGame()    -- back to the front end; the uimain hook then opens the queued map

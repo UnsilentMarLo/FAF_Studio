@@ -1,27 +1,35 @@
 -- Thumbnails of the asset browser (gui/panels_assets.lua): pictures of props, decals and textures, made lazily in the background and kept on disk.
 --
---   decals, textures  the DDS is reduced natively (ed_dds_thumb: one call, any size of source)
+--   decals, textures  the DDS is reduced natively (ed_dds_thumb: one call, any size of source; it starts from a small mip level of the file, so a 2048 x 2048 texture costs a 256 x 256 decode)
+--   texprev           the same at 256 x 256 (Sizes): the large preview of the texture browser, instead of loading the whole texture
 --   props             the prop stands in the lab spot (sim callback EdThumbProp) and the offscreen renderer of the icon generator takes its picture from a fixed camera
 --                     (ed_icon_request, the fitting loop of icongen.lua): 96 x 96 DXT5 with alpha
 --
 -- The cache is a folder of the user data, `assetthumbs/v<Version>/`, mounted as /edassets. A file name is kind + a hash of (key, time stamp of the source file, Version): a changed source
 -- gets a new name and the old file is left for Prune(); changing the picture recipe means raising Version, which starts a new folder (the old folders are listed by OldFolders()).
 --
---   Request(kind, key, source) -> vfs path | nil   the picture when it is in the cache; else nil and the request is queued (the most recent requests are served first)
+--   Request(kind, key, source[, owner]) -> vfs path | nil   the picture when it is in the cache; else nil and the request is queued. Requests are served in the order they were asked within
+--                              the owner's latest wave (a list binds its rows top to bottom: the first visible row is made first)
+--   NewWave(owner)             a list calls it before it binds its visible rows again: what the owner asked in an earlier wave and did not ask again (scrolled out of view, the list changed) is
+--                              cancelled. Nothing is made for it, so a long scroll does not leave seconds of useless decoding behind
+--   Warm(kind, items)          items = { { key, source }, ... }: pictures made in the background when nothing visible waits (the whole layer texture set the first time a picker opens), never cancelled
+--   SetBudget(seconds)         how long the worker may work per tick (default 12 ms; the open browser raises it, nobody scrolls while a modal dialog waits for its pictures)
 --   Cached(kind, key, source)  -> vfs path | nil   only what is on disk
 --   Listen(id, fn) / Unlisten(id)  fn is called (at most every 0.2 s) when pictures were made, so a panel can redraw
 --   Hold(seconds)              the background worker makes no picture for this long (a list that is being scrolled calls it on every wheel step: decoding a big DDS blocks the
 --                              frame, and the rows that scroll by are not wanted anyway)
 --   Pause(on)                  the renders wait while the unit viewer / a capture / a stroke needs the renderer
---   Stats()                    { queued, made, failed, rendered, hits }
+--   Stats()                    { queued, made, failed, rendered, hits, cancelled, warm, avgMs, maxMs }   (avgMs / maxMs: the time of one native picture, also in the perf report as 'thumbs: make <kind>')
 --   Clear()                    forgets what is queued and failed (the files stay)
 --
 -- Lua 5.0 dialect. The worker is a thread: nothing in here waits inside a pcall.
 
 local UserData = import('/lua/editor/userdata.lua')
+local Perf = import('/lua/editor/perf.lua')
 
 Version = 1
 Size = 96
+Sizes = { texprev = 256 }       -- kinds whose picture is not Size wide
 KEEP = 0.15             -- pieces smaller than this fraction of the largest piece of the render are ignored
 ABOVE = 30             -- how far above the ground a prop stands while its picture is taken
 
@@ -33,7 +41,15 @@ local mounted = false
 local known = {}         -- cache file names known to exist
 local failedNames = {}   -- cache file names that could not be made (not asked again until Clear)
 local queued = {}        -- id -> true
-local natives = {}       -- queued decals / textures
+local wanted = {}        -- queued decals / textures that a list asked for (served by rank)
+local warmQ = {}         -- queued warm-up requests, first in first out
+local warmHead = 1
+local warmSeen = {}      -- id -> true: asked to warm in this session (not checked again)
+local waves = {}         -- owner -> number of its latest wave
+local rankCounter = 0
+local budget = 0.012       -- seconds of work per worker tick
+local MAX_WARM = 3000
+local lastNotify = 0
 local renders = {}       -- queued props
 local running = false
 local holdUntil = 0
@@ -41,7 +57,7 @@ local nameCache = {}     -- kind|key -> { name, at, version, source }: Name() re
 local NAME_TTL = 5       -- seconds a cache name is trusted (a source file that changes is noticed after that)
 local MAX_NATIVE_QUEUE = 200
 local MAX_RENDER_QUEUE = 24
-local counts = { made = 0, failed = 0, rendered = 0, hits = 0 }
+local counts = { made = 0, failed = 0, rendered = 0, hits = 0, cancelled = 0, warm = 0, ms = 0, maxMs = 0 }
 local changedAt = false
 local infoPath = 'ed_thumb_info.txt'
 
@@ -139,7 +155,13 @@ local function MakeNative(req)
     end
     local disk = ed_vfs_to_disk(req.source)
     local path = Dir() .. '/' .. req.name
-    local w = disk and ed_dds_thumb and ed_dds_thumb(disk, path, Size)
+    -- (the last argument: start from a small mip level of the file)
+    local t0 = GetSystemTimeSeconds()
+    local w = disk and ed_dds_thumb and ed_dds_thumb(disk, path, Sizes[req.kind] or Size, 1)
+    local dt = GetSystemTimeSeconds() - t0
+    counts.ms = counts.ms + dt * 1000
+    if dt * 1000 > counts.maxMs then counts.maxMs = dt * 1000 end
+    Perf.End('thumbs: make ' .. tostring(req.kind), Perf.Enabled and t0 or nil)
     if w then
         known[req.name] = true
         counts.made = counts.made + 1
@@ -147,6 +169,53 @@ local function MakeNative(req)
         failedNames[req.name] = true
         counts.failed = counts.failed + 1
     end
+end
+
+--- True when the owner of a request asked for something newer since (a wave it is not part of).
+local function Stale(req)
+    return req.owner ~= nil and req.wave < (waves[req.owner] or 0)
+end
+
+--- Removes what is stale from `wanted` and takes the request with the lowest rank (the first one the latest wave asked for); nil when there is none.
+local function NextWanted()
+    local n = table.getn(wanted)
+    local j = 0
+    local best, bestAt
+    for i = 1, n do
+        local r = wanted[i]
+        if Stale(r) then
+            queued[r.id] = nil
+            counts.cancelled = counts.cancelled + 1
+        else
+            j = j + 1
+            wanted[j] = r
+            if not best or r.rank < best.rank then best, bestAt = r, j end
+        end
+    end
+    for i = j + 1, n do wanted[i] = nil end
+    if best then table.remove(wanted, bestAt) end
+    return best
+end
+
+--- The next warm-up request that is still to be made (those already on disk are skipped here); nil when the queue is empty or `limit` (a time) is reached.
+local function NextWarm(limit)
+    while warmHead <= table.getn(warmQ) do
+        local r = warmQ[warmHead]
+        warmQ[warmHead] = false
+        warmHead = warmHead + 1
+        if r and r.state == 'warm' then
+            r.name = NameOf(r.kind, r.key, r.source)
+            if known[r.name] or failedNames[r.name] or Exists(r.name) then
+                r.state = 'done'
+                queued[r.id] = nil
+            else
+                return r
+            end
+        end
+        if GetSystemTimeSeconds() >= limit then return nil end
+    end
+    if warmHead > 1 then warmQ, warmHead = {}, 1 end
+    return nil
 end
 
 local function Pending()
@@ -310,14 +379,26 @@ local function Worker()
     while true do
         local t0 = GetSystemTimeSeconds()
         local served = 0
-        while table.getn(natives) > 0 and GetSystemTimeSeconds() - t0 < 0.012 and t0 >= holdUntil do
-            local req = table.remove(natives)
+        -- a picture somebody looks at first, then the warm-up; the warm-up gets a smaller share of the frame (nobody waits for it)
+        while t0 >= holdUntil do
+            local now = GetSystemTimeSeconds()
+            local req = NextWanted()
+            local limit = t0 + budget
+            if not req then
+                limit = t0 + math.min(budget, 0.008)
+                if now >= limit then break end
+                req = NextWarm(limit)
+                if req then counts.warm = counts.warm + 1 end
+            end
+            if not req then break end
             queued[req.id] = nil
+            req.state = 'done'
             pcall(MakeNative, req)
-            served = served + 1
+            if not req.warm then served = served + 1 end
+            if GetSystemTimeSeconds() >= limit then break end
         end
         if served > 0 then Changed() end
-        if table.getn(natives) == 0 and table.getn(renders) > 0 and t0 >= holdUntil then
+        if table.getn(wanted) == 0 and table.getn(renders) > 0 and t0 >= holdUntil then
             if CanRender() then
                 local req = table.remove(renders)
                 queued[req.id] = nil
@@ -337,11 +418,13 @@ local function Worker()
                 WaitSeconds(0.8)
             end
         end
-        if changedAt and GetSystemTimeSeconds() - changedAt >= 0.2 then
+        -- (at most one redraw every 0.2 s while pictures keep coming: they appear as they are made, not when the queue is empty)
+        if changedAt and GetSystemTimeSeconds() - lastNotify >= 0.2 then
             changedAt = false
+            lastNotify = GetSystemTimeSeconds()
             for _, fn in Listeners do pcall(fn) end
         end
-        if table.getn(natives) == 0 and table.getn(renders) == 0 and not changedAt then break end
+        if table.getn(wanted) == 0 and warmHead > table.getn(warmQ) and table.getn(renders) == 0 and not changedAt then break end
         WaitTicks(2)
     end
     running = false
@@ -353,20 +436,33 @@ local function Start()
     ForkThread(Worker)
 end
 
-function Request(kind, key, source)
+function Request(kind, key, source, owner)
     local name, id = NameOf(kind, key, source)
     if known[name] and Mount() then
         counts.hits = counts.hits + 1
         return '/edassets/' .. name
     end
+    local isProp = (kind == 'props')
     local waiting = queued[id]
     if waiting then
-        -- asked again: the most recent request goes to the end (served first); a request that is last already stays
-        local list = (kind == 'props') and renders or natives
-        local n = table.getn(list)
-        if list[n] ~= waiting then
-            for i = n - 1, 1, -1 do
-                if list[i] == waiting then table.remove(list, i) table.insert(list, waiting) break end
+        if isProp then
+            -- asked again: the most recent request goes to the end (served first); a request that is last already stays
+            local n = table.getn(renders)
+            if renders[n] ~= waiting then
+                for i = n - 1, 1, -1 do
+                    if renders[i] == waiting then table.remove(renders, i) table.insert(renders, waiting) break end
+                end
+            end
+        else
+            -- asked again in the owner's latest wave: it keeps its place in the wave (the order the list binds its rows); a warm-up request becomes a wanted one
+            rankCounter = rankCounter + 1
+            waiting.rank = rankCounter
+            waiting.owner = owner
+            waiting.wave = owner and (waves[owner] or 0) or 0
+            if waiting.state == 'warm' then
+                waiting.state = 'wanted'
+                waiting.warm = false
+                table.insert(wanted, waiting)
             end
         end
         return nil
@@ -377,17 +473,76 @@ function Request(kind, key, source)
         return '/edassets/' .. name
     end
     Mount()
-    local req = { id = id, kind = kind, key = key, source = source, name = name }
+    local req = { id = id, kind = kind, key = key, source = source, name = name, state = 'wanted' }
     queued[id] = req
-    local list = (kind == 'props') and renders or natives
-    table.insert(list, req)
-    -- a long scroll asks for thousands of pictures that are gone from the screen again before they are made: only the most recent requests are kept
-    if table.getn(list) > ((kind == 'props') and MAX_RENDER_QUEUE or MAX_NATIVE_QUEUE) then
-        local old = table.remove(list, 1)
-        queued[old.id] = nil
+    if isProp then
+        table.insert(renders, req)
+        -- a long scroll asks for thousands of pictures that are gone from the screen again before they are made: only the most recent requests are kept
+        if table.getn(renders) > MAX_RENDER_QUEUE then
+            local old = table.remove(renders, 1)
+            queued[old.id] = nil
+        end
+    else
+        rankCounter = rankCounter + 1
+        req.rank = rankCounter
+        req.owner = owner
+        req.wave = owner and (waves[owner] or 0) or 0
+        table.insert(wanted, req)
+        if table.getn(wanted) > MAX_NATIVE_QUEUE then
+            -- too many: the least urgent one (the latest asked) goes
+            local worst, at = req, table.getn(wanted)
+            for i = 1, table.getn(wanted) do
+                if wanted[i].rank > worst.rank then worst, at = wanted[i], i end
+            end
+            table.remove(wanted, at)
+            queued[worst.id] = nil
+        end
     end
     Start()
     return nil
+end
+
+--- A list is about to bind its visible rows again: whatever `owner` asked in earlier waves and does not ask for in this one is cancelled (see the header).
+function NewWave(owner)
+    waves[owner] = (waves[owner] or 0) + 1
+end
+
+--- Makes the pictures of `items` ({ key, source }, in the order they are wanted) of kind `kind` in the background once nothing visible waits. An item that is on disk costs one file check.
+function Warm(kind, items)
+    local added = 0
+    for _, it in items do
+        local id = kind .. '|' .. it.key
+        if not warmSeen[id] and not queued[id] and table.getn(warmQ) - warmHead < MAX_WARM then
+            warmSeen[id] = true
+            local req = { id = id, kind = kind, key = it.key, source = it.source or it.key, state = 'warm', warm = true }
+            queued[id] = req
+            table.insert(warmQ, req)
+            added = added + 1
+        end
+    end
+    if added > 0 then
+        Mount()
+        Start()
+    end
+    return added
+end
+
+--- Gives up the warm-up requests that are still waiting.
+function CancelWarm()
+    for i = warmHead, table.getn(warmQ) do
+        local r = warmQ[i]
+        if r and r.state == 'warm' then
+            queued[r.id] = nil
+            r.state = 'done'
+            warmSeen[r.id] = nil
+        end
+    end
+    warmQ, warmHead = {}, 1
+end
+
+--- How long the worker may work per tick (nil: the default 12 ms).
+function SetBudget(seconds)
+    budget = seconds or 0.012
 end
 
 --- The worker makes no picture for `seconds` (see the header).
@@ -439,11 +594,17 @@ function Unlisten(id) Listeners[id] = nil end
 function Pause(on) Paused = on and true or false end
 
 function Stats()
-    return { queued = table.getn(natives) + table.getn(renders), made = counts.made, failed = counts.failed, rendered = counts.rendered, hits = counts.hits }
+    local warm = 0
+    for i = warmHead, table.getn(warmQ) do
+        if warmQ[i] and warmQ[i].state == 'warm' then warm = warm + 1 end
+    end
+    return { queued = table.getn(wanted) + table.getn(renders) + warm, wanted = table.getn(wanted), warmQueued = warm, made = counts.made, failed = counts.failed, rendered = counts.rendered,
+             hits = counts.hits, cancelled = counts.cancelled, warm = counts.warm, avgMs = (counts.made + counts.failed > 0) and (counts.ms / (counts.made + counts.failed)) or 0, maxMs = counts.maxMs }
 end
 
 function Clear()
-    natives, renders, queued = {}, {}, {}
+    wanted, renders, queued = {}, {}, {}
+    warmQ, warmHead, warmSeen = {}, 1, {}
     failedNames = {}
     nameCache = {}
 end
@@ -456,7 +617,8 @@ function Reset()
     nameCache = {}
     holdUntil = 0
     mounted = false
-    counts = { made = 0, failed = 0, rendered = 0, hits = 0 }
+    waves, rankCounter, lastNotify, budget = {}, 0, 0, 0.012
+    counts = { made = 0, failed = 0, rendered = 0, hits = 0, cancelled = 0, warm = 0, ms = 0, maxMs = 0 }
 end
 
 --- Deletes nothing (there is no delete native); lists the cache files that no current entry would use is the job of the owner. Returns the number of files known to exist.

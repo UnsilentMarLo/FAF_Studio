@@ -25,6 +25,7 @@ local lastTool = false
 local ghosts = {}           -- pool of WorldMesh
 local ghostKeys = {}        -- ghost number -> what it was made for (blueprint and colour)
 local anyShown = false      -- something of the placement preview is on screen
+local ended = false         -- Shutdown ran: the session is ending, no ghost is made any more
 local decalIds = {}         -- overlay decal ids in use
 local footIds = {}          -- overlay ids of the footprint quads in use
 local MAX_GHOSTS = 80
@@ -473,6 +474,7 @@ end
 
 --- Every frame: the ghosts at the pointer / along the line.
 function Update(ui, view)
+    if ended then return end
     frame = frame + 1
     local tool = ui.State.tool
     local kind = KIND[tool]
@@ -540,6 +542,7 @@ end
 
 --- Shows ghosts for list of { id, x, z, heading, unit } (blueprint ids of units or props); an empty list hides them. skip: set of 'army|name' of the units being moved.
 function ShowMoves(list, skip)
+    if ended then return end
     local n = 0
     local footUsed = {}
     local ctx
@@ -574,6 +577,7 @@ end
 
 --- What the select tools are dragging right now, as ghosts: called every frame by overlay.lua.
 function UpdateMoves(ui)
+    if ended then return end
     local tool = ui.State.tool
     local Gizmo = import('/lua/editor/gizmo.lua')
     local turn = Gizmo.Preview and Gizmo.Preview.turn
@@ -603,4 +607,24 @@ function UpdateMoves(ui)
         end
     end
     if table.getn(list) > 0 or table.getn(moveGhosts) > 0 or moveFoot then ShowMoves(list, skip) end
+end
+
+--- The session is ending (control.lua Teardown): destroys every ghost mesh (a WorldMesh outlives the Lua modules of the session unless it is destroyed) and makes no more.
+function Shutdown()
+    Clear()
+    for i, g in ghosts do g:Destroy() end
+    ghosts, ghostKeys = {}, {}
+    for i, g in moveGhosts do g:Destroy() end
+    moveGhosts, moveKeys = {}, {}
+    ended = true
+end
+
+--- Takes the placer back into use after Shutdown (the self test only).
+function Resume()
+    ended = false
+end
+
+--- How many ghost meshes exist.
+function GhostCount()
+    return table.getn(ghosts) + table.getn(moveGhosts)
 end
