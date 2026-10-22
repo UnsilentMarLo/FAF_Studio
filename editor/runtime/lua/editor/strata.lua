@@ -15,6 +15,8 @@
 --   Active               the painted layer (1..8) the paint / erase brushes work on
 --   Brush                the texture brush settings
 --   BeginStroke() / Dab(cx, cz, brush, weight) / EndStroke()      painting; TakeEntry() returns the undo entry of the finished stroke
+--   Range()                                'half' | 'full': how the map's shader reads a mask byte (shaders.lua RangeOf); every brush and mask tool stores bytes that way
+--   Profile()                              shaders.lua Profile of the map's shader (painted layers, what layer 8 is ...)
 --
 -- Undo entries are plain { label, undo, redo } like the object edits (history.lua keeps one order for everything).
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
@@ -66,19 +68,40 @@ local stroke = false      -- { orig = { [cell] = value }, layer, minX, minZ, max
 local pending = false     -- the finished stroke's undo entry until ui.lua takes it
 local notice = false      -- a message for the status line (ui.lua shows it)
 
--- The terrain shader reads a mask byte m as saturate(2 * m / 255 - 1) (terrain.fx): bytes up to 127 mean "nothing", 255 means "fully this layer".
--- The brushes work on that effective value (0..1) and store it back in the shader's encoding, so the first dab already shows and an erased
--- cell goes back to 0.
-local function Decode(m)
+-- The terrain shaders of the TTerrain family and the half-range numbered ones (Terrain050 ...) read a mask byte m as saturate(2 * m / 255 - 1) (terrain.fx): bytes up to 127 mean "nothing",
+-- 255 means "fully this layer". The full-range shaders (Terrain000, Terrain100 ...) read the byte as it is (m / 255). The brushes work on the effective value (0..1) and store it back in the
+-- encoding of the map's shader (Range()), so the first dab already shows and an erased cell goes back to 0.
+local function Decode(m, full)
+    if full then return m / 255 end
     local e = 2 * m / 255 - 1
     if e < 0 then return 0 end
     return e
 end
 
-local function Encode(e)
+local function Encode(e, full)
     if e <= 0 then return 0 end
     if e > 1 then e = 1 end
+    if full then return math.floor(e * 255 + 0.5) end
     return math.floor((e + 1) / 2 * 255 + 0.5)
+end
+
+--- How the shader of the map reads a paint mask byte: 'half' (saturate(2m - 1)) or 'full' (the byte is the share). See shaders.lua.
+function Range()
+    return Shaders.RangeOf(ed_stratum_shader())
+end
+
+--- shaders.lua Profile of the map's shader: painted layers, what layer 8 is, what the Upper layer is, ...
+function Profile()
+    return Shaders.Profile(ed_stratum_shader())
+end
+
+--- nil when layer i (1..8) can be painted with the map's shader, else the reason (the numbered shaders have no painted 8th layer: its mask is the roughness multiplier or unused).
+local function Unpaintable(i)
+    if i ~= 8 then return nil end
+    local p = Profile()
+    if p.l8 == 'rough' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': its mask is the roughness multiplier (Convert layers... moves its paint to another layer)' end
+    if p.l8 == 'data' then return 'Layer 8 is not painted with ' .. tostring(ed_stratum_shader()) .. ': it only holds map-wide data (Convert layers... moves its paint to another layer)' end
+    return nil
 end
 
 --- Mask size in cells and the world size of one cell (nil without a terrain).
