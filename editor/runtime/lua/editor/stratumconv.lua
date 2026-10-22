@@ -523,7 +523,7 @@ local function StepMapData(ctx)
         end
     end
     if t.normal and not MapDataActive(18) then
-        local entry, err = MT.Generate('normal', { noPush = true })
+        local entry, err = MT.Generate('normal', { noPush = true, size = 512 })          -- the pictures are written from Lua tables: 512 keeps it to seconds (Map textures makes bigger ones)
         Untrack(18)
         Done('Layer 8 normal map: the map normal map (made from the terrain)', entry, err)
         if entry then
@@ -534,7 +534,7 @@ local function StepMapData(ctx)
     if t.light and not MapDataActive(8) then
         local entry, err
         if t.light == 'generate' then
-            entry, err = MT.Generate('light', { noPush = true, shadow = false })
+            entry, err = MT.Generate('light', { noPush = true, shadow = false, size = 256 })
             Done('Layer 8 albedo: the water depth of the terrain (no baked shadow)', entry, err)
         else
             entry, err = MT.Clear('light', { noPush = true })
