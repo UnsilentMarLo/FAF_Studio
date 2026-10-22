@@ -346,6 +346,12 @@ CRI. The old local snapshot (`faf-re-master`) is superseded.
   checks of `selftest_terrain.lua`. A stroke's re-snap of units is coalesced (`sim.lua ResnapLater`: one `EdResnap` per ~0.15 s, flushed at the
   stroke's end) and `ui.lua PumpStroke` lays the dabs within a ~6 ms budget per frame. The noise brush's hash was replaced (the old one was -1 nearly
   everywhere in 32-bit float Lua numbers).
+  **Shaped brushes (native):** `ed_brush_shape_set(handle, n, values)` stores a shape mask (n x n over the unit square, `brushes.lua Grid`: procedural shapes
+  rasterised once at 129 x 129, image masks at 64 x 64, cached until `Brushes.Rescan`); `ed_terrain_brush` takes the handle and the turn angle as arguments
+  13 and 14 and reads the mask bilinearly in place of the falloff profile (same maths as `Brushes.Weight`, `EdBrush.h ShapeSampler`), so ridge / mountain /
+  plateau / image brushes cost the same as the round one. `ed_erode_dab` takes `opts.shape` / `opts.angle` the same way. Lua falls back to `Brushes.Fill`
+  (a tight loop, also used by the cursor preview) and the old per-sample loop when the exe lacks the natives. Tests: the shaped checks of `EdBrushTest`,
+  `selftest_brushshape.lua`. Perf marks: `brush.mask`, `brush.upload`, `brush.fill`, `terrain.dab.native.shaped`, `terrain.dab.lua.shaped`, `strata.dab.shaped`, `stamp.dab`.
   **Noise brush:** smooth value noise on a lattice (seeded integer hash with intermediates below 2^24, smoothstep blend, 1-4 octaves), sampled at the
   world position with the stroke id as seed, so the dabs of one stroke join into continuous bumps. Settings `Brush.noiseScale` (lattice cell, default 8),
   `noiseOctaves` (2), `noiseRoughness` (0.5), sliders in the Brush panel while the Noise tool is active, passed to `ed_terrain_brush` as arguments 10-12

@@ -24,7 +24,7 @@ local Sim = import('/lua/editor/sim.lua')
 
 local WORD = 128
 local PI = 3.14159265
-local RES = 128           -- resolution at which picture masks are sampled
+local RES = 129           -- resolution of the shape grids the stamp reads (brushes.lua Grid: pictures are loaded at this size, procedural shapes rasterised once)
 
 MODES = {
     { id = 'add', label = 'Add' }, { id = 'subtract', label = 'Subtract' }, { id = 'max', label = 'Max' }, { id = 'min', label = 'Min' }, { id = 'replace', label = 'Replace' },
@@ -93,15 +93,34 @@ function ToSource(image, dx, dz)
 end
 
 --- The stamp's value (0..1) at the offset (dx, dz) of a dab of radius r: picture rotated by the settings, scaled by the dab's size, faded at the edge.
+-- Mask runs once per sample of a dab: the turn's cos / sin are kept for the last angle, and the shape is read from its cached grid (brushes.lua Grid / GridSample, bilinear),
+-- not evaluated or looked up by name per sample.
+local trigAngle, trigC, trigS = nil, 1, 0
+local gridShape, gridRev, grid = nil, -1, nil
+
 local function Mask(dx, dz, r)
     local rr = r * dab.scale
-    local a = math.rad(S.rotation + dab.turn)
-    local c, s = math.cos(a), math.sin(a)
+    local angle = S.rotation + dab.turn
+    if angle ~= trigAngle then
+        trigAngle = angle
+        local a = math.rad(angle)
+        trigC, trigS = math.cos(a), math.sin(a)
+    end
+    local c, s = trigC, trigS
     local u = (dx * c + dz * s) / rr
     local v = (-dx * s + dz * c) / rr
     local d2 = u * u + v * v
     if d2 > 1.6 then return 0 end
-    local m = Brushes.Sample(S.shape, u, v, RES)
+    if S.shape ~= gridShape or gridRev ~= Brushes.Revision() then
+        gridShape, gridRev = S.shape, Brushes.Revision()
+        grid = Brushes.Grid(S.shape, RES)         -- nil for 'round': a flat disc
+    end
+    local m
+    if grid then
+        m = Brushes.GridSample(grid, u, v)
+    else
+        m = (d2 <= 1) and 1 or 0
+    end
     if m <= 0 then return 0 end
     local f = S.falloff / 100
     if f > 0 then

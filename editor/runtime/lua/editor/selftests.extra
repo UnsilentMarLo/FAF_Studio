@@ -28,3 +28,4 @@ selftest_symdetect
 selftest_strataconv
 selftest_maptextures
 selftest_texscale
+selftest_brushshape

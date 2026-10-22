@@ -10,8 +10,17 @@
 --   Sample(id, u, v, n)         -> 0..1: the mask at (u, v) in the unit square -1..1 (no rotation, no falloff); image masks are loaded at n x n (default 64; the stamp tools ask for 128)
 --   Import(paths)               copies image files (PNG / TIF / BMP / DDS) into the user's brush folder and rescans: -> number copied
 --   Entry(id)                   the List() entry of a shape id
+--   Grid(id, n)                 the shape rasterised once on an n x n grid over the unit square (corners on the samples): { n, values } with values[z * n + x + 1]. Procedural shapes
+--                               are evaluated at n (default 129), image masks are read at n (default 64); both are cached until Rescan(). Weight, Fill, the stamp tools and the native
+--                               brush (NativeShape) all read this one grid, bilinear, so no shape function or file is touched per sample.
+--   GridSample(g, u, v)         the bilinear read of a grid (0 outside the unit square)
+--   Fill(id, r, turn, px, pz, x0, z0, x1, z1 [, scale])    the weights Weight gives a brush of radius r at (px, pz) over the samples x0..x1 / z0..z1 (a table, row after row), 0 at and
+--                               beyond the radius; with `scale` each is floor(weight * scale) (the cursor preview); a tight loop (the erosion brush and the preview use it)
+--   NativeShape(id)             the handle of the shape in the exe's brush shape table (ed_brush_shape_set, uploaded once per shape and Rescan), or nil when the exe has no such native
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
+
+local Perf = import('/lua/editor/perf.lua')
 
 Active = 'round'
 Angle = 0
@@ -119,9 +128,20 @@ function List()
     return list
 end
 
+local grids = {}      -- 'id|n' -> { n, values }: procedural shapes rasterised (images are in `masks`)
+local gridRev = 0        -- bumped by Rescan: anything derived from the grids (the exe's shape table) is stale when it differs
+local PROC_RES = 129     -- procedural shapes are rasterised at 129 x 129 (an odd size puts the middle of the brush, u = v = 0, on a grid sample, so a cone keeps its peak; the finest feature, the mountain's third octave, is 8 grid steps wide)
+
+--- Changes whenever the grids are dropped (Rescan): a cached grid or exe shape from an older revision is stale.
+function Revision()
+    return gridRev
+end
+
 function Rescan()
     images = false
     masks = {}
+    grids = {}
+    gridRev = gridRev + 1
 end
 
 local function Mask(entry, n)
@@ -167,17 +187,23 @@ local function Mask(entry, n)
     return m
 end
 
-local function ImageSample(m, u, v)
+--- The bilinear read of a grid { n, values } at (u, v) of the unit square (-1..1); 0 outside it.
+function GridSample(m, u, v)
     local n = m.n
-    local fx, fz = (u + 1) * 0.5 * (n - 1), (v + 1) * 0.5 * (n - 1)
-    if fx < 0 or fz < 0 or fx > n - 1 or fz > n - 1 then return 0 end
+    local top = n - 1
+    local fx, fz = (u + 1) * 0.5 * top, (v + 1) * 0.5 * top
+    if fx < 0 or fz < 0 or fx > top or fz > top then return 0 end
     local x0, z0 = math.min(n - 2, math.floor(fx)), math.min(n - 2, math.floor(fz))
     local tx, tz = fx - x0, fz - z0
-    local function At(x, z) return m.values[z * n + x + 1] end
-    local top = At(x0, z0) * (1 - tx) + At(x0 + 1, z0) * tx
-    local bottom = At(x0, z0 + 1) * (1 - tx) + At(x0 + 1, z0 + 1) * tx
-    return top * (1 - tz) + bottom * tz
+    local vals = m.values
+    local i = z0 * n + x0 + 1
+    local a, b, c, d = vals[i], vals[i + 1], vals[i + n], vals[i + n + 1]
+    local upper = a * (1 - tx) + b * tx
+    local lower = c * (1 - tx) + d * tx
+    return upper * (1 - tz) + lower * tz
 end
+
+local ImageSample = GridSample
 
 local procById = false
 
@@ -227,19 +253,149 @@ function Import(paths)
     return count
 end
 
---- Mask value at offset (dx, dz) from the centre of a brush of radius r, the mask turned by Angle + `turn` degrees.
-function Weight(id, dx, dz, r, turn)
-    local a = math.rad((Angle or 0) + (turn or 0))
-    local c, s = math.cos(a), math.sin(a)
-    local u = (dx * c + dz * s) / r
-    local v = (-dx * s + dz * c) / r
-    if u * u + v * v > 1.6 then return 0 end
+--- The grid of a shape id (see the header), cached. nil for 'round' and an unknown id.
+function Grid(id, n)
     local p = Find(id)
-    if p then return p.f(u, v) end
+    if p then
+        n = n or PROC_RES
+        local key = id .. '|' .. n
+        local g = grids[key]
+        if g then return g end
+        local t0 = Perf.Begin()
+        local values = {}
+        local f = p.f
+        local step = 2 / (n - 1)
+        for j = 0, n - 1 do
+            local v = j * step - 1
+            local row = j * n + 1
+            for i = 0, n - 1 do
+                values[row + i] = f(i * step - 1, v)
+            end
+        end
+        g = { n = n, values = values }
+        grids[key] = g
+        Perf.End('brush.mask', t0)
+        return g
+    end
     if string.sub(id, 1, 4) == 'img:' then
         if not images then List() end
         local e = imageById[id]
-        if e then return ImageSample(Mask(e), u, v) end
+        if e then
+            local t0 = Perf.Begin()
+            local g = Mask(e, n)
+            Perf.End('brush.mask', t0)
+            return g
+        end
     end
-    return 0
+    return nil
+end
+
+local trigAngle, trigC, trigS = nil, 1, 0      -- cos / sin of the last angle used (the angle is the same for every sample of a dab)
+local lastId, lastGrid, lastRev = nil, nil, -1 -- the grid of the last shape id Weight read
+
+--- Mask value at offset (dx, dz) from the centre of a brush of radius r, the mask turned by Angle + `turn` degrees. A bilinear read of Grid(id): the native brush
+--- (ed_terrain_brush with a shape handle, EdBrush.h ShapeSampler) does the same arithmetic.
+function Weight(id, dx, dz, r, turn)
+    local angle = (Angle or 0) + (turn or 0)
+    if angle ~= trigAngle then
+        trigAngle = angle
+        local a = math.rad(angle)
+        trigC, trigS = math.cos(a), math.sin(a)
+    end
+    local c, s = trigC, trigS
+    local u = (dx * c + dz * s) / r
+    local v = (-dx * s + dz * c) / r
+    if u * u + v * v > 1.6 then return 0 end
+    local g
+    if id == lastId and lastRev == gridRev then
+        g = lastGrid
+    else
+        g = Grid(id)
+        lastId, lastGrid, lastRev = id, g, gridRev
+    end
+    if not g then return 0 end
+    -- (GridSample inlined: the texture brush calls this once per mask cell)
+    local n = g.n
+    local top = n - 1
+    local fx, fz = (u + 1) * 0.5 * top, (v + 1) * 0.5 * top
+    if fx < 0 or fz < 0 or fx > top or fz > top then return 0 end
+    local x0, z0 = math.min(n - 2, math.floor(fx)), math.min(n - 2, math.floor(fz))
+    local tx, tz = fx - x0, fz - z0
+    local vals = g.values
+    local i = z0 * n + x0 + 1
+    local upper = vals[i] * (1 - tx) + vals[i + 1] * tx
+    local lower = vals[i + n] * (1 - tx) + vals[i + n + 1] * tx
+    return upper * (1 - tz) + lower * tz
+end
+
+--- The weights of a shaped brush over a sample rectangle (see the header): the loop of Weight with everything hoisted, for the cursor preview and the erosion brush.
+function Fill(id, r, turn, px, pz, x0, z0, x1, z1, scale)
+    local t0 = Perf.Begin()
+    local out = {}
+    local g = Grid(id)
+    local n = 0
+    if not g or not (r > 0) then
+        for i = 1, (x1 - x0 + 1) * (z1 - z0 + 1) do out[i] = 0 end
+        Perf.End('brush.fill', t0)
+        return out
+    end
+    local a = math.rad((Angle or 0) + (turn or 0))
+    local c, s = math.cos(a), math.sin(a)
+    local gn, vals = g.n, g.values
+    local top = gn - 1
+    local sqrt, floor = math.sqrt, math.floor
+    for z = z0, z1 do
+        local dz = z - pz
+        local dz2 = dz * dz
+        for x = x0, x1 do
+            local dx = x - px
+            n = n + 1
+            local w = 0
+            if sqrt(dx * dx + dz2) < r then
+                local u = (dx * c + dz * s) / r
+                local v = (-dx * s + dz * c) / r
+                if u * u + v * v <= 1.6 then
+                    local fx, fz = (u + 1) * 0.5 * top, (v + 1) * 0.5 * top
+                    if fx >= 0 and fz >= 0 and fx <= top and fz <= top then
+                        local ix, iz = floor(fx), floor(fz)
+                        if ix > gn - 2 then ix = gn - 2 end
+                        if iz > gn - 2 then iz = gn - 2 end
+                        local tx, tz = fx - ix, fz - iz
+                        local i = iz * gn + ix + 1
+                        local upper = vals[i] * (1 - tx) + vals[i + 1] * tx
+                        local lower = vals[i + gn] * (1 - tx) + vals[i + gn + 1] * tx
+                        w = upper * (1 - tz) + lower * tz
+                    end
+                end
+            end
+            if scale then w = floor(w * scale) end
+            out[n] = w
+        end
+    end
+    Perf.End('brush.fill', t0)
+    return out
+end
+
+local handles = {}       -- shape id -> { handle, rev, ok }: where the shape lives in the exe's table
+local nextHandle = 0
+
+--- The handle of a shape in the exe's brush shape table (ed_brush_shape_set, EdBrush.cpp), uploading its grid on first use and after Rescan; nil when the exe has no
+--- such native, the shape is 'round' / unknown or the upload failed. The native dab (ed_terrain_brush) and the erosion brush read the shape by this handle.
+function NativeShape(id)
+    local set = rawget(_G, 'ed_brush_shape_set')
+    if not set then return nil end
+    local h = handles[id]
+    if h and h.rev == gridRev then return h.ok and h.handle or nil end
+    local g = Grid(id)
+    if not g then return nil end
+    if not h then
+        nextHandle = nextHandle + 1
+        h = { handle = nextHandle }
+        handles[id] = h
+    end
+    local t0 = Perf.Begin()
+    h.ok = set(h.handle, g.n, g.values) and true or false
+    Perf.End('brush.upload', t0)
+    h.rev = gridRev
+    return h.ok and h.handle or nil
 end

@@ -17,6 +17,7 @@ local Decals = import('/lua/editor/decals.lua')
 local Brushes = import('/lua/editor/brushes.lua')
 local EroBrush = import('/lua/editor/erosionbrush.lua')
 local Stamp = import('/lua/editor/stamp.lua')
+local Perf = import('/lua/editor/perf.lua')
 
 local WORD = 128
 local PI = 3.14159265
@@ -201,6 +202,11 @@ local strokeProp = false      -- the open stroke places or erases props (props.l
 local strokeDecal = false     -- the open stroke places or erases decals (decals.lua)
 local strokeErode = false     -- the open stroke runs the erosion session (erosionbrush.lua)
 
+--- The random extra turn (degrees) of the shape mask in the current / last stroke (the cursor preview draws the mask with it).
+function StrokeTurn()
+    return strokeTurn
+end
+
 --- Test control only: the next BeginStroke gets this stroke id (the noise brush's seed), so two runs of a stroke can be compared.
 function SetNextStrokeId(id)
     strokeId = id - 1
@@ -286,12 +292,21 @@ function DabOne(cx, cz, slot, image)
     if strokePaint then
         if Brush.mode == 'stamp_paint' then
             local brush = Stamp.PaintBrush(Brush)
-            return Strata.Dab(cx, cz, brush, function(d, rr, softMin, dx, dz) return Stamp.PaintWeight(dx, dz, Brush.radius, image) end, slot)
+            local t0 = Perf.Begin()
+            local n = Strata.Dab(cx, cz, brush, function(d, rr, softMin, dx, dz) return Stamp.PaintWeight(dx, dz, Brush.radius, image) end, slot)
+            Perf.End('stamp.paint.dab', t0)
+            return n
         end
-        return Strata.Dab(cx, cz, Brush, Weight, slot)
+        local t0 = Perf.Begin()
+        local n = Strata.Dab(cx, cz, Brush, Weight, slot)
+        Perf.End(Brushes.Active ~= 'round' and 'strata.dab.shaped' or 'strata.dab', t0)
+        return n
     end
     if Brush.mode == 'stamp' then
-        return Stamp.Dab(cx, cz, Brush, image)
+        local t0 = Perf.Begin()
+        local n = Stamp.Dab(cx, cz, Brush, image)
+        Perf.End('stamp.dab', t0)
+        return n
     end
     if strokeErode then
         -- local erosion: the native session keeps water and sediment between the dabs of the stroke
@@ -299,13 +314,23 @@ function DabOne(cx, cz, slot, image)
         if IsKeyDown and IsKeyDown('Shift') then inverted = not inverted end
         local shaped = nil
         if Brushes.Active ~= 'round' then
-            shaped = function(dx, dz) return Weight(math.sqrt(dx * dx + dz * dz), Brush.radius, nil, dx, dz) end
+            shaped = { id = Brushes.Active, turn = strokeTurn }       -- erosionbrush.lua makes the window's weights (natively from the shape mask, else Brushes.Fill)
         end
         local changed, x0, z0, x1, z1 = EroBrush.Dab(cx, cz, Brush, Brush.mode, inverted, shaped)
         if changed > 0 then Sim.ResnapLater(x0, z0, x1, z1) end
         return changed
     end
-    local nativeBrush = NativeBrush and NATIVE_MODES[Brush.mode] and Brushes.Active == 'round' and rawget(_G, 'ed_terrain_brush')
+    local nativeBrush = NativeBrush and NATIVE_MODES[Brush.mode] and rawget(_G, 'ed_terrain_brush')
+    local shape, shapeAngle = 0, 0
+    if nativeBrush and Brushes.Active ~= 'round' then
+        -- a shaped brush: its mask grid is uploaded to the exe once (Brushes.NativeShape), the dab then reads it natively; an exe without the shape natives: the Lua loop
+        shape = Brushes.NativeShape(Brushes.Active)
+        if shape then
+            shapeAngle = (Brushes.Angle or 0) + strokeTurn
+        else
+            nativeBrush = nil
+        end
+    end
     if nativeBrush then
         -- One native call does the whole dab (read the window, the brush math, EditHeights on the document); the Lua loop below is the same maths for shaped brushes and an exe without it.
         local inverted = (Brush.sign or 1) < 0
@@ -314,8 +339,10 @@ function DabOne(cx, cz, slot, image)
         if level == nil and (Brush.mode == 'flatten' or Brush.mode == 'plateau') then
             level = Brush.level
         end
+        local t0 = Perf.Begin()
         local changed, x0, z0, x1, z1, used = nativeBrush(cx, cz, Brush.radius, Brush.mode, Brush.strength, inverted and -1 or 1, Brush.falloff, level or -1, strokeId,
-                                                         Brush.noiseScale, Brush.noiseOctaves, Brush.noiseRoughness)
+                                                         Brush.noiseScale, Brush.noiseOctaves, Brush.noiseRoughness, shape, shapeAngle)
+        Perf.End(shape ~= 0 and 'terrain.dab.native.shaped' or 'terrain.dab.native', t0)
         if changed ~= nil then
             if used ~= nil and strokeLevel == nil then
                 strokeLevel = used          -- the flatten level of the stroke: the first dab's (Brush.level or the ground under it)
@@ -326,6 +353,7 @@ function DabOne(cx, cz, slot, image)
             return changed
         end
     end
+    local perfStart = Perf.Begin()
     local r = Brush.radius
     local words, x0, z0, x1, z1 = ed_terrain_read_rect(math.floor(cx - r) - 1, math.floor(cz - r) - 1,
                                                        math.ceil(cx + r) + 1, math.ceil(cz + r) + 1)
@@ -442,6 +470,7 @@ function DabOne(cx, cz, slot, image)
     end
     end
 
+    Perf.End(Brushes.Active ~= 'round' and 'terrain.dab.lua.shaped' or 'terrain.dab.lua', perfStart)
     if changed == 0 then
         return 0
     end
