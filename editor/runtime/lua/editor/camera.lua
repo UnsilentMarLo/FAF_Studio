@@ -305,7 +305,7 @@ end
 local lastTime = false
 
 --- Per frame: moves the camera for the held movement keys. `commands` is the command registry (gui/commands.lua).
-function Update(commands)
+local function UpdateKeys(commands)
     StepFocus()
     local now = GetSystemTimeSeconds()
     local dt = lastTime and math.min(0.1, now - lastTime) or 0
@@ -356,6 +356,19 @@ function Update(commands)
     cam:SnapTo(focus, { heading, pitch, 0 }, zoom)
     if move.zoom ~= 0 then
         cam:SetZoom(Clamp(zoom * math.exp(move.zoom * 1.4 * dt * fast), cam:GetMinZoom(), cam:GetMaxZoom()), 0)
+    end
+end
+
+--- Per frame (the shell's tick, while editing): the held keys, the focus move, then the unit viewer's lock (unitview.lua Tick: the camera stays on the shown unit; after the keys, so a pan
+--- the keys made is undone in the same frame). The lock does not depend on the overlay's update, which stops for good when one of its layers fails once (ui.lua overlayBroken).
+local lockFailAt = -100
+
+function Update(commands)
+    UpdateKeys(commands)
+    local ok, err = pcall(function() import('/lua/editor/unitview.lua').Tick() end)
+    if not ok and GetSystemTimeSeconds() - lockFailAt > 5 then
+        lockFailAt = GetSystemTimeSeconds()
+        LOG('EDITOR unitview: the camera lock failed: ' .. tostring(err))
     end
 end
 

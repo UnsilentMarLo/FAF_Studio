@@ -26,16 +26,22 @@ function Register(Callbacks)
         local army = data.army or 'ARMY_1'
         local r = data.radius or 90
         if not ScenarioInfo.EdViewBase then
+            -- (only the list of what stood there before, for the clean-up: whatever fails here must not stop the unit from being made)
             local base = {}
-            for _, e in Around(data.x, data.z, r) do
-                local ok, id = pcall(function() return e:GetEntityId() end)
-                if ok and id then base[id] = true end
-            end
+            local okBase, errBase = pcall(function()
+                for _, e in Around(data.x, data.z, r) do
+                    local ok, id = pcall(function() return e:GetEntityId() end)
+                    if ok and id then base[id] = true end
+                end
+            end)
+            if not okBase then WARN('EDITOR viewer sim: the list of what stands at the stage failed: ' .. tostring(errBase)) end
             ScenarioInfo.EdViewBase = base
         end
         local ok, unit = pcall(function() return CreateUnitHPR(data.bp, army, data.x, data.y, data.z, 0, data.heading or 0, 0) end)
         if not (ok and unit) then
-            ed_write_file(data.path, 'error ' .. tostring(unit) .. '\n')
+            local text = string.gsub(tostring(unit), '[\r\n]+', ' ')
+            WARN('EDITOR viewer sim: cannot make ' .. tostring(data.bp) .. ' for ' .. tostring(army) .. ': ' .. text)
+            ed_write_file(data.path, 'error ' .. text .. '\n')
             return
         end
         unit.EdViewUnit = true
@@ -58,7 +64,11 @@ function Register(Callbacks)
                 WaitTicks(5)
             end
         end)
-        WriteInfo(unit, data.path)
+        local okInfo, errInfo = pcall(WriteInfo, unit, data.path)
+        if not okInfo then
+            WARN('EDITOR viewer sim: the info of ' .. tostring(data.bp) .. ' could not be written: ' .. tostring(errInfo))
+            ed_write_file(data.path, 'error ' .. string.gsub(tostring(errInfo), '[\r\n]+', ' ') .. '\n')
+        end
     end
 
     Callbacks.EdViewInfo = function(data)

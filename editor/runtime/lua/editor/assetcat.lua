@@ -347,7 +347,7 @@ end
 function Thumb(entry, owner)
     if entry.kind == 'units' then
         -- the unit's own icon (units.lua IconPath: the folder of its mod, the game's icon folder, the icon its blueprint names); a unit without one is drawn from its mesh
-        -- (assetthumbs 'unitmesh', a software preview made in the background), and only a unit with no readable mesh gets the picture of its class
+        -- (assetthumbs 'unitmesh', a software preview made in the background), and only a unit with no readable mesh gets the game's placeholder icon
         local Units = import('/lua/editor/units.lua')
         local path = Units.IconPath(entry.key)
         if path then return path end

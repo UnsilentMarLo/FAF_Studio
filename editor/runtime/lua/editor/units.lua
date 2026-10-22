@@ -167,15 +167,10 @@ function IconPath(id)
     return found
 end
 
---- The generic class picture of a unit (land / air / sea / amphibious) from its blueprint, a vfs path | nil. Only a last resort: it says nothing about the unit.
+--- The game's own placeholder (default_icon.dds, what the build menu shows for a unit without an icon), a vfs path | nil. Only a last resort: it says nothing about the unit.
 function GenericIconPath(id)
-    local bp = Blueprint(id)
-    local kind = bp and bp.General and bp.General.Icon
-    if type(kind) ~= 'string' or kind == '' then return nil end
-    for _, name in { string.lower(kind), string.upper(kind) } do
-        local path = ICON_DIR .. name .. '_icon.dds'
-        if IconExists(path) then return path end
-    end
+    local path = ICON_DIR .. 'default_icon.dds'
+    if IconExists(path) then return path end
     return nil
 end
 
