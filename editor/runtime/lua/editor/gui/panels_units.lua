@@ -11,6 +11,7 @@ local Fav = import('/lua/editor/favourites.lua')
 local Units = import('/lua/editor/units.lua')
 local Menu = import('/lua/editor/gui/menu.lua')
 local Cat = import('/lua/editor/assetcat.lua')
+local Thumbs = import('/lua/editor/assetthumbs.lua')
 
 live = {}
 
@@ -73,14 +74,16 @@ Panels.Register{
 
         P.list = W.VirtualList(group, {
             extra = true,
-            thumb = true,           -- the unit's icon (the game's /textures/ui/common/icons/units/<id>_icon.dds)
+            thumb = true,           -- the unit's icon (units.lua IconPath: /textures/ui/common/icons/units/<id>_icon.dds in the game or in the unit's mod)
             rowH = 26,
             getCount = function() return table.getn(P.shown) end,
             bind = function(row, index)
                 local e = P.shown[index]
                 local active = (e.id == Units.Active)
                 row.extra:SetText(e.faction)
-                row.thumb:SetTexture('/textures/ui/common/icons/units/' .. string.upper(e.id) .. '_icon.dds')
+                -- the unit's icon: the game's, the one its mod ships, or a picture drawn from its mesh (assetcat.Thumb, units.lua IconPath)
+                local okTex, tex = pcall(Cat.Thumb, { kind = 'units', key = e.id }, 'units-panel')
+                if okTex and tex then row.thumb:SetTexture(tex) else row.thumb:SetSolidColor(Skin.color.panel) end
                 local tx = row.bg.Height() + Skin.S(4)
                 local ew = math.min(row.extra.Width(), Skin.S(60))
                 local label = (Fav.Is('units', e.id) and '* ' or '') .. e.id .. '  ' .. (e.desc ~= '' and e.desc or e.name)
@@ -167,6 +170,8 @@ Panels.Register{
             end
             P:Refresh()
         end
+        -- pictures that arrive in the background (a mod unit's icon drawn from its mesh): draw the rows again (at most every 0.2 s: assetthumbs.lua)
+        Thumbs.Listen('units-panel', function() if live.units == P and P.list then P.list:Refresh() end end)
         Rebuild()
         return P
     end,

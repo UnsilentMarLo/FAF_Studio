@@ -545,6 +545,64 @@ local function GridView(view, px)
     gridIds = seen
 end
 
+--- The world rectangle { minx, minz, maxx, maxz } of the ground the slope view has to cover. VisibleRect skips every sample point of the view that misses the ground (the sky above the
+--- horizon, or beyond the edge of the map), so a low camera got a rectangle that ended halfway to the horizon and jumped when the camera height changed. Here a sample that misses is
+--- walked back on the screen towards the nearest sample that hits (bisection), and the rectangle takes the last ground point found: the farthest ground that is visible in that
+--- direction (the horizon, or the map's edge). How many cells that is does not matter here: the native layer blocks a wide view together (EdOverlay.cpp, block levels).
+--- Nine sample points; the bisection runs only when the nine results differ from the last call (the rectangle is kept while the view does not move).
+local slopeRectCache = { key = '', rect = false }
+local SLOPE_SAMPLES = { { 0, 0 }, { 0.5, 0 }, { 1, 0 }, { 0, 0.5 }, { 0.5, 0.5 }, { 1, 0.5 }, { 0, 1 }, { 0.5, 1 }, { 1, 1 } }
+
+local function SlopeRect(view)
+    local l, t = view.Left(), view.Top()
+    local w, h = view.Width(), view.Height()
+    if not w or w < 1 or not h or h < 1 then return nil end
+    local hits, misses, parts = {}, {}, {}
+    for _, f in SLOPE_SAMPLES do
+        local sx, sy = l + f[1] * w, t + f[2] * h
+        local p = UnProject(view, Vector2(sx, sy))
+        if p then
+            table.insert(hits, { sx, sy, p[1], p[3] })
+            table.insert(parts, string.format('%.2f,%.2f', p[1], p[3]))
+        else
+            table.insert(misses, { sx, sy })
+            table.insert(parts, 'x')
+        end
+    end
+    if table.getn(hits) == 0 then return nil end
+    local key = table.concat(parts, ';')
+    if key == slopeRectCache.key and slopeRectCache.rect then return slopeRectCache.rect end
+
+    local minx, minz, maxx, maxz = hits[1][3], hits[1][4], hits[1][3], hits[1][4]
+    for _, q in hits do
+        minx, maxx = math.min(minx, q[3]), math.max(maxx, q[3])
+        minz, maxz = math.min(minz, q[4]), math.max(maxz, q[4])
+    end
+    for _, m in misses do
+        local best, bestD
+        for _, q in hits do
+            local d = (q[1] - m[1]) * (q[1] - m[1]) + (q[2] - m[2]) * (q[2] - m[2])
+            if not bestD or d < bestD then best, bestD = q, d end
+        end
+        local ax, ay, bx, by = best[1], best[2], m[1], m[2]      -- (ax, ay) hits the ground, (bx, by) does not
+        for _ = 1, 10 do
+            local mx, my = (ax + bx) / 2, (ay + by) / 2
+            local p = UnProject(view, Vector2(mx, my))
+            if p then
+                ax, ay = mx, my
+                minx, maxx = math.min(minx, p[1]), math.max(maxx, p[1])
+                minz, maxz = math.min(minz, p[3]), math.max(maxz, p[3])
+            else
+                bx, by = mx, my
+            end
+        end
+    end
+    local mapX, mapZ = MapSize()
+    local rect = { math.max(0, minx), math.max(0, minz), math.min(mapX, maxx), math.min(mapZ, maxz) }
+    slopeRectCache.key, slopeRectCache.rect = key, rect
+    return rect
+end
+
 --- Tells the native slope layer which cells to rate: the visible part of the map (it blocks them together when the view is very wide).
 local slopeShown = false
 
@@ -556,7 +614,7 @@ local function SlopeView(view)
         end
         return
     end
-    local vis = VisibleRect(view)
+    local vis = SlopeRect(view)
     if not vis then return end
     local x0, z0, x1, z1 = math.floor(vis[1]) - 1, math.floor(vis[2]) - 1, math.ceil(vis[3]) + 1, math.ceil(vis[4]) + 1
     ed_overlay_slope(Slope.Kind, math.max(0, x0), math.max(0, z0), x1, z1, Slope.Window, Slope.Limit)
