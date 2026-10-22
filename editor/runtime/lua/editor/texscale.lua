@@ -71,7 +71,8 @@ function ForPixels(px)
 end
 
 local function Key(path)
-    return string.lower(string.gsub(tostring(path or ''), '\\', '/'))
+    local p = string.gsub(tostring(path or ''), '\\', '/')
+    return string.lower(p)
 end
 
 function Remember(path, px)

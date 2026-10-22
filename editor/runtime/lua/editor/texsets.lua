@@ -7,9 +7,10 @@
 --   Roles, RoleLabels       the role names in layer order and their labels
 --   Theme / SetTheme(id)    the theme roles are looked up in (what the last Apply or the map was given; Temperate until chosen)
 --   TextureFor(role[, theme])  the path of a role in a theme (nil when none of its candidates exists)
---   Apply(themeId)          gives layers 0..9 the textures of a theme (the masks stay as they are); -> number of layers set. The shader of the map decides which: the numbered shaders
+--   Apply(themeId)          gives layers 0..9 the textures of a theme (the masks stay as they are); -> number of layers set. Tile sizes come from texscale.lua (Optimal for each texture;
+--                           the theme's `size` is only the fallback for a texture that cannot be read; the Upper layer's tile is a golden ratio power of the base tile). The shader of the map decides which: the numbered shaders
 --                           (Terrain0xx / 1xx / 2xx) have no painted 8th layer (its textures hold map-wide data) and the 1xx / 2xx / x01 ones no overlay on the Upper layer: those are left alone
---   ApplyRole(layer, role)  gives one painted layer the texture of a role (keeps its mask); -> true | nil, message
+--   ApplyRole(layer, role)  gives one painted layer the texture of a role (keeps its mask) at its Optimal tile size; -> true | nil, message
 --   ApplyIfNew()            the first thing a new map gets: the default set, when its painted layers have no texture (called by Map.Load)
 --   RoleChoices()           ids and labels for a choice parameter: 'keep' (leave the layer's texture) and every role
 --
@@ -92,6 +93,7 @@ function TextureFor(role, themeId)
 end
 
 local function Strata_() return import('/lua/editor/strata.lua') end
+local function TexScale_() return import('/lua/editor/texscale.lua') end
 
 --- nil when layer 8 takes a ground texture with the shader of the map; else the reason it does not (its textures are map-wide data, its mask a roughness multiplier).
 local function Layer8Unavailable()
@@ -106,27 +108,39 @@ local function UpperIsOverlay()
     return not (ok and p and p.upper and p.upper ~= 'overlay')
 end
 
---- Gives layers 0..9 the textures of a theme. The masks stay; the normal maps follow their albedo (or are the neutral map).
+--- The tile size a texture of a theme gets: Optimal for the texture (texscale.lua: texel density), the `size` field of the theme only when the file cannot be read.
+local function TileOf(path, theme, factor)
+    return TexScale_().Optimal(path, (theme.size or 12) * (factor or 1))
+end
+
+--- Gives layers 0..9 the textures of a theme. The masks stay; the normal maps follow their albedo (or are the neutral map) at the same tile size. Every tile size is Optimal for its
+--- texture; the Upper layer (macrotexture) gets a tile near 128 that is a golden ratio power of the base tile (texscale.MacroTile).
 function Apply(themeId)
     local theme = Themes[themeId]
     if not theme or not rawget(_G, 'ed_stratum_layer') then return 0 end
     local Strata = Strata_()
+    local TS = TexScale_()
     local n = 0
-    local size = theme.size or 12
-    local function Set(layer, list, tile)
+    local baseTile
+    local function Set(layer, list, factor, macro)
         local path = FirstExisting(list)
-        if path and Strata.SetTexture(layer, path, '', tile, tile) then n = n + 1 end
+        if not path then return end
+        local tile
+        if macro then tile = TS.MacroTile(baseTile) else tile = TileOf(path, theme, factor) end
+        if layer == 0 then baseTile = tile end
+        if Strata.SetTexture(layer, path, '', tile, tile) then n = n + 1 end
     end
-    Set(0, theme.base, size * 2)
+    Set(0, theme.base, 2)
+    baseTile = baseTile or TileOf(nil, theme, 2)
     for i, role in Roles do
-        if i < 8 or not Layer8Unavailable() then Set(i, theme[role], size) end
+        if i < 8 or not Layer8Unavailable() then Set(i, theme[role], 1) end
     end
-    if UpperIsOverlay() then Set(9, theme.upper, 128) end
+    if UpperIsOverlay() then Set(9, theme.upper, 1, true) end
     Theme = themeId
     return n
 end
 
---- One painted layer gets the texture of a role (its mask is not touched).
+--- One painted layer gets the texture of a role (its mask is not touched), at the Optimal tile size of the texture.
 function ApplyRole(layer, role, themeId)
     if not role or role == 'keep' then return true end
     if not RoleLabels[role] then return nil, 'unknown texture role ' .. tostring(role) end
@@ -138,7 +152,7 @@ function ApplyRole(layer, role, themeId)
     if not path then return nil, 'no texture found for ' .. role end
     local Strata = Strata_()
     local theme = Themes[themeId or Theme] or Themes[DEFAULT]
-    local tile = theme.size or 12
+    local tile = TileOf(path, theme, 1)
     if Strata.SetTexture(layer, path, '', tile, tile) then return true end
     return nil, 'the texture ' .. path .. ' did not load'
 end

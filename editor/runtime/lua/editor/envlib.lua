@@ -348,7 +348,9 @@ function ApplyTheme(entry, opts)
     for i = 0, 9 do
         local l = entry.layers[i]
         if l and l.albedo and l.albedo ~= '' then
-            local ok = Strata.SetTexture(i, l.albedo, l.normal or '', l.size or 4, l.nsize or l.size or 4)
+            -- a look without a tile size gets the Optimal one for its texture (texscale.lua), the normal map the same as the albedo
+            local size = l.size or import('/lua/editor/texscale.lua').Optimal(l.albedo)
+            local ok = Strata.SetTexture(i, l.albedo, l.normal or '', size, l.nsize or size)
             if not ok then table.insert(missing, l.albedo) end
             touched[i] = true
         end
