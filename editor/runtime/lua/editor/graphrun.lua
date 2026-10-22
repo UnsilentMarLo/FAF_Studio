@@ -59,11 +59,9 @@ local function WaterLevel()
     return (ok and v) or 25
 end
 
+--- An error message as the user should read it: no "stack traceback:" (the engine appends one to a message raised under pcall) and no "file(line): " / "file:line: " prefixes.
 local function Strip(msg)
-    msg = tostring(msg)
-    msg = string.gsub(msg, '^[^\n]-%.lua:%d+: ', '')
-    msg = string.gsub(msg, '^%[string.-%]:%d+: ', '')
-    return msg
+    return Fields.CleanError(msg)
 end
 
 --- The preview grid is at most PreviewCap samples a side (the toolbar's Detail button cycles PreviewCaps). 257 was too coarse for texture masks; 513 is the default.

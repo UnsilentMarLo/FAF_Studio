@@ -114,13 +114,50 @@ function Scope()
     return S
 end
 
---- Runs fn(scope) and frees the scope's fields afterwards (also when fn raises).
+--- Runs fn(scope) and frees the scope's fields afterwards (also when fn raises). The message is raised again as it is (level 0: no second "file(line): " in front); every raise under pcall
+--- makes the engine append a "stack traceback:" to a string message, so a caller that only wants the failure back uses Try, which raises nothing.
 function Run(fn)
     local S = Scope()
     local ok, a, b = pcall(fn, S)
     S:Free()
-    if not ok then error(a, 2) end
+    if not ok then error(a, 0) end
     return a, b
+end
+
+--- Like Run, but a failure comes back as `false, message` instead of being raised again (the re-raise would put a second traceback into the message). Returns true and fn's results otherwise.
+function Try(fn)
+    local S = Scope()
+    local ok, a, b = pcall(fn, S)
+    S:Free()
+    return ok, a, b
+end
+
+--- The part of an error message a person should read: without the "stack traceback:" the engine appends to a message raised under pcall, and without the position every raise puts in front
+--- ("...graphrun.lua(835): ", "x.lua:12: ", '[string "..."]:3: '; a message raised again carries several).
+function CleanError(msg)
+    msg = tostring(msg)
+    local at = string.find(msg, 'stack traceback:', 1, true)
+    if at then msg = string.sub(msg, 1, at - 1) end
+    msg = string.gsub(msg, '%s+$', '')
+    while true do
+        local a, b = string.find(msg, '^[^\n]-%.lua%(%d+%): ')
+        if not a then a, b = string.find(msg, '^[^\n]-%.lua:%d+: ') end
+        if not a then a, b = string.find(msg, '^%[string [^\n]-%]:%d+: ') end
+        -- the prefix is a position only when its one ": " is the last thing in it
+        if not a or string.find(string.sub(msg, 1, b), ': ', 1, true) ~= b - 1 then break end
+        msg = string.sub(msg, b + 1)
+    end
+    return msg
+end
+
+--- The first (deepest) "stack traceback:" of an error message, or nil when it has none.
+function ErrorTrace(msg)
+    msg = tostring(msg)
+    local a = string.find(msg, 'stack traceback:', 1, true)
+    if not a then return nil end
+    local b = string.find(msg, 'stack traceback:', a + 1, true)
+    local text = string.sub(msg, a, b and b - 1 or -1)
+    return (string.gsub(text, '%s+$', ''))
 end
 
 --- Runs a recipe: steps { { 'name', 'op', params }, ... }. A string parameter '@x' is replaced by the field named x (an earlier step or `inputs`).
