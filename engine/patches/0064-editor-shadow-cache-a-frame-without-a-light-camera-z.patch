@@ -1,0 +1,184 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 23 Oct 2026 08:22:46 +0000
+Subject: [PATCH] editor shadow cache: a frame without a light camera (zoomed
+ out beyond ren_ShadowLOD) clears the shadow targets once, not every frame;
+ the held map is dropped before the pass draws, so an error inside the pass
+ cannot leave a half drawn map marked as good; tests
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdShadowCache.h b/src/sdk/moho/editor/EdShadowCache.h
+index a204436..a20ee0e 100644
+--- a/src/sdk/moho/editor/EdShadowCache.h
++++ b/src/sdk/moho/editor/EdShadowCache.h
+@@ -92,6 +92,8 @@ namespace moho::editor::shadowcache
+     Key key;
+     std::uint8_t timeMask = 0;     // the map that is held was drawn with depth techniques that depend on the clock (kTimeWind, kTimeOther)
+     int age = 0;                   // frames the held map has been reused
++    bool cleared = false;          // the targets hold the cleared map of a frame without a valid light camera (zoomed out beyond ren_ShadowLOD)
++    Key clearedKey;                // which targets were cleared (only owner, size, fidelity, blur and targets count)
+     // counters for ed_render_stats (since the start)
+     std::uint32_t hits = 0;
+     std::uint32_t misses = 0;
+@@ -132,6 +134,29 @@ namespace moho::editor::shadowcache
+     return Decision::Render;
+   }
+ 
++  [[nodiscard]] inline bool SameTargets(const Key& a, const Key& b) noexcept
++  {
++    return a.size == b.size && a.fidelity == b.fidelity && a.blur == b.blur && a.owner == b.owner && a.targets[0] == b.targets[0] && a.targets[1] == b.targets[1] &&
++           a.targets[2] == b.targets[2];
++  }
++
++  /**
++   * A frame with no valid light camera clears the targets so the shaders see "no shadow". The clear is not repeated while the targets are the same objects and nothing was drawn
++   * into them since (a drawn map goes through Store, which forgets the clear).
++   */
++  [[nodiscard]] inline bool StillCleared(const State& state, const Key& now, const bool enabled) noexcept
++  {
++    return enabled && state.cleared && SameTargets(state.clearedKey, now);
++  }
++
++  inline void MarkCleared(State& state, const Key& now) noexcept
++  {
++    state.valid = false;
++    state.age = 0;
++    state.cleared = true;
++    state.clearedKey = now;
++  }
++
+   /** The pass has just drawn the map for `key`; `timeMask`: the kTime... bits of the depth techniques it used. */
+   inline void Store(State& state, const Key& key, const std::uint8_t timeMask) noexcept
+   {
+@@ -139,6 +164,7 @@ namespace moho::editor::shadowcache
+     state.key = key;
+     state.timeMask = timeMask;
+     state.age = 0;
++    state.cleared = false;
+   }
+ 
+   /** The held map is gone or can no longer be trusted (targets released, settings changed). */
+@@ -146,6 +172,7 @@ namespace moho::editor::shadowcache
+   {
+     state.valid = false;
+     state.age = 0;
++    state.cleared = false;
+   }
+ 
+   /**
+diff --git a/src/sdk/moho/editor/tests/EdRenderOptTest.cpp b/src/sdk/moho/editor/tests/EdRenderOptTest.cpp
+index 24384f1..6c78ac3 100644
+--- a/src/sdk/moho/editor/tests/EdRenderOptTest.cpp
++++ b/src/sdk/moho/editor/tests/EdRenderOptTest.cpp
+@@ -205,6 +205,35 @@ static void TestDecide()
+   sc::Store(other, k, static_cast<std::uint8_t>(sc::kTimeWind | sc::kTimeOther));
+   CHECK(sc::Decide(other, k, true, true, 300) == sc::Decision::Render, "wind and unknown: never held");
+ 
++  // the cleared map of a frame without a light camera
++  {
++    sc::State cl;
++    const sc::Key t = MakeKey(0);
++    CHECK(!sc::StillCleared(cl, t, true), "nothing cleared yet");
++    sc::MarkCleared(cl, t);
++    CHECK(sc::StillCleared(cl, t, true), "cleared and the targets are the same: the clear is not repeated");
++    CHECK(!sc::StillCleared(cl, t, false), "cvar off: cleared again");
++    sc::Key o = t;
++    o.scene = 99;
++    o.lightViewProjection[0] = 5.0f;
++    CHECK(sc::StillCleared(cl, o, true), "the scene and the light matrix do not matter for a cleared target");
++    static int fresh;
++    o = t;
++    o.targets[2] = &fresh;
++    CHECK(!sc::StillCleared(cl, o, true), "a rebuilt target is not cleared");
++    o = t;
++    o.size = 512;
++    CHECK(!sc::StillCleared(cl, o, true), "another size");
++    CHECK(sc::Decide(cl, t, true, false, 300) == sc::Decision::Render, "a cleared target is never a held map");
++    sc::Store(cl, t, 0);
++    CHECK(!sc::StillCleared(cl, t, true), "drawing a map forgets the clear");
++    sc::MarkCleared(cl, t);
++    CHECK(sc::Decide(cl, t, true, false, 300) == sc::Decision::Render, "after a clear the held map is gone");
++    sc::Store(cl, t, 0);
++    sc::Invalidate(cl);
++    CHECK(!sc::StillCleared(cl, t, true) && !cl.valid, "invalidated: neither");
++  }
++
+   // classes of the techniques of mesh.fx
+   CHECK(sc::ClassifyDepthTechnique("Depth") == 0, "Depth");
+   CHECK(sc::ClassifyDepthTechnique("DepthClip") == 0, "DepthClip");
+diff --git a/src/sdk/moho/render/Shadow.cpp b/src/sdk/moho/render/Shadow.cpp
+index 7783c65..3c8187d 100644
+--- a/src/sdk/moho/render/Shadow.cpp
++++ b/src/sdk/moho/render/Shadow.cpp
+@@ -523,15 +523,33 @@ namespace moho
+     CD3DDevice* const device = D3D_GetDevice();
+     (void)device->GetResources();
+ 
++    // EDITOR: what the render targets are (EdShadowCache.h)
++    moho::editor::shadowcache::State& cacheState = ShadowCacheStates()[this];
++    moho::editor::shadowcache::Key cacheKey;
++    cacheKey.size = mShadowSize;
++    cacheKey.fidelity = mShadowFidelity;
++    cacheKey.blur = mShadowBlurEnabled;
++    cacheKey.owner = this;
++    cacheKey.targets[0] = mShadowMap.get();
++    cacheKey.targets[1] = mBlurTargetA.get();
++    cacheKey.targets[2] = mBlurTargetB.get();
++
+     if (!mShadowCameraValid) {
+-      // EDITOR: the targets are cleared below, the map they held is gone
+-      moho::editor::shadowcache::Invalidate(ShadowCacheStates()[this]);
++      // EDITOR: the targets already hold the cleared map of the frame before (zoomed out beyond ren_ShadowLOD, a long stay in an overview): three clears of the whole map less
++      if (moho::editor::shadowcache::StillCleared(cacheState, cacheKey, ren_ShadowCache)) {
++        return;
++      }
++      // the targets are cleared below, the map they held is gone
++      moho::editor::shadowcache::Invalidate(cacheState);
+       // Nothing to draw - just leave the targets bound and cleared.
+       device->SetRenderTarget1(mShadowMap.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
+       if (mShadowBlurEnabled) {
+         device->SetRenderTarget1(mBlurTargetA.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
+         device->SetRenderTarget1(mBlurTargetB.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
+       }
++      if (ren_ShadowCache) {
++        moho::editor::shadowcache::MarkCleared(cacheState, cacheKey);
++      }
+       return;
+     }
+ 
+@@ -577,21 +595,12 @@ namespace moho
+     meshRenderer->Batch(REN_GetGameTick(), REN_GetSimDeltaSeconds(), mCamera, viewCamera.viewport.r[1]);
+     sc::gAccumulateBones = false;
+ 
+-    sc::State& cacheState = ShadowCacheStates()[this];
+-    sc::Key cacheKey;
+     bool cacheUsable = false;
+     if (ren_ShadowCache) {
+       moho::editor::renderstats::ScopedMs sceneTimer(moho::editor::renderstats::gCur.shadowSceneMs);
+       cacheUsable = ShadowSceneSignature(*meshRenderer, cacheKey.scene);
+       if (cacheUsable) {
+         std::memcpy(cacheKey.lightViewProjection, &mCamera.viewProjection, sizeof(cacheKey.lightViewProjection));
+-        cacheKey.size = mShadowSize;
+-        cacheKey.fidelity = mShadowFidelity;
+-        cacheKey.blur = mShadowBlurEnabled;
+-        cacheKey.owner = this;
+-        cacheKey.targets[0] = mShadowMap.get();
+-        cacheKey.targets[1] = mBlurTargetA.get();
+-        cacheKey.targets[2] = mBlurTargetB.get();
+         if (sc::Decide(cacheState, cacheKey, ren_ShadowCache, ren_ShadowCacheTrees, ren_ShadowCacheMaxAge) == sc::Decision::Reuse) {
+           ++moho::editor::renderstats::gShadowHits;
+           moho::editor::renderstats::gCur.shadowReused = 1;
+@@ -600,9 +609,8 @@ namespace moho
+         ++moho::editor::renderstats::gShadowMisses;
+       }
+     }
+-    if (!cacheUsable) {
+-      sc::Invalidate(cacheState);
+-    }
++    // the held map is replaced from here on; only a pass that ran to its end stores the new one (an error inside the pass must not leave a half drawn map marked as good)
++    sc::Invalidate(cacheState);
+     moho::editor::renderstats::gCur.shadowRendered = 1;
+ 
+     // Depth pass into the shadow map.
