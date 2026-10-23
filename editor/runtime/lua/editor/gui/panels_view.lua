@@ -85,14 +85,21 @@ Panels.Register{
         P.path = Btn('Mobile units', Skin.S(92), Skin.S(24), function() Slope.SetKind('path') P:Refresh() end, { toggle = true })
         P.build = Btn('Structures', Skin.S(92), Skin.S(24), function() Slope.SetKind('build') P:Refresh() end, { toggle = true })
 
-        P.footLabel = Lbl('Footprint')
-        P.size = Keep(W.Label(group, '', 0, 0, {}))
-        P.footMinus = Btn('-', Skin.S(26), Skin.S(22), function() Slope.SetWindow(Slope.Window - 1) P:Refresh() end)
-        P.footPlus = Btn('+', Skin.S(26), Skin.S(22), function() Slope.SetWindow(Slope.Window + 1) P:Refresh() end)
+        -- structures: which rule the game checks the ground with (see Slope.Rule)
+        P.ruleLabel = Lbl('Rule')
+        P.ruleRing = Btn('Buildings (ring)', Skin.S(120), Skin.S(24), function() Slope.SetRule('ring') P:Refresh() end, { toggle = true })
+        P.ruleArea = Btn('Area (extractors, walls)', Skin.S(168), Skin.S(24), function() Slope.SetRule('area') P:Refresh() end, { toggle = true })
 
-        P.limitLabel = Lbl('Limit')
-        P.limit = Keep(W.Label(group, '', 0, 0, {}))
-        P.limitButton = Btn('Next', Skin.S(58), Skin.S(22), function() Slope.NextBuildLimit() P:Refresh() end)
+        -- the sizes and limits are discrete sliders over the values real blueprints have (Slope.FOOTPRINT_STOPS / SKIRT_STOPS / BUILD_LIMITS)
+        P.foot = W.Slider(group, { label = 'Footprint (cells)', stops = Slope.FOOTPRINT_STOPS, fmt = '%d',
+            get = function() return Slope.Footprint end,
+            set = function(v) Slope.SetWindow(v) P:Refresh() end })
+        P.skirt = W.Slider(group, { label = 'Skirt size (cells)', stops = Slope.SKIRT_STOPS, fmt = '%d',
+            get = function() return Slope.Skirt end,
+            set = function(v) Slope.SetWindow(v) P:Refresh() end })
+        P.limitSlider = W.Slider(group, { label = 'Limit', stops = Slope.BUILD_LIMITS, fmt = '%.1f',
+            get = function() return Slope.BuildLimit[Slope.Rule] or 1.0 end,
+            set = function(v) Slope.SetLimit(v) P:Refresh() end })
 
         -- legend: gradient strip, 0 to the limit, then "blocked"
         local steps = 16
@@ -108,6 +115,7 @@ Panels.Register{
         P.blocked.Depth:Set(function() return group.Depth() + 6 end)
         P.legend = Keep(W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' }))
         P.noteLabels = {}
+        P.hintLabels = {}
         P.w = Skin.S(220)
         P.noteY = 0
 
@@ -129,16 +137,24 @@ Panels.Register{
             y = W.Flow(group, { { P.chainsOnly, Skin.S(170) } }, pad, y, iw, Skin.S(24), Skin.S(4)) + Skin.S(12)
             W.Place(P.slopeLabel, group, pad, y + Skin.S(4))
             y = W.Flow(group, { { P.path, Skin.S(92) }, { P.build, Skin.S(92) } }, pad, y + Skin.S(24), iw, Skin.S(24), Skin.S(8)) + Skin.S(12)
-            W.Place(P.footLabel, group, pad, y + Skin.S(4))
-            W.Place(P.size, group, pad + Skin.S(66), y + Skin.S(4))
-            local bx = math.max(pad + Skin.S(124), w - pad - Skin.S(58))
-            W.Place(P.footMinus, group, math.min(bx, pad + iw - Skin.S(58)), y, Skin.S(26), Skin.S(22))
-            W.Place(P.footPlus, group, math.min(bx, pad + iw - Skin.S(58)) + Skin.S(32), y, Skin.S(26), Skin.S(22))
-            y = y + Skin.S(30)
-            W.Place(P.limitLabel, group, pad, y + Skin.S(4))
-            W.Place(P.limit, group, pad + Skin.S(66), y + Skin.S(4))
-            W.Place(P.limitButton, group, (Slope.Kind == 'build') and math.min(math.max(pad + Skin.S(124), w - pad - Skin.S(58)), pad + iw - Skin.S(58)) or -4000, y, Skin.S(58), Skin.S(22))   -- the mobile-unit limit is fixed (0.75)
-            y = y + Skin.S(34)
+            if Slope.Kind == 'build' then
+                W.Place(P.ruleLabel, group, pad, y + Skin.S(4))
+                y = W.Flow(group, { { P.ruleRing, Skin.S(120) }, { P.ruleArea, Skin.S(168) } }, pad, y + Skin.S(24), iw, Skin.S(24), Skin.S(6)) + Skin.S(8)
+                P.skirt:Place(pad, y, iw)
+                y = y + Skin.S(50)
+                P.limitSlider:Place(pad, y, iw)
+                y = y + Skin.S(50)
+                P.foot:Place(-4000, y, iw)       -- (the sliders and buttons of the other kind are parked off the panel)
+            else
+                W.Place(P.ruleLabel, group, -4000, y)
+                W.Place(P.ruleRing, group, -4000, y, Skin.S(120), Skin.S(24))
+                W.Place(P.ruleArea, group, -4000, y, Skin.S(168), Skin.S(24))
+                P.foot:Place(pad, y, iw)
+                y = y + Skin.S(50)
+                P.skirt:Place(-4000, y, iw)
+                P.limitSlider:Place(-4000, y, iw)
+            end
+            y = y + Skin.S(4)
             local steps = table.getn(P.legendSquares)
             local sw = math.max(Skin.S(3), math.min(Skin.S(9), math.floor(iw / (steps + 3))))
             for i, sq in P.legendSquares do W.Place(sq, group, pad + (i - 1) * sw, y, sw, Skin.S(12)) end
@@ -163,26 +179,59 @@ Panels.Register{
             P.chainsOnly:SetOn(import('/lua/editor/chains.lua').OnlySelected)
             P.path:SetOn(Slope.Kind == 'path')
             P.build:SetOn(Slope.Kind == 'build')
-            P.size:SetText(string.format('%d x %d cells', Slope.Window, Slope.Window))
-            P.limit:SetText(string.format('%.2f', Slope.Limit))
+            P.ruleRing:SetOn(Slope.Rule == 'ring')
+            P.ruleArea:SetOn(Slope.Rule == 'area')
             if P.laidOut ~= (hasMesh and 1 or 0) .. tostring(Slope.Kind) then
                 P.laidOut = (hasMesh and 1 or 0) .. tostring(Slope.Kind)
                 P:Layout(P.w)
             end
+            P.foot:Refresh()
+            P.skirt:Refresh()
+            P.limitSlider:Refresh()
             P.legend:SetText(string.format('0          %.2f/2          %.2f          blocked', Slope.Limit, Slope.Limit))
             -- the explanation wraps to the panel's width (text does not clip). The labels are made again only when the text or the width changed: they were destroyed and
             -- created anew on every tick (four times a second) while the panel was open.
-            local text
+            local text, hint, note
             if Slope.Kind == 'path' then
                 text = 'Height change between neighbouring samples, per cell. Land, amphibious and hover units are blocked above 0.75; a footprint of N x N cells checks an N x N window.'
+            elseif Slope.Rule == 'ring' then
+                text = 'Buildings are levelled flat when they go up, so the game only looks at the ring of ground one cell outside the skirt, not at the skirt itself. The ring may differ from the height the skirt is levelled to (the last ring sample, rounded up to a whole unit) by at most the structure\'s MaxGroundVariation. The colours show that difference for a skirt of the size above, whose top-left corner is the cell.'
+                if Slope.RingMissing() then
+                    text = 'This editor build has no ring rule yet, so the area rule is shown. ' .. text
+                end
             else
-                text = 'Height range over the skirt must stay within the structure\'s MaxGroundVariation: 1.1 for most structures, 1.0 when unspecified; mass extractors and hydrocarbon plants allow 512 (no slope rule).'
+                text = 'Structures that are not levelled (extractors, walls, point defence, radar, naval factories): the game takes the highest minus the lowest ground over the whole skirt and compares it with the structure\'s MaxGroundVariation. The colours show that range for a skirt of the size above, whose top-left corner is the cell.'
             end
-            local noteKey = text .. '|' .. tostring(P.w) .. '|' .. tostring(P.noteY)
+            if Slope.Kind == 'build' then
+                hint = string.format('Skirt %d x %d cells: %s', Slope.Skirt, Slope.Skirt, Slope.SKIRT_HINTS[Slope.Skirt] or '')
+                if Slope.Rule == 'ring' and Slope.RING_LIMIT_HINTS[Slope.Skirt] then
+                    hint = hint .. ' Limit usually ' .. Slope.RING_LIMIT_HINTS[Slope.Skirt] .. '.'
+                end
+                note = 'Walls (50) and extractors (512) ignore slope.'
+            end
+            local noteKey = tostring(text) .. '|' .. tostring(hint) .. '|' .. tostring(P.w) .. '|' .. tostring(P.noteY)
             if noteKey ~= P.noteKey then
                 P.noteKey = noteKey
                 for _, l in P.noteLabels do l:Destroy() end
-                P.noteLabels = W.Paragraph(group, text, pad, P.noteY, math.max(Skin.S(80), P.w - 2 * pad), { color = Skin.color.textDim, size = 'small' })
+                for _, l in P.hintLabels do l:Destroy() end
+                local opts = { color = Skin.color.textDim, size = 'small' }
+                local pw = math.max(Skin.S(80), P.w - 2 * pad)
+                local y = P.noteY
+                P.hintLabels = {}
+                if hint then
+                    local labels
+                    labels, y = W.Paragraph(group, hint, pad, y, pw, { color = Skin.color.text, size = 'small' })
+                    P.hintLabels = labels
+                    y = y + Skin.S(6)
+                end
+                local labels
+                labels, y = W.Paragraph(group, text, pad, y, pw, opts)
+                P.noteLabels = labels
+                if note then
+                    y = y + Skin.S(6)
+                    local more = W.Paragraph(group, note, pad, y, pw, opts)
+                    for _, l in more do table.insert(P.noteLabels, l) end
+                end
             end
         end
         function P:OnResize(w, h)

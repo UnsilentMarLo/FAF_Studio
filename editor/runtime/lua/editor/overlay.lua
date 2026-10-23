@@ -617,7 +617,7 @@ local function SlopeView(view)
     local vis = SlopeRect(view)
     if not vis then return end
     local x0, z0, x1, z1 = math.floor(vis[1]) - 1, math.floor(vis[2]) - 1, math.ceil(vis[3]) + 1, math.ceil(vis[4]) + 1
-    ed_overlay_slope(Slope.Kind, math.max(0, x0), math.max(0, z0), x1, z1, Slope.Window, Slope.Limit)
+    ed_overlay_slope(Slope.NativeKind(), math.max(0, x0), math.max(0, z0), x1, z1, Slope.Window, Slope.Limit)    -- 'path' | 'build' (area rule) | 'ring' (edge rule; slope.lua falls back to 'build' on an engine without it)
     slopeShown = true
 end
 
