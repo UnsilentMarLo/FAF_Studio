@@ -361,17 +361,19 @@ local function Signature()
 end
 
 --- Per-frame: re-validates by itself after the resource markers or the edit history changed and stayed quiet for a moment.
-local sigChanged, sigHistory, sigFrames = -1, -1, 0
+local sigChanged, sigHistory, sigAt = -1, -1, 0
+local toolsMod = false
 
 function Update()
     if not Map.Doc then return end
     -- The signature walks every marker of the map (3000 on a mission map), so it is worked out when the objects or the history moved (Tools.Changed, History.Version) and about
-    -- once a second as a net, not every frame.
-    local changed = import('/lua/editor/tools.lua').Changed
-    sigFrames = sigFrames + 1
+    -- once a second as a net, not every frame. (The net is a clock, not 60 frames: with an unlimited frame rate 60 frames are a fraction of a second.)
+    if not toolsMod then toolsMod = import('/lua/editor/tools.lua') end
+    local changed = toolsMod.Changed
+    local clock = GetSystemTimeSeconds()
     local moved = false
-    if changed ~= sigChanged or History.Version ~= sigHistory or sigFrames >= 60 then
-        sigChanged, sigHistory, sigFrames = changed, History.Version, 0
+    if changed ~= sigChanged or History.Version ~= sigHistory or clock - sigAt >= 1 then
+        sigChanged, sigHistory, sigAt = changed, History.Version, clock
         local sig = Signature()
         if sig ~= lastSig then
             lastSig = sig

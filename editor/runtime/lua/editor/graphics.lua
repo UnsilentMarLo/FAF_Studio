@@ -8,6 +8,9 @@
 --   SetPreset(name)      chooses and applies a whole preset;   PresetName()  'low' .. 'ultra' or 'custom'
 --   Reset()              back to the defaults;   Apply(startup)  applies every setting (startup: leaves out the two that need the window's device: anti-aliasing and vertical sync)
 --   StateText(key)       the text of the chosen state
+--   GpuStatus(probe)     two lines for the Settings panel: the adapter, and whether GPU compute is on (probe: try to create the device if that has not been tried)
+--   GpuTest()            runs the native GPU self test: a one line summary and the lines per part (also logged by the callers)
+--   GpuReport(runTest)   the lines of the dev.gpu command: adapter, status, GPU ops, and the self test results when runTest
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
@@ -37,6 +40,8 @@ Defs = {
     { key = 'level_of_detail', tip = 'How long models keep their detailed meshes as the camera moves away.', label = 'Model detail', states = { { 'Low', 0 }, { 'Medium', 1 }, { 'High', 2 } }, apply = Con('SC_CameraScaleLOD') },
     { key = 'bloom_render', tip = 'A soft glow around bright areas.', label = 'Bloom', states = { { 'Off', 0 }, { 'On', 1 } }, apply = Con('ren_bloom') },
     { key = 'antialiasing', tip = 'Smooths jagged edges by drawing each pixel several times. Applies at once; the window may flicker for a moment.', label = 'Anti-aliasing', states = AAStates, apply = Con('SC_AntiAliasingSamples'), device = true },
+    { key = 'gpu_compute', tip = 'Runs heavy terrain operations (blur, and later erosion and noise) on the graphics card with Direct3D 11 compute shaders, where a GPU version exists. On any problem the editor uses the processor instead. Off: always the processor.', label = 'GPU compute', states = { { 'Off', 0 }, { 'On', 1 } },
+      apply = function(v) local f = rawget(_G, 'ed_gpu_enable') if f then f(v == 1) end end },
     { key = 'vsync', tip = 'Wait for the monitor before showing a frame: no tearing, but a lower frame rate on slow machines.', label = 'Vertical sync', states = { { 'Off', 0 }, { 'On', 1 } }, apply = Con('SC_VerticalSync'), device = true },
 }
 
@@ -68,6 +73,7 @@ end
 function Default(key)
     if key == 'antialiasing' then return 0 end
     if key == 'vsync' then return 1 end
+    if key == 'gpu_compute' then return 1 end        -- not part of the quality presets: the GPU is used whenever it works
     return Presets.ultra[key]
 end
 
@@ -140,4 +146,74 @@ function Apply(startup)
             if not ok then LOG('EDITOR graphics: ' .. d.key .. ' could not be applied (' .. tostring(err) .. ')') end
         end
     end
+end
+
+-- ---- GPU compute (native: EdGpuLua.cpp, docs/projects/editor/GPU_COMPUTE.md) -------------------------------------------------------------------------------
+
+local function GpuInfo(probe)
+    local fn = rawget(_G, 'ed_gpu_info')
+    if not fn then return nil end
+    local ok, g = pcall(fn, probe and true or false)
+    if ok and type(g) == 'table' then return g end
+    return nil
+end
+
+function GpuStatus(probe)
+    local g = GpuInfo(probe)
+    if not g then return 'GPU compute is not part of this version of the editor.', '' end
+    if g.failed then
+        return 'Adapter: ' .. ((g.adapter ~= '') and g.adapter or 'unknown'), 'Switched off for this session: ' .. g.lastError
+    end
+    if g.available then
+        local second = g.enabled and 'On: heavy terrain operations use the GPU.' or 'Off: everything runs on the processor.'
+        if g.lastOpError ~= '' then second = second .. ' Last fall-back: ' .. g.lastOpError end
+        return string.format('Adapter: %s (%d MB, Direct3D feature level %s)', g.adapter, g.vramMB, g.featureLevel), second
+    end
+    if g.tried then
+        return 'No usable GPU found.', g.lastError
+    end
+    return 'Adapter: not checked yet.', 'Press Test GPU compute to check it.'
+end
+
+function GpuTest()
+    local fn = rawget(_G, 'ed_gpu_selftest')
+    if not fn then return 'GPU compute is not part of this version of the editor.', {} end
+    local ok, r = pcall(fn)
+    if not ok or type(r) ~= 'table' then return 'The test could not run: ' .. tostring(r), {} end
+    local lines = {}
+    for _, p in r.parts do
+        table.insert(lines, string.format('%s: %s (%.1f ms) %s', p.name, p.ok and 'ok' or 'FAILED', p.ms, p.detail))
+    end
+    local summary
+    if r.error ~= '' then
+        summary = 'The test could not finish: ' .. r.error
+    elseif r.ok then
+        summary = string.format('Test passed in %.0f ms%s.', r.ms, r.texturesOk and '' or ' (texture sampling is not supported by this adapter)')
+    else
+        summary = 'Test failed: the GPU gave different results than the processor. See the Console panel.'
+    end
+    return summary, lines
+end
+
+function GpuReport(runTest)
+    local out = {}
+    local g = GpuInfo(true)
+    if not g then
+        table.insert(out, 'GPU compute is not part of this version of the editor.')
+        return out
+    end
+    table.insert(out, string.format('GPU compute: %s, %s, adapter %s (%d MB), Direct3D feature level %s, shader compiler %s, textures %s',
+        g.enabled and 'on' or 'off', g.available and 'available' or (g.failed and 'switched off for this session' or 'not available'),
+        (g.adapter ~= '') and g.adapter or 'none', g.vramMB, (g.featureLevel ~= '') and g.featureLevel or '-', (g.compiler ~= '') and g.compiler or '-', g.textures and 'yes' or 'no'))
+    if g.lastError ~= '' then table.insert(out, 'last device error: ' .. g.lastError) end
+    if g.lastOpError ~= '' then table.insert(out, 'last fall-back to the processor: ' .. g.lastOpError) end
+    local names = ''
+    for _, n in g.ops do names = names .. ((names ~= '') and ', ' or '') .. n end
+    table.insert(out, string.format('ops with a GPU version: %s; used for fields of at least %d samples (console variable ed_gpu_min_cells)', (names ~= '') and names or 'none', g.minCells))
+    if runTest then
+        local summary, lines = GpuTest()
+        for _, l in lines do table.insert(out, l) end
+        table.insert(out, summary)
+    end
+    return out
 end

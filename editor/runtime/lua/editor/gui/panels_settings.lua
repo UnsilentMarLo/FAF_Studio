@@ -37,6 +37,15 @@ Panels.Register{
             for name, b in self.presetButtons do b:SetOn(name == preset) end
             for _, row in self.rows do row.button:SetText(Graphics.StateText(row.key)) end
             self.scaleValue:SetText(string.format('%d%%', math.floor(Skin.scale * 100 + 0.5)))
+            if self.gpuLine1 then
+                local l1, l2 = Graphics.GpuStatus(false)
+                if self.gpuResult then l2 = self.gpuResult end
+                if l1 ~= self.gpuShown1 or l2 ~= self.gpuShown2 then         -- Refresh runs four times a second: measure text only when it changed
+                    self.gpuShown1, self.gpuShown2 = l1, l2
+                    W.Fit(self.gpuLine1, l1, self.textW)
+                    W.Fit(self.gpuLine2, l2, self.textW)
+                end
+            end
         end
 
         --- Makes every control for a panel `w` pixels wide and puts it in place.
@@ -79,7 +88,21 @@ Panels.Register{
                 table.insert(self.rows, { key = key, button = button })
                 y = y + rowH + Skin.S(6)
             end
-            y = y + Skin.S(6)
+            -- GPU compute: the adapter and the state (one line each, cut to the panel width) and a button that runs the native self test
+            self.textW = w - 2 * pad
+            self.gpuShown1, self.gpuShown2 = nil, nil
+            self.gpuLine1 = Keep(W.Label(group, '', pad, y, { color = c.textDim, size = 'small' }))
+            y = y + Skin.S(18)
+            self.gpuLine2 = Keep(W.Label(group, '', pad, y, { color = c.textDim, size = 'small' }))
+            y = y + Skin.S(24)
+            Btn('Test GPU compute', pad, y, math.min(w - 2 * pad, Skin.S(180)), function()
+                local summary, lines = Graphics.GpuTest()
+                for _, l in lines do LOG('EDITOR gpu: ' .. l) end
+                LOG('EDITOR gpu: ' .. summary)
+                P.gpuResult = summary
+                P:Refresh()
+            end, { tip = 'Checks the graphics card: runs small compute programs and compares the results with the processor. Details go to the Console panel.' })
+            y = y + rowH + Skin.S(12)
             Btn('Restore defaults', pad, y, math.min(w - 2 * pad, Skin.S(160)), function()
                 Graphics.Reset()
                 P:Refresh()

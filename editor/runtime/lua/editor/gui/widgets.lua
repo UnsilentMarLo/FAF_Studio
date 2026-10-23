@@ -766,7 +766,8 @@ function Paragraph(parent, text, x, y, maxW, opts, lineH, maxBottom)
 end
 
 --- A setting with a draggable bar, - and + buttons and an editable value field, in two lines: the label above, the controls below.
---- opts: label, min, max, step, curve (1 = linear, 2 = finer at the low end), fmt ('%.1f'), get() -> number, set(value), compact (narrow: the - / + buttons move to the label line).
+--- opts: label, min, max, step, curve (1 = linear, 2 = finer at the low end), fmt ('%.1f'), get() -> number, set(value), compact (narrow: the - / + buttons move to the label line),
+--- stops (a list of the values the setting may have, ascending: a discrete slider; the bar, the - / + buttons and a typed value go to the nearest stop; min / max / step / curve are not used).
 --- Methods: Place(x, y, w) (height is Skin.S(46)), Refresh() (re-reads get()), SetRange(min, max, step, fmt).
 function Slider(parent, opts)
     local c = Skin.color
@@ -774,16 +775,34 @@ function Slider(parent, opts)
     local curve = opts.curve or 1
     local step = opts.step or 1
     local lo, hi = opts.min, opts.max
+    local stops = opts.stops
 
+    --- The index of the stop nearest to `v`.
+    local function StopIndex(v)
+        local best, bestD = 1, 1e30
+        for i, sv in stops do
+            local d = math.abs(sv - v)
+            if d < bestD then best, bestD = i, d end
+        end
+        return best
+    end
     local function Snap(v)
+        if stops then return stops[StopIndex(v)] end
         v = math.floor(v / step + 0.5) * step
         return math.max(lo, math.min(hi, v))
     end
     local function ToT(v)
+        if stops then return (StopIndex(v) - 1) / math.max(1, table.getn(stops) - 1) end
         return math.max(0, math.min(1, math.pow((v - lo) / (hi - lo), 1 / curve)))
     end
     local function FromT(t)
+        if stops then return stops[math.floor(1 + (table.getn(stops) - 1) * math.max(0, math.min(1, t)) + 0.5)] end
         return Snap(lo + (hi - lo) * math.pow(math.max(0, math.min(1, t)), curve))
+    end
+    --- The value one step below (dir -1) or above (dir 1) the current one: the neighbouring stop, or one `step`.
+    local function Nudge(dir)
+        if stops then return stops[math.max(1, math.min(table.getn(stops), StopIndex(opts.get()) + dir))] end
+        return opts.get() + dir * step
     end
     local function Apply(v)
         opts.set(Snap(v))
@@ -811,8 +830,8 @@ function Slider(parent, opts)
             return what .. '\n' .. base
         end
     end
-    S.minus = Button(parent, '-', 0, 0, Skin.S(opts.compact and 18 or 22), Skin.S(opts.compact and 18 or 22), function() Apply(opts.get() - step) end, { tip = Detail('Smaller by one step.') })
-    S.plus = Button(parent, '+', 0, 0, Skin.S(opts.compact and 18 or 22), Skin.S(opts.compact and 18 or 22), function() Apply(opts.get() + step) end, { tip = Detail('Larger by one step.') })
+    S.minus = Button(parent, '-', 0, 0, Skin.S(opts.compact and 18 or 22), Skin.S(opts.compact and 18 or 22), function() Apply(Nudge(-1)) end, { tip = Detail('Smaller by one step.') })
+    S.plus = Button(parent, '+', 0, 0, Skin.S(opts.compact and 18 or 22), Skin.S(opts.compact and 18 or 22), function() Apply(Nudge(1)) end, { tip = Detail('Larger by one step.') })
     S.field = TextField(parent, 0, 0, Skin.S(52), Skin.S(22), {
         onEnter = function(text)
             local v = tonumber(text)

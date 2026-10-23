@@ -493,18 +493,38 @@ function OnMode(mode)
     end
 end
 
+-- Is the editor in edit mode (not a test run)? The ui module is kept in S: this runs every frame (no import, no closure per frame).
+local function IsEditing()
+    local ui = S.uiMod
+    if not ui then
+        ui = EditorUI()
+        S.uiMod = ui
+    end
+    return ui.State.mode == 'edit'
+end
+
+-- The panels are refreshed about four times a second by the CLOCK, not by a frame count: with 15 frames the rate followed the frame rate (60 fps = 4 Hz, an unlimited
+-- frame rate on a small scene = 60 Hz and every panel's Refresh ran that often).
+local REFRESH_SECONDS = 0.25
+
 local function Tick()
     local frame = Frame()
     Perf.Tick()
     local tFrame = Perf.Begin()
-    import('/lua/editor/gui/panels_builtin.lua').EnsureWorldView()
+    -- (the module is kept in S: no import call per frame)
+    local builtin = S.builtinMod
+    if not builtin then
+        builtin = import('/lua/editor/gui/panels_builtin.lua')
+        S.builtinMod = builtin
+    end
+    builtin.EnsureWorldView()
     if S.editor then
         -- held-key camera movement (only while editing; a test run uses the game's own camera keys)
-        local ok, editing = pcall(function() return EditorUI().State.mode == 'edit' end)
+        local ok, editing = pcall(IsEditing)
         if ok and editing then pcall(Perf.Time, 'shell: camera keys', Camera.Update, Commands) end
-        S.sinceRefresh = S.sinceRefresh + 1
-        if S.sinceRefresh >= 15 then
-            S.sinceRefresh = 0
+        local clock = GetSystemTimeSeconds()
+        if clock - (S.lastRefresh or 0) >= REFRESH_SECONDS then
+            S.lastRefresh = clock
             local tRefresh = Perf.Begin()
             if ok and editing then pcall(Perf.Time, 'shell: autosave check', function() import('/lua/editor/maps.lua').AutosaveTick() end) end
             -- not during a test run: a refresh shows list rows again (VirtualList:Refresh calls Show), and the hidden editor panels leaked onto the game HUD

@@ -704,9 +704,12 @@ The engine rates slope in two ways, both read from its own code and computed nat
   neighbouring samples inside its window exceeds the footprint's `MaxSlope`: 0.75 for every land, amphibious and hover footprint (`lua/footprints.lua`), in world
   units per cell. Bigger footprints see a bigger window (the Footprint stepper). Air and naval footprints have no slope rule. (Unit blueprints with `Footprint.MaxSlope = 0.25`
   are air units: no effect.)
-- **Structures** (`OCCUPY_CheckAreaFlatness`): the height range (highest minus lowest sample) over the skirt must stay within `Physics.MaxGroundVariation`: 1.1 for most
-  structures, 1.0 when unspecified, 1.2 and 50 for a few; mass extractors and hydrocarbon plants allow 512, i.e. they ignore slope (the Next button steps the limit).
-  The skirt is taken as N + 1 samples per side (the engine's rect convention for the area check was not pinned down further).
+- **Structures** (two rules, picked by the blueprint's `Physics.FlattenSkirt`; **2026-10-23**, details and data in `editor/SLOPE_VIEW.md`): buildings with `FlattenSkirt = true` (nearly all of
+  them) are checked with `OCCUPY_CheckEdgeFlatness` (0x00564F80): only the 1-cell ring around the skirt, against a pivot of `ceil(last ring sample)` (native kind `ring`);
+  the others (extractors, walls, point defence, radar, naval factories) with `OCCUPY_CheckAreaFlatness`: highest minus lowest over the skirt (native kind `build`). Both
+  against `Physics.MaxGroundVariation`: 1.1 for most buildings, 1.0 when unspecified (the engine's constructor default), 1.2 for a few; walls (50) and extractors /
+  hydrocarbon plants (512) ignore slope. The skirt is N x N cells = N + 1 samples per side (rect x0 .. x0 + N inclusive, as `OCCUPY_Check` truncates it); the View panel
+  has a skirt size slider over the sizes real blueprints have (not one setting per blueprint).
 - **Colours:** clear below 4 % of the limit, green, yellow at half the limit, red at the limit, purple beyond it (blocked). The status line shows the rating of the cell under
   the pointer (`slope 0.62 / 0.75 (1x1)`), the View panel (and `S`, or the Slope button) holds mode, footprint size and legend. Verified: the native ratings equal a hand
   calculation from `ed_terrain_get` cell for cell.

@@ -19,7 +19,10 @@ TESTS = {"MapDocumentTest": ["moho/editor/MapDocument.cpp"], "EdFieldTest": ["mo
          "EdSymTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldSc.cpp"],
          "EdErosionTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdErosion.cpp"],
          "EdLandTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldGen.cpp", "moho/editor/EdFieldLand.cpp"],
-         "EdBrushTest": ["moho/editor/MapDocument.cpp"], "MeshLodDepthTest": [], "EdTerrainTypeTest": [], "EdOverlayGeomTest": [], "EdOverlaySlopeTest": [], "EdOverlayNodesTest": [], "EdOverlayDrapeTest": [], "EdOverlayLodTest": [], "EdOverlayFieldTest": [], "EdDdsDecodeTest": [], "EdTexConvTest": [], "EdDirtyRectTest": []}
+         "EdBrushTest": ["moho/editor/MapDocument.cpp"], "MeshLodDepthTest": [], "EdTerrainTypeTest": [], "EdOverlayGeomTest": [], "EdOverlaySlopeTest": [], "EdOverlayNodesTest": [], "EdOverlayDrapeTest": [], "EdOverlayLodTest": [], "EdOverlayFieldTest": [], "EdDdsDecodeTest": [], "EdTexConvTest": [], "EdDirtyRectTest": [], "EdPerfPolicyTest": [], "EdRenderOptTest": [],
+         "EdNormalMapParTest": ["moho/editor/EdFieldCore.cpp", "moho/render/textures/DXTCodec.cpp"],
+         # GPU compute foundation: the kernels run as C++ through gpu/hlsl_cpp_shim.h on a CPU emulator; on Windows the test also tries the real Direct3D 11 device (docs/projects/editor/GPU_COMPUTE.md)
+         "EdGpuTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp"]}
 # command line arguments per test (paths under the repository root, or under $ED_EDITOR_ROOT: the git worktree of a feature branch); extra arguments of this script are passed on to every test
 ARGS = {"EdFieldTest": ["editor/runtime/lua/editor/selftest_fields_cases.lua"],
         "EdErosionTest": ["editor/runtime/lua/editor/selftest_erosion_cases.lua"]}

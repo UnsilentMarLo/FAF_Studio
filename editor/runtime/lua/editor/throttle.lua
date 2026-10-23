@@ -81,10 +81,15 @@ function Defer(key, fn, ms)
 end
 
 function Pump()
-    local waiting = {}
+    -- (called every frame by the overlay: no table is made when nothing waits, which is nearly always)
+    local waiting
     for _, t in keyed do
-        if t.pending then table.insert(waiting, t) end
+        if t.pending then
+            waiting = waiting or {}
+            table.insert(waiting, t)
+        end
     end
+    if not waiting then return end
     for _, t in waiting do RunDue(t) end
 end
 

@@ -541,6 +541,7 @@ def cmd_edtext(a):
 GENERATORS = [
     ['editor/tools/gen_marker_icons.py'], ['editor/tools/gen_cursors.py'], ['editor/tools/gen_layer_textures.py'], ['editor/tools/gen_brush_masks.py'],
     ['scripts/ed_make_blank_map.py'],
+    ['scripts/gen_gpu_shaders.py'],           # engine: moho/editor/EdGpuShaders.generated.h from gpu/*.hlsl (docs/projects/editor/GPU_COMPUTE.md); skips when the engine sources are not set up
 ]
 
 
@@ -564,6 +565,9 @@ def cmd_check(a):
                 bad.append(tool)
         else:
             print('skipped %s (no FAForever/fa checkout at %s)' % (tool, P.FAF_REPO))
+    r = run([sys.executable, os.path.join(HERE, 'gen_gpu_shaders.py'), '--check'], check=False)         # the GPU kernels: lint + generated header up to date (skips without engine sources)
+    if r.returncode != 0:
+        bad.append('gen_gpu_shaders.py')
     if a.full:
         r = run([sys.executable, os.path.join(HERE, 'editor_nightly.py')], check=False)
         if r.returncode != 0:

@@ -19,7 +19,8 @@ local History = import('/lua/editor/history.lua')
 Epoch = 0
 Revision = 0
 
-local lastVersion, frames = '', 0
+local lastVersion, lastRevision, lastAt = -1, -1, 0       -- the history version and Lua revision seen, and the clock of the last move of Epoch
+NET_SECONDS = 5                                           -- the net: Epoch moves at least this often while no stroke is dragged
 
 --- A height write happened (called by the code that makes one; the native document revision moves on its own; this is the Lua-side count).
 function Touch()
@@ -40,24 +41,25 @@ function Stamp()
     return rev .. '|' .. Revision .. '|' .. History.Version .. '|' .. w .. 'x' .. h
 end
 
-function Step(stroking)
-    local v = tostring(History.Version) .. ':' .. Revision
-    if v ~= lastVersion then
-        lastVersion = v
+function Step(stroking, now)
+    -- (every frame: two number compares, no string; the net is a clock, not 300 frames, which at an unlimited frame rate was a second or less)
+    local version = History.Version
+    now = now or GetSystemTimeSeconds()
+    if version ~= lastVersion or Revision ~= lastRevision then
+        lastVersion, lastRevision = version, Revision
         Epoch = Epoch + 1
-        frames = 0
+        lastAt = now
         return
     end
     if stroking then return end
-    frames = frames + 1
-    if frames >= 300 then
+    if now - lastAt >= NET_SECONDS then
         Epoch = Epoch + 1
-        frames = 0
+        lastAt = now
     end
 end
 
 --- Forces the next users to lay everything onto the terrain again (a map was opened, the overlay was cleared).
 function Bump()
     Epoch = Epoch + 1
-    frames = 0
+    lastAt = GetSystemTimeSeconds()
 end

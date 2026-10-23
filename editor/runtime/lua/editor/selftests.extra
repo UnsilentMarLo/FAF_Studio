@@ -43,3 +43,4 @@ selftest_recipes
 selftest_fieldgen
 selftest_overlayfield
 selftest_graphbase
+selftest_slope
