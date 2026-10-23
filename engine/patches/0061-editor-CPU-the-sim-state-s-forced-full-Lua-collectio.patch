@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 23 Oct 2026 08:16:58 +0000
+Subject: [PATCH] editor CPU: the sim state's forced full Lua collection (every
+ 7 s) runs only when the heap grew (ed_sim_gc_kb, ed_gc_max_seconds), GcGate
+ in EdPerfPolicy.h with tests; UiGcDue / SimGcDue API in EdPerf
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdPerf.cpp b/src/sdk/moho/editor/EdPerf.cpp
+index 1f2e328..fea8c6e 100644
+--- a/src/sdk/moho/editor/EdPerf.cpp
++++ b/src/sdk/moho/editor/EdPerf.cpp
+@@ -53,6 +53,14 @@ namespace moho::editor::perf
+     TConVar<bool> gConPresentWait("ed_present_wait", "Editor: 1 = Present waits for the GPU in short sleeps instead of a spin that keeps a core at 100 percent (default 1)", &gPresentWait);
+     bool gParallelNormalMap = true;
+     TConVar<bool> gConParNormalMap("ed_par_normalmap", "Editor: 1 = big normal map updates (map load, whole map edits) use the worker pool (default 1)", &gParallelNormalMap);
++    float gUiGcKb = 8192.0f;
++    float gSimGcKb = 8192.0f;
++    float gGcMaxSeconds = 60.0f;
++    TConVar<float> gConUiGc("ed_ui_gc_kb", "Editor: the UI Lua state's forced full collection (every 5 s) runs only after this many KiB of new heap, 0 = always (default 8192)", &gUiGcKb);
++    TConVar<float> gConSimGc("ed_sim_gc_kb", "Editor: the sim Lua state's forced full collection (every 7 s) runs only after this many KiB of new heap, 0 = always (default 8192)", &gSimGcKb);
++    TConVar<float> gConGcMax("ed_gc_max_seconds", "Editor: longest time between two forced Lua collections while the heap does not grow (default 60)", &gGcMaxSeconds);
++    GcGate gUiGate;
++    GcGate gSimGate;
+     TConVar<float> gConIdleSeconds("ed_idle_seconds", "Editor: seconds without input before ed_fps_idle applies (default 10)", &gIdleSeconds);
+ 
+     // ---- clock ----------------------------------------------------------------------------------------------------------------------------------
+@@ -257,6 +265,26 @@ namespace moho::editor::perf
+     const PresentSleepInstaller gPresentSleepInstaller{};
+   } // namespace
+ 
++  bool UiGcDue(const int heapKb, const float dtSeconds) noexcept
++  {
++    return gUiGate.Due(heapKb, dtSeconds, static_cast<long>(gUiGcKb), gGcMaxSeconds);
++  }
++
++  void UiGcDone(const int heapKb) noexcept
++  {
++    gUiGate.Done(heapKb);
++  }
++
++  bool SimGcDue(const int heapKb, const float dtSeconds) noexcept
++  {
++    return gSimGate.Due(heapKb, dtSeconds, static_cast<long>(gSimGcKb), gGcMaxSeconds);
++  }
++
++  void SimGcDone(const int heapKb) noexcept
++  {
++    gSimGate.Done(heapKb);
++  }
++
+   bool ParallelNormalMapEnabled() noexcept
+   {
+     return gParallelNormalMap;
+diff --git a/src/sdk/moho/editor/EdPerf.h b/src/sdk/moho/editor/EdPerf.h
+index 21dcb0a..9bb4d01 100644
+--- a/src/sdk/moho/editor/EdPerf.h
++++ b/src/sdk/moho/editor/EdPerf.h
+@@ -11,6 +11,9 @@
+ //   ed_idle_seconds   10
+ //   ed_present_wait   1      DeviceD3D9::Present waits for the GPU in short sleeps instead of a spin that keeps a core at 100 percent (EdPerf.cpp, PresentSleep)
+ //   ed_par_normalmap  1      big normal map updates (map load, whole map edits) use the worker pool of the field engine (CWldMap.cpp, UpdateNormalMap)
++//   ed_ui_gc_kb       8192   the UI state's forced full GC (every 5 s) runs only after this much new Lua heap, or after ed_gc_max_seconds; 0 = always (the original)
++//   ed_sim_gc_kb      8192   the same for the sim state (every 70 ticks)
++//   ed_gc_max_seconds 60
+ // Lua natives:
+ //   ed_perf_loop([reset])  -> { fps, frameMs, maxFrameMs, mainMs, dispatchMs, waitMs, idleMs, presentMs, renderMs, cap, state, vsync, frames }
+ //   ed_perf_threads()      -> { { id, name, cpu, totalMs, main }, ... }  cpu = percent of one core since the last call
+@@ -36,6 +39,16 @@ namespace moho::editor::perf
+   /** `ed_par_normalmap` (default 1): CWldTerrainRes::UpdateNormalMap splits big updates over the field engine's worker pool. */
+   [[nodiscard]] bool ParallelNormalMapEnabled() noexcept;
+ 
++  /**
++   * The forced full Lua collections (`CUIManager::Frame` every 5 s of frame time on the main thread, `Sim::AdvanceBeat` every 70 ticks on the Sim thread): `Due` says whether
++   * this one is worth its pause (heap grew by `ed_ui_gc_kb` / `ed_sim_gc_kb` KiB since the last one, or `ed_gc_max_seconds` passed), `Done` is called after the collection with the
++   * heap size. See GcGate in EdPerfPolicy.h. `heapKb` = `lua_getgccount(state)`.
++   */
++  [[nodiscard]] bool UiGcDue(int heapKb, float dtSeconds) noexcept;
++  void UiGcDone(int heapKb) noexcept;
++  [[nodiscard]] bool SimGcDue(int heapKb, float dtSeconds) noexcept;
++  void SimGcDone(int heapKb) noexcept;
++
+   /** Time the loop spent blocked in the OS wait after the frame (nothing to do). */
+   void NoteIdleWait(std::int64_t startNs) noexcept;
+   /** `device->Present()` and the render pass of `CD3DDevice::Paint`. */
+diff --git a/src/sdk/moho/editor/EdPerfPolicy.h b/src/sdk/moho/editor/EdPerfPolicy.h
+index 19fa9e9..d3e6b80 100644
+--- a/src/sdk/moho/editor/EdPerfPolicy.h
++++ b/src/sdk/moho/editor/EdPerfPolicy.h
+@@ -129,4 +129,39 @@ namespace moho::editor::perf
+     std::int64_t lastStart_ = 0;
+     bool started_ = false;
+   };
++
++  /**
++   * Decides whether the periodic forced full collection of a Lua state is worth its pause. The engine forces one every 5 s of frame time in the UI state
++   * (`CUIManager::Frame`) and every 70 ticks in the sim state (`Sim::AdvanceBeat`), whatever the state is doing. A full collection of the editor's UI state (65,000 lines of
++   * modules, catalogs) or of the sim state (every blueprint) stops the thread for as long as the live heap is big, est. tens to hundreds of milliseconds, and an idle editor does
++   * it for nothing. The gate lets it run when the heap grew by `minGrowthKb` since the last forced collection finished (there is garbage to find) or when `maxSeconds` have
++   * passed (native resources held by dead Lua objects, textures, are not in the Lua heap's size and must not wait forever). `minGrowthKb <= 0` = always: the original behaviour.
++   * Lua's own threshold (collect when the heap doubled) stays in force either way.
++   */
++  class GcGate
++  {
++  public:
++    /** `heapKb`: the state's heap now; `dtSeconds`: time since the previous call. true = collect now (and call Done with the heap after it). */
++    [[nodiscard]] bool Due(const long heapKb, const double dtSeconds, const long minGrowthKb, const double maxSeconds) noexcept
++    {
++      if (minGrowthKb <= 0) {
++        return true;
++      }
++      since_ += dtSeconds;
++      if (heapKb < afterKb_) {
++        afterKb_ = heapKb;   // the heap shrank by itself (Lua's own collection): measure growth from there
++      }
++      return heapKb - afterKb_ >= minGrowthKb || since_ >= maxSeconds;
++    }
++
++    void Done(const long heapKbAfter) noexcept
++    {
++      afterKb_ = heapKbAfter;
++      since_ = 0.0;
++    }
++
++  private:
++    long afterKb_ = 0;
++    double since_ = 0.0;
++  };
+ } // namespace moho::editor::perf
+diff --git a/src/sdk/moho/editor/tests/EdPerfPolicyTest.cpp b/src/sdk/moho/editor/tests/EdPerfPolicyTest.cpp
+index e0026b1..4c8d709 100644
+--- a/src/sdk/moho/editor/tests/EdPerfPolicyTest.cpp
++++ b/src/sdk/moho/editor/tests/EdPerfPolicyTest.cpp
+@@ -173,11 +173,69 @@ static void TestPacer()
+   CHECK(Pacer::Period(1.0f) == Pacer::Period(kMinCap), "period is clamped to the minimum cap");
+ }
+ 
++static void TestGcGate()
++{
++  // off (0): every call collects, the original behaviour
++  {
++    GcGate g;
++    CHECK(g.Due(1000, 5.0, 0, 60.0), "gate off: always due");
++    g.Done(1000);
++    CHECK(g.Due(1000, 5.0, 0, 60.0), "gate off: still always due");
++  }
++  // an idle state: heap constant, nothing to find; due only at the time limit
++  {
++    GcGate g;
++    g.Done(100000);   // 100 MB after the last collection
++    int due = 0;
++    double t = 0;
++    for (int i = 0; i < 40; ++i) {   // 40 calls of 5 s = 200 s idle
++      t += 5.0;
++      if (g.Due(100000, 5.0, 8192, 60.0)) {
++        ++due;
++        g.Done(100000);
++      }
++    }
++    CHECK(due == 3, "200 s idle: one collection per 60 s limit (3), got %d", due);
++    (void)t;
++  }
++  // garbage appears: due on the first call after 8 MB of growth
++  {
++    GcGate g;
++    g.Done(100000);
++    CHECK(!g.Due(104000, 5.0, 8192, 60.0), "4 MB of growth: not yet");
++    CHECK(g.Due(108192, 5.0, 8192, 60.0), "8 MB of growth: due");
++    g.Done(101000);
++    CHECK(!g.Due(102000, 5.0, 8192, 60.0), "1 MB after the collection: not due");
++  }
++  // Lua collected on its own (heap shrank): growth is measured from the smaller heap
++  {
++    GcGate g;
++    g.Done(200000);
++    CHECK(!g.Due(120000, 5.0, 8192, 60.0), "shrunk heap: not due");
++    CHECK(!g.Due(125000, 5.0, 8192, 60.0), "5 MB above the new low: not due");
++    CHECK(g.Due(129000, 5.0, 8192, 60.0), "9 MB above the new low: due");
++  }
++  // the time limit counts across skipped calls and restarts after Done
++  {
++    GcGate g;
++    g.Done(1000);
++    bool due = false;
++    for (int i = 0; i < 11 && !due; ++i) {
++      due = g.Due(1000, 5.0, 8192, 60.0);
++    }
++    CHECK(!due, "55 s: not due");
++    CHECK(g.Due(1000, 5.0, 8192, 60.0), "60 s: due");
++    g.Done(1000);
++    CHECK(!g.Due(1000, 5.0, 8192, 60.0), "right after Done: not due");
++  }
++}
++
+ int main()
+ {
+   TestCaps();
+   TestStateName();
+   TestPacer();
++  TestGcGate();
+   std::printf("EdPerfPolicyTest: %d checks, %d failures\n", gChecks, gFailures);
+   return gFailures == 0 ? 0 : 1;
+ }
+diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
+index f3603ea..ec5f992 100644
+--- a/src/sdk/moho/sim/Sim.cpp
++++ b/src/sdk/moho/sim/Sim.cpp
+@@ -11,6 +11,7 @@
+ #include <cmath>
+ 
+ #include "moho/editor/EditorDocument.h"
++#include "moho/editor/EdPerf.h"
+ #include <cstdarg>
+ #include <cstdio>
+ #include <cstddef>
+@@ -10675,7 +10676,12 @@ void Sim::AdvanceBeat(const int amt)
+   }
+ 
+   if (mLuaState && mLuaState->m_state && (mCurTick % 70u) == 0u) {
+-    lua_setgcthreshold(mLuaState->m_state, 0);
++    // EDITOR: the forced full collection of the sim state (every blueprint lives in it: a pause of est. 100 ms on the Sim thread) runs when the heap grew, not every 7 s
++    // whatever happens (moho/editor/EdPerf.cpp, `ed_sim_gc_kb 0` = always, as before). Lua's own threshold (heap doubled) stays in force.
++    if (moho::editor::perf::SimGcDue(lua_getgccount(mLuaState->m_state), 7.0f)) {
++      lua_setgcthreshold(mLuaState->m_state, 0);
++      moho::editor::perf::SimGcDone(lua_getgccount(mLuaState->m_state));
++    }
+   }
+ 
+   // +0x08FC latch: set here in AdvanceBeat, cleared in Sim::Sync.
