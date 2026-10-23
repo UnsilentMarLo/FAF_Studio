@@ -94,10 +94,23 @@ function Sanitize(name)
     return s
 end
 
+-- DiskFindFiles over '/maps' walks the whole file tree of the game (hundreds of maps in the archives): one answer is kept for a second, so the calls one dialog makes
+-- one after the other (ListUser = List + UserMapsDir, the release and resize dialogs) share a single walk. A map saved a moment ago shows up after that second.
+local scenarioFiles, scenarioFilesAt = false, -100
+
+local function ScenarioFiles()
+    local now = GetSystemTimeSeconds()
+    if not scenarioFiles or now - scenarioFilesAt > 1 then
+        scenarioFiles = DiskFindFiles('/maps', '*_scenario.lua') or {}
+        scenarioFilesAt = now
+    end
+    return scenarioFiles
+end
+
 --- Every scenario file of the game data (and mounted mods / user maps).
 function List()
     local list = {}
-    local files = DiskFindFiles('/maps', '*_scenario.lua') or {}
+    local files = ScenarioFiles()
     for _, f in files do
         local folder = Basename(Dirname(f))
         local stem = string.gsub(Basename(f), '_scenario%.lua$', '')
@@ -121,7 +134,7 @@ function ListUser()
 end
 
 function UserMapsDir()
-    local files = DiskFindFiles('/maps', '*_scenario.lua') or {}
+    local files = ScenarioFiles()
     for _, f in files do
         local disk = ed_vfs_to_disk(f)
         if disk then

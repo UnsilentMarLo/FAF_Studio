@@ -79,6 +79,22 @@ function Run(verbose)
     local stamp0 = TerrainEpoch.Stamp()
     check('the stamp is steady while nothing is written', TerrainEpoch.Stamp() == stamp0)
 
+    -- TerrainEpoch.Step: the 5 s net follows the clock (the `now` argument is for this test), not the number of frames
+    do
+        local T0 = GetSystemTimeSeconds() + 1000          -- (numbers are 32-bit floats: a small clock keeps 0.1 s exact)
+        TerrainEpoch.Step(false, T0)                 -- the net fires (the clock is 1000 s ahead of the last move) and the clock of the net is T0
+        local e = TerrainEpoch.Epoch
+        for i = 1, 500 do TerrainEpoch.Step(false, T0 + 0.1) end
+        check('Epoch.Step: 500 frames within 0.1 s do not move the epoch', TerrainEpoch.Epoch == e)
+        TerrainEpoch.Step(true, T0 + 9)
+        check('Epoch.Step: no net while a stroke is dragged', TerrainEpoch.Epoch == e)
+        TerrainEpoch.Step(false, T0 + TerrainEpoch.NET_SECONDS + 0.5)
+        check('Epoch.Step: the net moves the epoch once after the net time', TerrainEpoch.Epoch == e + 1)
+        TerrainEpoch.Step(false, T0 + TerrainEpoch.NET_SECONDS + 0.6)
+        check('Epoch.Step: and not again at once', TerrainEpoch.Epoch == e + 1)
+        TerrainEpoch.Bump()                          -- the clock of the net is the real one again
+    end
+
     -- ---- Fields.CommitHeight (Fields panel "Commit to heights", the generators' common path) ------------------------------------------------------------
     local depth0 = History.Depth()
     local f60 = Level(w, h, 60)

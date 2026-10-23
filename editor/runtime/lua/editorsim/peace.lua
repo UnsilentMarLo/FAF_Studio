@@ -35,6 +35,14 @@ local function Api()
         end,
         set = function(a, b, state) SetAllianceOneWay(a, b, state) end,
         units = function() return GetUnitsInRect(Rect(0, 0, 100000, 100000)) end,
+        -- how many units exist (the armies' active unit counts, kept by the engine: no list of units is made). A change tells the sweep that a unit came or went.
+        count = function()
+            local n = 0
+            for index, brain in ArmyBrains do
+                n = n + (brain:GetCurrentUnits(categories.ALLUNITS) or 0)
+            end
+            return n
+        end,
         fork = function(fn) return ForkThread(fn) end,
         wait = function(ticks) WaitTicks(ticks) end,
     }
@@ -91,16 +99,36 @@ local function HoldAll(api)
     end
 end
 
+-- The sweep looks at the number of units every second (a count the engine keeps: nothing is allocated) and walks the units only when it changed. A unit that was made while
+-- another went in the same second is found by the full walk that is done anyway every SWEEP_NET seconds. (GetUnitsInRect over the whole map builds a Lua table of every unit:
+-- on a mission map with thousands of units that was done every second for nothing.)
+SWEEP_NET = 10
+
+local function UnitCount(api)
+    if not api.count then return nil end
+    local ok, n = pcall(api.count)
+    if ok and type(n) == 'number' then return n end
+    return nil
+end
+
 --- A unit another feature made while the quiet is on gets hold fire within a second.
 local function StartSweep(api)
     if not api.fork or not api.wait then return end
     sweepGen = sweepGen + 1
     local mine = sweepGen
     api.fork(function()
+        local lastCount = UnitCount(api)
+        local waited = 0
         while quiet and sweepGen == mine do
             api.wait(10)
             if quiet and sweepGen == mine then
-                HoldAll(api)
+                waited = waited + 1
+                local n = UnitCount(api)
+                if n == nil or n ~= lastCount or waited >= SWEEP_NET then
+                    lastCount = n
+                    waited = 0
+                    HoldAll(api)
+                end
             end
         end
     end)

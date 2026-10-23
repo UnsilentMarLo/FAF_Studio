@@ -28,7 +28,7 @@ local DEPOSITS = {
 
 local entries = {}      -- marker name -> { shape, x, y, z, yaw, prop = WorldMesh | false, deposit = WorldMesh | false }
 local lastDoc = false
-local syncFrame = 0
+local syncAt, netAt = 0, 0      -- clock of the last height sync (2 s net) and of the last full look at the markers (1 s net): clocks, not frame counts (an unlimited frame rate ran the nets 5 times as often)
 local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 local Tools = import('/lua/editor/tools.lua')
 local syncedEpoch, seenChanged = -1, -1      -- what the last height sync and the last walk over the markers were done for
@@ -267,9 +267,10 @@ function Update()
     local markers = doc.save.MasterChain._MASTERCHAIN_.Markers
     -- a marker stands on the terrain: when the terrain under it changed (brush, undo) its stored height follows. That is one terrain read per marker, so it is done when the
     -- ground may have changed (TerrainEpoch: a finished stroke, an undo; at the latest every 5 s) and every 2 s, not ten times a second.
-    syncFrame = syncFrame + 1
+    local clock = GetSystemTimeSeconds()
     local synced = false
-    if syncedEpoch ~= TerrainEpoch.Epoch or math.mod(syncFrame, 120) == 0 then
+    if syncedEpoch ~= TerrainEpoch.Epoch or clock - syncAt >= 2 then
+        syncAt = clock
         syncedEpoch = TerrainEpoch.Epoch
         synced = true
         for name, m in markers do
@@ -283,9 +284,10 @@ function Update()
     -- The meshes are brought in line with the markers when the objects changed (Tools.Changed: a move, a type, a layer switch), when heights were synced, and about once a
     -- second as a net for an edit that does not announce itself. A frame in which nothing happened costs nothing (it walked every marker and built a string for each, every frame).
     local changed = Tools.Changed
-    if not synced and changed == seenChanged and math.mod(syncFrame, 60) ~= 0 then
+    if not synced and changed == seenChanged and clock - netAt < 1 then
         return
     end
+    netAt = clock
     seenChanged = changed
     local Filter = import('/lua/editor/markerfilter.lua')
     for name, m in markers do

@@ -121,6 +121,50 @@ function Run()
     Peace.Restore()
     Ok(rel[1][2] == 'Enemy' and rel[2][1] == 'Enemy' and late.state == 0, 'and the second Restore gives back what was there at the second Enter')
 
+    -- the sweep thread walks the units only when their number changed, and anyway every SWEEP_NET waits (no walk of every unit each second for nothing)
+    do
+        local list = { Unit(0), Unit(0) }
+        local walks, waits, thread = 0, 0, nil
+        local snap = {}
+        local fresh, freshState
+        local function Api2(withCount)
+            local api = {
+                armies = function() return { 1 } end,
+                relation = function(a, b) return 'Neutral' end,
+                set = function(a, b, state) end,
+                units = function() walks = walks + 1 return list end,
+                fork = function(fn) thread = fn end,
+                wait = function(n)
+                    waits = waits + 1
+                    snap[waits] = walks
+                    if waits == 3 then fresh = Unit(0) table.insert(list, fresh) end
+                    if waits == 4 then freshState = fresh.state end       -- (the end of the quiet gives the fire state back)
+                    if waits == Peace.SWEEP_NET + 4 then Peace.Restore() end
+                end,
+            }
+            if withCount then api.count = function() return table.getn(list) end end
+            return api
+        end
+        Peace.Reset()
+        Peace.UseApi(Api2(true))
+        Peace.Enter()
+        Ok(walks == 1 and thread ~= nil, 'Enter walks the units once and starts the sweep thread')
+        thread()
+        Ok(snap[3] == 1, 'no walk while the number of units stays the same (' .. tostring(snap[3]) .. ' walks after 2 waits)')
+        Ok(snap[4] == 2 and freshState == 1, 'a changed number of units is walked at once and the new unit is held')
+        Ok(snap[Peace.SWEEP_NET + 3] == 2, 'still no walk while it stays the same')
+        Ok(snap[Peace.SWEEP_NET + 4] == 3, 'a full walk after SWEEP_NET waits as a net (' .. tostring(snap[Peace.SWEEP_NET + 4]) .. ' walks)')
+        Ok(not Peace.IsQuiet() and waits == Peace.SWEEP_NET + 4, 'the thread ends when the quiet ends')
+        -- an api without a count walks every second as before
+        list = { Unit(0) }
+        walks, waits, snap = 0, 0, {}
+        Peace.Reset()
+        Peace.UseApi(Api2(false))
+        Peace.Enter()
+        thread()
+        Ok(snap[5] == 5, 'without a unit count every wait walks the units (' .. tostring(snap[5]) .. ' walks after 4 waits)')
+    end
+
     Peace.UseApi(nil)
     Peace.Reset()
     table.insert(out, 1, failed == 0 and 'PASS' or ('FAIL: ' .. failed))

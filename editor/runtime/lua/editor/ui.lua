@@ -25,6 +25,7 @@ local Props = import('/lua/editor/props.lua')
 local Decals = import('/lua/editor/decals.lua')
 local ObjectTools = import('/lua/editor/tools.lua')
 local Overlay = import('/lua/editor/overlay.lua')
+local Perf = import('/lua/editor/perf.lua')
 
 local COLOR_PANEL = 'e0101820'
 local COLOR_BTN = 'ff2a3a4a'
@@ -697,7 +698,12 @@ end
 -- ---- edit / play ----------------------------------------------------------------------------------------------
 
 local function GameUIHidden(hidden)
-    local gm = import('/lua/ui/game/gamemain.lua')
+    -- (called every frame while editing: the module is kept in `ui`, no import per call)
+    local gm = ui.gameMainMod
+    if not gm then
+        gm = import('/lua/ui/game/gamemain.lua')
+        ui.gameMainMod = gm
+    end
     if gm.gameUIHidden ~= hidden then
         gm.HideGameUI()
     end
@@ -1034,7 +1040,13 @@ local overlayBrokenUntil = 0
 local overlayLastError = false
 
 local function UpdateOverlay()
-    local worldView = import('/lua/ui/game/worldview.lua').viewLeft
+    -- (every frame: the two modules are kept in `ui`, no import call per frame)
+    local wvMod = ui.worldViewMod
+    if not wvMod then
+        wvMod = import('/lua/ui/game/worldview.lua')
+        ui.worldViewMod = wvMod
+    end
+    local worldView = wvMod.viewLeft
     if not worldView then
         return
     end
@@ -1042,7 +1054,12 @@ local function UpdateOverlay()
     -- the engine's line overlay (overlay.lua) draws markers' highlights, areas and the pointer; the pooled dots below are the
     -- fallback for an engine without it
     if GetSystemTimeSeconds() >= overlayBrokenUntil then
-        local ok, handled = pcall(Overlay.Update, import('/lua/editor/ui.lua'))
+        local self = ui.selfMod
+        if not self then
+            self = import('/lua/editor/ui.lua')
+            ui.selfMod = self
+        end
+        local ok, handled = pcall(Overlay.Update, self)
         if not ok then
             overlayBrokenUntil = GetSystemTimeSeconds() + 3
             if tostring(handled) ~= overlayLastError then
@@ -1154,10 +1171,13 @@ local function FinishCreate(frame)
     ui.tick:DisableHitTest()
     ui.tick:SetNeedsFrameUpdate(true)
     ui.tick.OnFrame = function(self, delta)
+        local tAll = Perf.Begin()
         -- a brush stroke in progress: dab what the last frames' time budget left over between the last dab and the mouse (PumpStroke)
         State.dabTime = 0
         if State.strokeTarget then
+            local tStroke = Perf.Begin()
             PumpStroke(false)
+            Perf.End('ui: brush stroke pump', tStroke)
         end
         -- the game's own start-up (layout, expand animations) can re-show the HUD after Create(): keep it hidden
         if State.mode == 'edit' then
@@ -1165,6 +1185,7 @@ local function FinishCreate(frame)
             UpdateStatus()
             UpdateOverlay()
         end
+        Perf.End('ui: frame tick (all)', tAll)
     end
 
     InstallWorldHook()

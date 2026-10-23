@@ -23,6 +23,7 @@ end
 local sections = {}      -- name -> { total, calls, max }
 local started = false    -- wall clock at the start of the current report period
 local frames = 0
+local lastHeap = false     -- the heap size (KB) at the last report
 
 local function Clock()
     return GetSystemTimeSeconds()
@@ -89,6 +90,13 @@ function Report()
     end
     local fps = (span > 0) and (frames / span) or 0
     Out(string.format('--- %.1f s, %.0f frames/s ---', span, fps))
+    -- The Lua heap of this state: a heap that grows and falls back within seconds is garbage made every frame (the collector runs on the same core as the editor);
+    -- one that only grows is a leak. (Once per report: not part of any frame.)
+    local okHeap, heap = pcall(collectgarbage, 'count')
+    if okHeap and type(heap) == 'number' then
+        Out(string.format('lua heap: %.1f MB (%+.1f MB since the last report)', heap / 1024, (heap - (lastHeap or heap)) / 1024))
+        lastHeap = heap
+    end
     local shown = 0
     for _, e in list do
         shown = shown + 1

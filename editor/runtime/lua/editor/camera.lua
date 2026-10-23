@@ -293,13 +293,43 @@ function ParseKeys(keys)
     return key, mods
 end
 
-local function Down(keys)
-    if not keys or keys == '' then return false end
+-- A binding text parsed once: this runs for every held-key command, twice, every frame (ParseKeys makes strings and two tables per call). A rebound key is a new text, so it is
+-- parsed again by itself. A text whose key code is not known yet (the engine's key table is read on first use) is not kept.
+local bindingCache = {}      -- keys text -> { code, ctrl, alt }
+
+local function Binding(keys)
+    local b = bindingCache[keys]
+    if b then return b end
     local name, mods = ParseKeys(keys)
     local code = CodeOf(name)
-    if not code or not IsKeyDown(code) then return false end
+    if not code then return false end
+    b = { code = code, ctrl = mods.Ctrl, alt = mods.Alt }
+    bindingCache[keys] = b
+    return b
+end
+
+local function Down(keys)
+    if not keys or keys == '' then return false end
+    local b = Binding(keys)
+    if not b or not IsKeyDown(b.code) then return false end
     -- Shift is the speed modifier of movement, a binding may still ask for Ctrl or Alt (virtual key codes 17 and 18)
-    return (IsKeyDown(17) and true or false) == mods.Ctrl and (IsKeyDown(18) and true or false) == mods.Alt
+    return (IsKeyDown(17) and true or false) == b.ctrl and (IsKeyDown(18) and true or false) == b.alt
+end
+
+-- The ids of the commands that hold a camera movement, found once (the registry holds ~200 commands and was walked every frame); looked up again when the registry grew.
+local holdList, holdCount = {}, -1
+
+local function HoldCommands(commands)
+    local n = table.getn(commands.order)
+    if n ~= holdCount then
+        holdCount = n
+        holdList = {}
+        for _, id in commands.order do
+            local def = commands.registry[id]
+            if def.hold then table.insert(holdList, id) end
+        end
+    end
+    return holdList
 end
 
 local lastTime = false
@@ -312,12 +342,13 @@ local function UpdateKeys(commands)
     lastTime = now
     if dt <= 0 then return end
 
-    local move = { right = 0, up = 0, turn = 0, tilt = 0, zoom = 0 }
+    local move = false          -- made when a key is held (no table per idle frame)
     local any = false
-    for _, id in commands.order do
+    for _, id in HoldCommands(commands) do
         local def = commands.registry[id]
         if def.hold and (Down(def.keys) or Down(def.keys2)) then
             any = true
+            move = move or { right = 0, up = 0, turn = 0, tilt = 0, zoom = 0 }
             local h = def.hold
             if h == 'pan.right' then move.right = move.right + 1 elseif h == 'pan.left' then move.right = move.right - 1
             elseif h == 'pan.up' then move.up = move.up + 1 elseif h == 'pan.down' then move.up = move.up - 1
@@ -363,9 +394,20 @@ end
 --- the keys made is undone in the same frame). The lock does not depend on the overlay's update, which stops for good when one of its layers fails once (ui.lua overlayBroken).
 local lockFailAt = -100
 
+local unitViewMod = false
+
+local function LockTick()
+    local m = unitViewMod
+    if not m then
+        m = import('/lua/editor/unitview.lua')
+        unitViewMod = m
+    end
+    m.Tick()
+end
+
 function Update(commands)
     UpdateKeys(commands)
-    local ok, err = pcall(function() import('/lua/editor/unitview.lua').Tick() end)
+    local ok, err = pcall(LockTick)       -- (a function of the module, not a closure and an import per frame)
     if not ok and GetSystemTimeSeconds() - lockFailAt > 5 then
         lockFailAt = GetSystemTimeSeconds()
         LOG('EDITOR unitview: the camera lock failed: ' .. tostring(err))
