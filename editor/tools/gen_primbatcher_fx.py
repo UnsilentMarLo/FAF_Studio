@@ -20,6 +20,10 @@ OUT = os.path.join(ROOT, "editor", "runtime", "override", "effects", "primbatche
 
 
 def build():
+    if not os.path.isfile(BASE):
+        raise SystemExit("FAF's primbatcher.fx was not found at %s\nPoint FAF_STUDIO_FAF_REPO at a FAForever/fa checkout (the folder that contains effects/), for example\n"
+                         "  PowerShell:  $env:FAF_STUDIO_FAF_REPO = 'C:\\path\\to\\SupCom_Dev_Workspace\\faf_repo\\fa'\n"
+                         "The generated editor/runtime/override/effects/primbatcher.fx is checked in: you only need this when FAF changed its primbatcher.fx or the text techniques block." % BASE)
     base = open(BASE, "rb").read()
     part = open(PART, "rb").read()
     digest = hashlib.sha256(base).hexdigest()

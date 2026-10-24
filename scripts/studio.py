@@ -340,9 +340,9 @@ def engine_sync(a=None):
 def engine_export(a):
     m = meta()
     dst = P.ENGINE_SRC
-    code, out = git('status', '--porcelain', cwd=dst)
+    code, out = git('status', '--porcelain', '--untracked-files=no', cwd=dst)      # only commits are exported: untracked files (build leftovers) do not matter
     if out.strip():
-        raise SystemExit('the engine checkout has uncommitted changes (commit them first):\n' + out)
+        raise SystemExit('the engine checkout has uncommitted changes to tracked files (commit them in %s first, then run this again; `git -C %s status` lists them):\n%s' % (dst, dst, out))
     for f in glob.glob(os.path.join(PATCHES, '*.patch')):
         os.remove(f)
     os.makedirs(PATCHES, exist_ok=True)
