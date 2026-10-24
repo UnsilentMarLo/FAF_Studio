@@ -148,6 +148,9 @@ function Run()
         return Done()
     end
     local size = w - 1
+    -- what other tests (or an open graph) keep alive is let go first: it is not ours to count
+    pcall(function() import('/lua/editor/graphrun.lua').Release() end)
+    pcall(function() import('/lua/editor/maskgen.lua').ClearPreview() end)
     local startFields = ed_field_count()
     local gpuWas = rawget(_G, 'ed_gpu_info') and ed_gpu_info(false).enabled
     if rawget(_G, 'ed_gpu_enable') then ed_gpu_enable(false) end
@@ -300,6 +303,174 @@ function Run()
     check('one undo takes the whole second placement back', Count(Map.Doc.save.MasterChain._MASTERCHAIN_.Markers) == after)
     History.Undo()
     check('and one more the first', Count(Map.Doc.save.MasterChain._MASTERCHAIN_.Markers) == markersBefore, Count(Map.Doc.save.MasterChain._MASTERCHAIN_.Markers) .. ' vs ' .. markersBefore)
+
+    -- ---- the generated terrain is symmetric about the symmetry centre ------------------------------------------------------------------------------------------
+    local cxWas, czWas = Symmetry.CenterX, Symmetry.CenterZ
+    local Playable = import('/lua/editor/playable.lua')
+    local depth0 = History.Depth()
+    Layout.New({})
+    Layout.Doc.base, Layout.Doc.water, Layout.Doc.weather = 25, 18, 0
+    Symmetry.SetMode('rot2')
+    Layout.CentreSymmetry()
+    Layout.FillEllipse(1, 12, 20, 44, 70, 1, false)
+    Layout.FillRect(2, 20, 90, 40, 110, 1, false)
+    local ng = Layout.Generate({})
+    local worst = 0
+    for _, q in { { 30, 40 }, { 38, 60 }, { 25, 100 }, { 40, 95 }, { 20, 30 } } do
+        local x, z = q[1] * k, q[2] * k
+        worst = math.max(worst, math.abs(Terrain(x, z) - Terrain(size - x, size - z)))
+    end
+    check('a layout under rot2 makes terrain that is symmetric about the centre (noise relief included)', ng ~= nil and worst < 0.02, worst)
+    Symmetry.SetMode('mirror_x')
+    Layout.CentreSymmetry()
+    Layout.Generate({})
+    worst = 0
+    for _, q in { { 30, 40 }, { 38, 60 }, { 25, 100 }, { 40, 95 } } do
+        local x, z = q[1] * k, q[2] * k
+        worst = math.max(worst, math.abs(Terrain(x, z) - Terrain(size - x, z)))
+    end
+    check('and under mirror x', worst < 0.02, worst)
+    while History.Depth() > depth0 do History.Undo() end
+
+    -- ---- a playable area that is not square ----------------------------------------------------------------------------------------------------------------
+    local setOk = Playable.Set(0, 0, size, math.floor(size / 2))
+    check('the test map takes a playable area of 2 : 1', setOk == true)
+    Layout.New({})
+    local d = Layout.Doc
+    check('the canvas has the shape of the playable area', d.rw == 128 and d.rh == 64 and math.abs(d.cell - size / 128) < 1e-6 and table.getn(d.layers[1].data) == 128 * 64, d.rw .. ' x ' .. d.rh)
+    local wx, wz = Layout.ToWorld(10, 20)
+    local bx, bz = Layout.ToCell(wx, wz)
+    check('world units and canvas cells convert both ways', math.abs(wx - (d.ox + 10 * d.cell)) < 1e-6 and math.abs(bx - 10) < 1e-6 and math.abs(bz - 20) < 1e-6)
+    Symmetry.SetMode('rot2')
+    Layout.CentreSymmetry()
+    local _, scz = Symmetry.Centre()
+    check('the symmetry centre follows the middle of the area', Layout.SymmetryCentred() and math.abs(scz - size / 4) < 0.6, scz)
+    Layout.Dab(1, 20, 10, 3, 1, 1, false)
+    local hl = Layout.Layer(1)
+    check('rot2 on a canvas that is not square: the turned copy lies about the middle of the canvas', hl.data[10 * 128 + 20 + 1] == 1 and hl.data[53 * 128 + 107 + 1] == 1 and hl.data[10 * 128 + 107 + 1] == 0)
+    Layout.Fill(1, 0)
+    Symmetry.SetMode('off')
+    Layout.FillRect(1, 20, 10, 50, 40, 1, false)
+    Layout.FillRect(2, 80, 20, 110, 30, 1, false)
+    Layout.Doc.layers[2].p.soft = 4
+    Layout.Doc.weather = 0
+    local ng2 = Layout.Generate({})
+    local hh, mh, off = Terrain(35 * d.cell + d.ox, 25 * d.cell + d.oz), Terrain(95 * d.cell + d.ox, 25 * d.cell + d.oz), Terrain(60 * d.cell, 45 * d.cell)
+    check('the drawing lands on its place in the playable area', ng2 ~= nil and hh > off + 5 and mh > hh + 5, hh .. ' / ' .. mh .. ' / ' .. off)
+    local mIn, mOut
+    Fields.Run(function(S2)
+        local m = Layout.LayerMask(S2, S2:Height(1), 2)
+        mIn = Fields.Sample(m, 95 * d.cell + d.ox, 25 * d.cell + d.oz)
+        mOut = Fields.Sample(m, 95 * d.cell + d.ox, 55 * d.cell + d.oz)
+    end)
+    check('a layer mask of the area lines up with the world', mIn > 0.9 and mOut < 0.05, mIn .. ' / ' .. mOut)
+    Layout.Fill(1, 0)
+    Layout.Dab(6, 100, 50, 4, 1, 1, false)
+    local bc = Layout.BaseCentres()
+    check('base centres are world positions of the area', table.getn(bc) == 1 and math.abs(bc[1].x - (d.ox + 100.5 * d.cell)) < d.cell and math.abs(bc[1].z - (d.oz + 50.5 * d.cell)) < d.cell)
+    Layout.Fill(6, 0)
+    S.starts, S.pattern, S.count, S.radius, S.rotation = 'pattern', 'sides', 2, 0.6, 0
+    local sides = LM.Starts()
+    check('a pattern is stretched over the area (two sides lie along the long axis)', table.getn(sides) == 2 and math.abs(sides[1].z - size / 4) < 0.5 and math.abs(math.abs(sides[1].x - size / 2) - 0.6 * size / 2) < 0.5,
+        table.getn(sides) > 0 and (sides[1].x .. ', ' .. sides[1].z) or 'none')
+    S.pattern, S.count = 'ring', 4
+    ed_terrain_set_rect(0, 0, w - 1, w - 1, 25)
+    pcall(function() import('/lua/editor/terrain.lua').ClearHistory() end)
+    S.mass, S.massMin, S.massMax, S.massShape, S.hydro, S.extra, S.middle = 4, 20, 30, 'ring', 1, 0, 2
+    local plan2 = LM.Plan()
+    local inside = true
+    for _, it in plan2.items do
+        if it.z > size / 2 - 4 or it.z < 4 then inside = false end
+    end
+    for _, st in plan2.starts do
+        if st.z > size / 2 or st.z < 0 then inside = false end
+    end
+    check('the plan stays inside the playable area', inside and table.getn(plan2.starts) == 4 and plan2.masses >= 14, plan2.text)
+    LM.ClearPlan()
+
+    -- the drawing follows a resized area: empty ones silently, drawn ones by Fit
+    Layout.New({})
+    Layout.FillRect(1, 20, 10, 40, 30, 1, false)
+    local oldCell = Layout.Doc.cell
+    local oldX, oldZ = Layout.ToWorld(30, 20)
+    check('a drawing that covers the area is not stale', not Layout.Stale())
+    Playable.Set(0, 0, size, size)
+    check('a resized area makes the drawing stale', Layout.Stale() == true)
+    check('a drawn layout is not moved by itself', Layout.Sync() == false and Layout.Doc.rh == 64)
+    check('Fit to the area refits the canvas', Layout.Refit() == true and Layout.Doc.rw == 128 and Layout.Doc.rh == 128 and not Layout.Stale())
+    local nx, nz = Layout.ToCell(oldX, oldZ)
+    check('what was drawn stays at the same place on the map', Layout.Layer(1).data[math.floor(nz) * 128 + math.floor(nx) + 1] > 0.9, nx .. ', ' .. nz)
+    History.Undo()
+    check('undo of Fit gives the old shape back', Layout.Doc.rh == 64 and math.abs(Layout.Doc.cell - oldCell) < 1e-6 and Layout.Layer(1).data[20 * 128 + 30 + 1] == 1)
+    History.Redo()
+    local keep = Layout.Plain()
+    Layout.New({})
+    Layout.Load(keep)
+    check('the shape of the canvas is saved with the drawing', Layout.Doc.rw == 128 and Layout.Doc.rh == 128 and math.abs(Layout.Doc.cell - 2) < 1e-6 and Layout.Layer(1).data[math.floor(nz) * 128 + math.floor(nx) + 1] > 0.9)
+    local oldFile = { res = 128, base = 25, water = 20, seed = 1, weather = 0, layers = { { kind = 'hills', name = 'Hills', visible = true, p = {}, data = '255x4,0x16380' } } }
+    Layout.Load(oldFile)
+    check('a file from before (no shape) loads as the whole map', Layout.Doc.rw == 128 and Layout.Doc.rh == 128 and Layout.Doc.ox == 0 and math.abs(Layout.Doc.cell - size / 128) < 1e-6 and Layout.Layer(1).data[1] == 1)
+    Layout.New({})
+    Playable.Set(0, 0, size, math.floor(size / 2))
+    check('an empty drawing follows the area by itself', Layout.Stale() and Layout.Sync() == true and Layout.Doc.rh == 64 and not Layout.Stale())
+    while History.Depth() > depth0 do History.Undo() end
+    Layout.New({})
+    check('the area is back as it was', not Layout.Stale() and Layout.Doc.rw == 128 and Layout.Doc.rh == 128)
+
+    -- ---- colour and pictures -----------------------------------------------------------------------------------------------------------------------------------------
+    Layout.SetColor(1, 10, 300, -5)
+    check('the colour of a layer is clamped and kept', Layout.Layer(1).color[1] == 10 and Layout.Layer(1).color[2] == 255 and Layout.Layer(1).color[3] == 0)
+    local px = Layout.Pixels({})
+    Layout.FillRect(1, 0, 0, 5, 5, 1, false)
+    px = Layout.Pixels({})
+    check('the canvas draws the layer in its own colour', math.abs(px[1] - (28 + (10 - 28) * 0.85)) < 1.5 and px[2] > 200, px[1] .. ' ' .. px[2])
+    local round = Layout.Plain()
+    Layout.New({})
+    Layout.Load(round)
+    check('the colour is saved with the layer', Layout.Layer(1).color[1] == 10 and Layout.Layer(1).color[2] == 255)
+
+    -- a picture of 8 x 4: the left half white, the right half black (written with the image writer, read back by the importer)
+    if rawget(_G, 'ed_img_write') and rawget(_G, 'ed_img_read') and rawget(_G, 'ed_field_from_table') then
+        local vals = {}
+        for zz = 0, 3 do
+            for xx = 0, 7 do vals[zz * 8 + xx + 1] = (xx < 4) and 1 or 0 end
+        end
+        local pic = ed_field_from_table(8, 4, vals)
+        local path = '../fieldtmp/layout_selftest.png'
+        local wrote = ed_img_write(path, pic, { bits = 8, lo = 0, hi = 1 })
+        Fields.Free(pic)
+        check('the test picture is written', wrote == true)
+        if wrote then
+            Layout.New({})
+            local L1 = Layout.Layer(1)
+            local changed, why2 = Layout.ImportImage(1, path, { fit = 'fill' })
+            check('a picture is drawn into the layer: white where it is white', changed ~= nil and L1.data[32 * 128 + 10 + 1] > 0.95 and L1.data[32 * 128 + 120 + 1] < 0.05, tostring(why2))
+            History.Undo()
+            check('importing a picture is one undo step', Sum(L1) == 0)
+            History.Redo()
+            Layout.ImportImage(1, path, { fit = 'fill', invert = true })
+            check('invert draws the dark side', L1.data[32 * 128 + 10 + 1] < 0.05 and L1.data[32 * 128 + 120 + 1] > 0.95)
+            Layout.ImportImage(1, path, { fit = 'fill', flipX = true })
+            check('flip X mirrors the picture', L1.data[32 * 128 + 10 + 1] < 0.05 and L1.data[32 * 128 + 120 + 1] > 0.95)
+            Layout.Fill(1, 0)
+            Layout.ImportImage(1, path, { fit = 'fill', hard = true })
+            local soft = false
+            for kk = 1, table.getn(L1.data) do
+                if L1.data[kk] > 0.02 and L1.data[kk] < 0.98 then soft = true break end
+            end
+            check('hard edge leaves only 0 and 1', not soft)
+            Layout.Fill(1, 0)
+            Layout.FillRect(1, 100, 100, 110, 110, 0.5, false)
+            Layout.ImportImage(1, path, { fit = 'fill', add = true })
+            check('add keeps what was drawn', L1.data[105 * 128 + 105 + 1] == math.floor(0.5 * 255 + 0.5) / 255 or L1.data[105 * 128 + 105 + 1] >= 0.5)
+            local refused, why3 = Layout.ImportImage(1, '../fieldtmp/does_not_exist.png', {})
+            check('a picture that is not there is refused with a message', refused == nil and why3 ~= nil)
+            pcall(ed_file_delete, path)
+        end
+    else
+        table.insert(lines, '  (no image natives: the picture import is skipped)')
+    end
+    Symmetry.CenterX, Symmetry.CenterZ = cxWas, czWas
 
     -- ---- back to how it was ------------------------------------------------------------------------------------------------------------------------------------
     for key, v in saved do S[key] = v end

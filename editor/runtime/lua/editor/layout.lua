@@ -1,10 +1,15 @@
 -- The map layout: a coarse drawing of the map in layers (hills, mountains, plateaus, water, valleys, flat ground, bases and free masks) that is turned into a height map, into the masks the generator
--- nodes use and into start positions (docs/projects/editor/MAP_LAYOUT.md). The drawing is a grid of Doc.res x Doc.res cells per layer (0..1 each); the generator spreads it over the map, softens
--- every layer by its own soft edge, adds noise relief where the kind asks for it and writes the result like any other generator (one undo step).
+-- nodes use and into start positions (docs/projects/editor/MAP_LAYOUT.md). The drawing is a grid of Doc.rw x Doc.rh square cells (Doc.cell world units a side) per layer (0..1 each) that covers the
+-- PLAYABLE AREA of the map (a map that is not square gets a canvas that is not square); the generator spreads it over the map, softens every layer by its own soft edge, adds noise relief where
+-- the kind asks for it and writes the result like any other generator (one undo step).
 --
 --   Kinds, KindOrder        what each kind of layer does and its settings (label, colour, params { key, label, min, max, step, fmt, default })
---   Doc                     { res, base (ground height, units), water (water level, units), seed, weather (0..1), layers = { { id, name, kind, visible, color, p = {...}, data = {...} } }, sel, rev }
---   New(opts)               a fresh document with a layer of each of the first six kinds         Listen(fn)  fn() is called when the document changed
+--   Doc                     { res (cells on the long side), rw, rh (cells), cell, ox, oz (world units: the size of a cell and the corner of the drawing), base (ground height, units), water (water
+--                           level, units), seed, weather (0..1), layers = { { id, name, kind, visible, color, p = {...}, data = {...} (rw * rh numbers, row by row) } }, sel, rev }
+--   New(opts)               a fresh document (opts.res, opts.kinds, opts.area) with a layer of each of the first six kinds         Listen(fn)  fn() is called when the document changed
+--   Area() / Stale() / Sync() / Refit(res)   the playable area the drawing should cover; whether the drawing does not cover it any more; fit an empty drawing silently; fit a drawn one (resampled, undoable)
+--   ToWorld(cx, cz) / ToCell(x, z)           canvas cells <-> world units
+--   SetColor(i, r, g, b)    the colour of a layer on the canvas       ImportImage(i, path, o)   a picture becomes the content of layer i (one undo step)
 --   AddLayer(kind, name) / RemoveLayer(i) / MoveLayer(i, dir) / Select(i) / Layer(i) / Count() / LayerNamed(name)
 --   Strokes: BeginStroke(i) ... Dab / Line / FillRect / FillEllipse / FillPolygon / Clear / Fill / Smooth ... EndStroke(label)   one undo entry in the editor history per stroke; every tool paints the
 --                           images of the editor's symmetry (symmetry.lua) as well
@@ -70,10 +75,31 @@ local function Touch()
     for _, fn in listeners do pcall(fn) end
 end
 
-local function WorldSize()
-    local w = rawget(_G, 'ed_terrain_info') and ed_terrain_info()
-    return (w or 257) - 1
+--- The playable area (x0, z0, x1, z1) of the open map; the whole terrain without one, 256 units square without a map.
+function Area()
+    local ok, x0, z0, x1, z1 = pcall(function() return import('/lua/editor/playable.lua').Get() end)
+    if ok and x0 and rawget(_G, 'ed_terrain_info') and ed_terrain_info() then return x0, z0, x1, z1 end
+    return 0, 0, 256, 256
 end
+
+--- The grid of a drawing of `res` cells on the long side over the rectangle: square cells, the drawing centred on the rectangle.
+local function Frame(res, x0, z0, x1, z1)
+    local aw, ah = math.max(8, x1 - x0), math.max(8, z1 - z0)
+    local cell = math.max(aw, ah) / res
+    local rw, rh = math.max(1, math.floor(aw / cell + 0.5)), math.max(1, math.floor(ah / cell + 0.5))
+    return { rw = rw, rh = rh, cell = cell, ox = x0 + (aw - rw * cell) / 2, oz = z0 + (ah - rh * cell) / 2 }
+end
+
+local function SetFrame(doc, f)
+    doc.rw, doc.rh, doc.cell, doc.ox, doc.oz = f.rw, f.rh, f.cell, f.ox, f.oz
+end
+
+local function SameFrame(a, b)
+    return a.rw == b.rw and a.rh == b.rh and math.abs(a.cell - b.cell) < 0.001 and math.abs(a.ox - b.ox) < 0.01 and math.abs(a.oz - b.oz) < 0.01
+end
+
+function ToWorld(cx, cz) return Doc.ox + cx * Doc.cell, Doc.oz + cz * Doc.cell end
+function ToCell(x, z) return (x - Doc.ox) / Doc.cell, (z - Doc.oz) / Doc.cell end
 
 local function Zeros(n)
     local d = {}
@@ -89,16 +115,19 @@ end
 
 local function MakeLayer(kind, name)
     local L = { id = nextId, name = name or Kinds[kind].label, kind = kind, visible = true, color = { Kinds[kind].color[1], Kinds[kind].color[2], Kinds[kind].color[3] },
-                p = ParamsOf(kind), data = Zeros(Doc.res * Doc.res) }
+                p = ParamsOf(kind), data = Zeros(Doc.rw * Doc.rh) }
     nextId = nextId + 1
     return L
 end
 
---- A fresh document. opts: res (cells a side, 64 .. 256, default 128), kinds (a list of kinds to start with).
+--- A fresh document. opts: res (cells on the long side, 32 .. 256, default 128), kinds (a list of kinds to start with), area ({ x0, z0, x1, z1 }: default the playable area).
 function New(opts)
     opts = opts or {}
     local res = math.max(32, math.min(256, math.floor(opts.res or 128)))
+    local x0, z0, x1, z1 = Area()
+    if opts.area then x0, z0, x1, z1 = opts.area[1], opts.area[2], opts.area[3], opts.area[4] end
     Doc = { res = res, base = 25, water = 20, seed = 1, weather = 0, layers = {}, sel = 1, rev = 0, generated = {} }
+    SetFrame(Doc, Frame(res, x0, z0, x1, z1))
     stroke = false
     for _, kind in (opts.kinds or DEFAULT_KINDS) do table.insert(Doc.layers, MakeLayer(kind)) end
     Doc.sel = 1
@@ -205,11 +234,10 @@ end
 --- Images of a canvas point under the editor's symmetry: { { x, z } } in canvas cells (the point itself first).
 local function Images(cx, cz)
     if Symmetry.Mode == 'off' then return { { cx, cz } } end
-    local res, size = Doc.res, WorldSize()
-    local k = size / res
+    local d = Doc
     local out = {}
-    for _, p in Symmetry.Points(cx * k, cz * k) do
-        table.insert(out, { p.x / k, p.z / k })
+    for _, p in Symmetry.Points(d.ox + cx * d.cell, d.oz + cz * d.cell) do
+        table.insert(out, { (p.x - d.ox) / d.cell, (p.z - d.oz) / d.cell })
     end
     return out
 end
@@ -224,11 +252,11 @@ end
 function Dab(i, cx, cz, r, hardness, strength, erase)
     local L = Doc.layers[i]
     if not L then return end
-    local res = Doc.res
+    local rw, rh = Doc.rw, Doc.rh
     local data = L.data
     for _, img in Images(cx, cz) do
-        local x0, x1 = math.max(0, math.floor(img[1] - r)), math.min(res - 1, math.ceil(img[1] + r))
-        local z0, z1 = math.max(0, math.floor(img[2] - r)), math.min(res - 1, math.ceil(img[2] + r))
+        local x0, x1 = math.max(0, math.floor(img[1] - r)), math.min(rw - 1, math.ceil(img[1] + r))
+        local z0, z1 = math.max(0, math.floor(img[2] - r)), math.min(rh - 1, math.ceil(img[2] + r))
         for z = z0, z1 do
             local dz = z + 0.5 - img[2]
             for x = x0, x1 do
@@ -238,7 +266,7 @@ function Dab(i, cx, cz, r, hardness, strength, erase)
                     local t = d / math.max(r, 0.001)
                     local fall = (t <= hardness) and 1 or (1 - Smoothstep((t - hardness) / math.max(1 - hardness, 0.001)))
                     local v = fall * strength
-                    local at = z * res + x + 1
+                    local at = z * rw + x + 1
                     if erase then
                         local n = data[at] - v
                         data[at] = n < 0 and 0 or n
@@ -265,13 +293,13 @@ end
 local function FillWhere(i, x0, z0, x1, z1, inside, strength, erase)
     local L = Doc.layers[i]
     if not L then return 0 end
-    local res = Doc.res
+    local rw, rh = Doc.rw, Doc.rh
     local data = L.data
     local plain = Symmetry.Mode == 'off'
     local n = 0
     local function Put(ix, iz)
-        if ix < 0 or iz < 0 or ix >= res or iz >= res then return end
-        local at = iz * res + ix + 1
+        if ix < 0 or iz < 0 or ix >= rw or iz >= rh then return end
+        local at = iz * rw + ix + 1
         if erase then
             if data[at] ~= 0 then data[at] = 0 n = n + 1 end
         elseif data[at] < strength then
@@ -279,8 +307,8 @@ local function FillWhere(i, x0, z0, x1, z1, inside, strength, erase)
             n = n + 1
         end
     end
-    for z = math.max(0, math.floor(z0)), math.min(res - 1, math.ceil(z1)) do
-        for x = math.max(0, math.floor(x0)), math.min(res - 1, math.ceil(x1)) do
+    for z = math.max(0, math.floor(z0)), math.min(rh - 1, math.ceil(z1)) do
+        for x = math.max(0, math.floor(x0)), math.min(rw - 1, math.ceil(x1)) do
             if inside(x + 0.5, z + 0.5) then
                 if plain then
                     Put(x, z)
@@ -342,21 +370,21 @@ end
 function Smooth(i)
     local L = Doc.layers[i]
     if not L then return end
-    local res = Doc.res
+    local rw, rh = Doc.rw, Doc.rh
     local old = Copy(L.data)
-    for z = 0, res - 1 do
-        for x = 0, res - 1 do
+    for z = 0, rh - 1 do
+        for x = 0, rw - 1 do
             local sum, cnt = 0, 0
             for dz = -1, 1 do
                 for dx = -1, 1 do
                     local xx, zz = x + dx, z + dz
-                    if xx >= 0 and zz >= 0 and xx < res and zz < res then
-                        sum = sum + old[zz * res + xx + 1]
+                    if xx >= 0 and zz >= 0 and xx < rw and zz < rh then
+                        sum = sum + old[zz * rw + xx + 1]
                         cnt = cnt + 1
                     end
                 end
             end
-            L.data[z * res + x + 1] = sum / cnt
+            L.data[z * rw + x + 1] = sum / cnt
         end
     end
 end
@@ -386,15 +414,15 @@ local BG = { 28, 32, 38 }
 --- Returns the pixels (a list of w * h * 4 numbers 0..255) and w, h.
 function Pixels(opts)
     opts = opts or {}
-    local res = Doc.res
+    local rw, rh = Doc.rw, Doc.rh
     local px = {}
     local layers = Doc.layers
     local nl = table.getn(layers)
     local o = 0
-    for z = 0, res - 1 do
-        for x = 0, res - 1 do
+    for z = 0, rh - 1 do
+        for x = 0, rw - 1 do
             local r, g, b = BG[1], BG[2], BG[3]
-            local at = z * res + x + 1
+            local at = z * rw + x + 1
             for li = 1, nl do
                 local L = layers[li]
                 if L.visible then
@@ -411,18 +439,18 @@ function Pixels(opts)
             o = o + 4
         end
     end
-    return px, res, res
+    return px, rw, rh
 end
 
 --- Marks a spot of the picture (canvas cells) with a coloured square of `size` cells: used for start positions and resources.
 function Mark(px, x, z, size, r, g, b)
-    local res = Doc.res
+    local rw, rh = Doc.rw, Doc.rh
     local x0, z0 = math.floor(x - size / 2 + 0.5), math.floor(z - size / 2 + 0.5)
     for dz = 0, size - 1 do
         for dx = 0, size - 1 do
             local ix, iz = x0 + dx, z0 + dz
-            if ix >= 0 and iz >= 0 and ix < res and iz < res then
-                local o = (iz * res + ix) * 4
+            if ix >= 0 and iz >= 0 and ix < rw and iz < rh then
+                local o = (iz * rw + ix) * 4
                 px[o + 1], px[o + 2], px[o + 3] = r, g, b
             end
         end
@@ -443,17 +471,15 @@ local function Const(env, like, v) return env:Op('const', { like = like, value =
 
 --- The raw mask of layer i on the grid of `like` (the drawing spread over the map, bilinear).
 local function RawMask(env, like, L)
-    local res = Doc.res
-    local cell = WorldSize() / res
-    local f = ed_field_from_table(res, res, L.data, cell, cell * 0.5, cell * 0.5)
+    local d = Doc
+    local f = ed_field_from_table(d.rw, d.rh, L.data, d.cell, d.ox + d.cell * 0.5, d.oz + d.cell * 0.5)
     env:Add(f)
     return env:Op('resample', { a = f, like = like })
 end
 
 --- A mask softened by `soft` units (at least a little more than one drawing cell, so the cells do not show as diamonds).
 local function Soft(env, like, m, soft)
-    local cell = WorldSize() / Doc.res
-    local sigma = math.max(cell * 0.8, (soft or 0) * 0.5)
+    local sigma = math.max(Doc.cell * 0.8, (soft or 0) * 0.5)
     return env:Op('clamp', { a = env:Op('blur', { a = m, radius = sigma }), lo = 0, hi = 1 })
 end
 
@@ -532,8 +558,7 @@ function Build(env, like, o)
     end
     if o.symmetry ~= false and Symmetry.Mode ~= 'off' then
         local cx, cz = Symmetry.Centre()
-        local size = WorldSize()
-        H = env:Op('symmetrize', { a = H, mode = Symmetry.Mode, side = 0, combine = 'copy', seam = 12, centred = true, cx = cx / size, cz = cz / size })
+        H = env:Op('symmetrize', { a = H, mode = Symmetry.Mode, side = 0, combine = 'copy', seam = 12, cx = cx, cz = cz })
     end
     H = env:Op('clamp', { a = H, lo = 0, hi = 400 })
     return H, masks
@@ -572,20 +597,25 @@ function Generate(o)
     return n
 end
 
---- A coloured height picture of the layout at low resolution: size x size pixels (at most). Returns the pixels, w, h; nil and a message when the generator fails. Nothing is written.
+--- A field with one sample at the centre of every cell of the drawing (the grid the preview is built on); the scope frees it.
+local function AreaField(env)
+    local d = Doc
+    local f = ed_field_from_table(d.rw, d.rh, Zeros(d.rw * d.rh), d.cell, d.ox + d.cell * 0.5, d.oz + d.cell * 0.5)
+    env:Add(f)
+    return f
+end
+
+--- A coloured height picture of the layout, one pixel per cell of the drawing (rw x rh). Returns the pixels, w, h; nil and a message when the generator fails. Nothing is written.
 function Preview(size)
     if not Fields.IsAvailable() or not (rawget(_G, 'ed_terrain_info') and ed_terrain_info()) then return nil, 'no map is open' end
     local out, pw, ph, why
     local ok, err = pcall(function()
         Fields.Run(function(S)
-            local step = 1
-            local w = ed_terrain_info()
-            while (w - 1) / step > size * 1.5 and step < 16 do step = step * 2 end
-            local like = S:Height(step)
+            local like = AreaField(S)
             local H = Build(S, like, { weather = 0 })
             local lo, hi = Fields.Stats(H)
-            local px, lo2, hi2 = ed_field_preview(H, size, size, { ramp = 'terrain', lo = Doc.water - 25, hi = math.max(Doc.base + 60, hi) })
-            out, pw, ph = px, size, size
+            local px, lo2, hi2 = ed_field_preview(H, Doc.rw, Doc.rh, { ramp = 'terrain', lo = Doc.water - 25, hi = math.max(Doc.base + 60, hi) })
+            out, pw, ph = px, Doc.rw, Doc.rh
         end)
     end)
     if not ok then return nil, Fields.CleanError(err) end
@@ -640,7 +670,9 @@ function ApplyTemplate(id)
     local before = Plain()
     local res = Doc.res
     local keep = { res = res, kinds = {} }
+    local frame = { rw = Doc.rw, rh = Doc.rh, cell = Doc.cell, ox = Doc.ox, oz = Doc.oz }
     New(keep)
+    SetFrame(Doc, frame)
     -- the layers: the ones the template puts first, then the usual six
     local kinds = {}
     for _, k in (t.order or {}) do table.insert(kinds, k) end
@@ -652,6 +684,7 @@ function ApplyTemplate(id)
     for _, k in kinds do table.insert(Doc.layers, MakeLayer(k)) end
     Doc.sel = 1
     Symmetry.SetMode(t.symmetry)
+    CentreSymmetry()
     local function Index(kind)
         for i, L in Doc.layers do
             if L.kind == kind then return i end
@@ -659,32 +692,194 @@ function ApplyTemplate(id)
         return 1
     end
     local P = {}
-    function P.dab(kind, x, z, r, v) Dab(Index(kind), x * res, z * res, r * res, 0.8, v or 1, false) end
-    function P.line(kind, x0, z0, x1, z1, r, v) Line(Index(kind), x0 * res, z0 * res, x1 * res, z1 * res, r * res, 0.8, v or 1, false) end
-    function P.ellipse(kind, x0, z0, x1, z1, v) FillEllipse(Index(kind), x0 * res, z0 * res, x1 * res, z1 * res, v or 1, false) end
+    local rw, rh = Doc.rw, Doc.rh
+    local short = math.min(rw, rh)
+    function P.dab(kind, x, z, r, v) Dab(Index(kind), x * rw, z * rh, r * short, 0.8, v or 1, false) end
+    function P.line(kind, x0, z0, x1, z1, r, v) Line(Index(kind), x0 * rw, z0 * rh, x1 * rw, z1 * rh, r * short, 0.8, v or 1, false) end
+    function P.ellipse(kind, x0, z0, x1, z1, v) FillEllipse(Index(kind), x0 * rw, z0 * rh, x1 * rw, z1 * rh, v or 1, false) end
     function P.fill(kind, v) Fill(Index(kind), v) end
     t.paint(P)
     local after = Plain()
     local function Restore(plain)
-        if plain then Load(plain) else New({ res = res }) end
+        if plain then Load(plain) else New({ res = res, area = { frame.ox, frame.oz, frame.ox + frame.rw * frame.cell, frame.oz + frame.rh * frame.cell } }) end
     end
     History.Push({ label = 'layout template ' .. t.label, undo = function() Restore(before) end, redo = function() Restore(after) end })
     Touch()
     return true
 end
 
+-- ---- fitting to the playable area ---------------------------------------------------------------------------------------------------------------------
+
+--- Is anything drawn?
+function Drawn()
+    for _, L in Doc.layers do
+        for k = 1, table.getn(L.data) do
+            if L.data[k] ~= 0 then return true end
+        end
+    end
+    return false
+end
+
+--- True when the drawing does not cover the playable area of the map any more (the area was resized, another map is open).
+function Stale()
+    local x0, z0, x1, z1 = Area()
+    return not SameFrame(Doc, Frame(Doc.res, x0, z0, x1, z1))
+end
+
+--- An empty drawing follows the playable area without a word (nothing to keep); returns true when it changed. A drawn one is left alone: Refit it by hand.
+function Sync()
+    if not Stale() or Drawn() then return false end
+    local x0, z0, x1, z1 = Area()
+    SetFrame(Doc, Frame(Doc.res, x0, z0, x1, z1))
+    for _, L in Doc.layers do L.data = Zeros(Doc.rw * Doc.rh) end
+    Touch()
+    return true
+end
+
+--- Bilinear sample of a layer's cells at the fractional cell position (cx, cz) of the old grid (cell centres at +0.5); 0 outside the drawing.
+local function SampleCells(data, rw, rh, cx, cz)
+    local fx, fz = cx - 0.5, cz - 0.5
+    if fx < -0.5 or fz < -0.5 or fx > rw - 0.5 or fz > rh - 0.5 then return 0 end
+    local x0, z0 = math.floor(fx), math.floor(fz)
+    local tx, tz = fx - x0, fz - z0
+    local function V(x, z)
+        if x < 0 or z < 0 or x >= rw or z >= rh then return 0 end
+        return data[z * rw + x + 1]
+    end
+    local a = V(x0, z0) * (1 - tx) + V(x0 + 1, z0) * tx
+    local b = V(x0, z0 + 1) * (1 - tx) + V(x0 + 1, z0 + 1) * tx
+    return a * (1 - tz) + b * tz
+end
+
+--- Fits the drawing to the playable area (and to `res` cells on the long side when given): every layer is resampled by world position, so what was drawn stays where it was on the map and the rest
+--- is empty. One undo step. Returns true, or false when nothing had to change.
+function Refit(res)
+    local x0, z0, x1, z1 = Area()
+    local want = math.max(32, math.min(256, math.floor(res or Doc.res)))
+    local f = Frame(want, x0, z0, x1, z1)
+    if want == Doc.res and SameFrame(Doc, f) then return false end
+    local before = Plain()
+    if not before then
+        Doc.res = want
+        SetFrame(Doc, f)
+        for _, L in Doc.layers do L.data = Zeros(Doc.rw * Doc.rh) end
+        Touch()
+        return true
+    end
+    local old = { rw = Doc.rw, rh = Doc.rh, cell = Doc.cell, ox = Doc.ox, oz = Doc.oz }
+    Doc.res = want
+    SetFrame(Doc, f)
+    for _, L in Doc.layers do
+        local src = L.data
+        local out = Zeros(f.rw * f.rh)
+        for z = 0, f.rh - 1 do
+            for x = 0, f.rw - 1 do
+                local wx, wz = f.ox + (x + 0.5) * f.cell, f.oz + (z + 0.5) * f.cell
+                local v = SampleCells(src, old.rw, old.rh, (wx - old.ox) / old.cell, (wz - old.oz) / old.cell)
+                out[z * f.rw + x + 1] = v < 0.0005 and 0 or (v > 1 and 1 or v)
+            end
+        end
+        L.data = out
+    end
+    local after = Plain()
+    History.Push({ label = 'fit the layout to the playable area', undo = function() Load(before) end, redo = function() Load(after) end })
+    Touch()
+    return true
+end
+
+--- Puts the symmetry centre of the editor in the middle of the drawing (the playable area): the templates and the generator turn and mirror about it.
+function CentreSymmetry()
+    local cx, cz = Doc.ox + Doc.rw * Doc.cell / 2, Doc.oz + Doc.rh * Doc.cell / 2
+    local w, h = 257, 257
+    if rawget(_G, 'ed_terrain_info') and ed_terrain_info() then w, h = ed_terrain_info() end
+    local dx, dz = ((w or 257) - 1) / 2, ((h or 257) - 1) / 2
+    Symmetry.CenterX = (math.abs(cx - dx) > 0.01) and cx or false
+    Symmetry.CenterZ = (math.abs(cz - dz) > 0.01) and cz or false
+end
+
+--- Is the symmetry centre of the editor the middle of the drawing?
+function SymmetryCentred()
+    local cx, cz = Symmetry.Centre()
+    return math.abs(cx - (Doc.ox + Doc.rw * Doc.cell / 2)) < 0.6 and math.abs(cz - (Doc.oz + Doc.rh * Doc.cell / 2)) < 0.6
+end
+
+function SetColor(i, r, g, b)
+    local L = Doc.layers[i]
+    if not L then return false end
+    local function C(v) return math.max(0, math.min(255, math.floor(v + 0.5))) end
+    L.color = { C(r), C(g), C(b) }
+    Touch()
+    return true
+end
+
+-- ---- a picture becomes a layer ---------------------------------------------------------------------------------------------------------------------------
+
+--- Reads the picture at `path` (PNG, TIFF, BMP, JPEG, raw heightmaps ...) into layer i: the picture is fitted over the drawing (white = 1, black = 0).
+--- o: channel ('gray' (default) | 'r' | 'g' | 'b' | 'a'), invert, stretch (the darkest value of the picture becomes 0 and the brightest 1: heightmaps), hard (everything above one half becomes 1, the rest 0),
+--- fit ('fill': stretched over the whole drawing | 'contain': the whole picture inside the drawing with its aspect), add (the picture is added to what is drawn: the larger value wins), flipX, flipZ.
+--- One undo step. Returns the number of cells that changed, or nil and a message.
+function ImportImage(i, path, o)
+    local L = Doc.layers[i]
+    if not L then return nil, 'no such layer' end
+    o = o or {}
+    if not rawget(_G, 'ed_img_read') or not Fields.IsAvailable() then return nil, 'this engine build has no image reader' end
+    if not path or path == '' then return nil, 'no picture chosen' end
+    local Interop = import('/lua/editor/interop.lua')
+    local src, info = Interop.LoadSource(path, Interop.DefaultSettings(), o.channel or 'gray')
+    if not src then return nil, tostring(info) end
+    local values
+    local ok, err = pcall(function()
+        Fields.Run(function(S)
+            local like = AreaField(S)
+            local rw, rh = Doc.rw, Doc.rh
+            local iw, ih = Fields.Info(src)
+            local p = { a = src, like = like, filter = 'bilinear', outside = 0 }
+            if o.fit == 'contain' and iw and ih and iw > 0 and ih > 0 then
+                local scale = math.min(rw / iw, rh / ih)
+                local w, h = math.max(2, math.floor(iw * scale + 0.5)), math.max(2, math.floor(ih * scale + 0.5))
+                p.x0, p.z0 = math.floor((rw - w) / 2), math.floor((rh - h) / 2)
+                p.x1, p.z1 = math.min(rw - 1, p.x0 + w - 1), math.min(rh - 1, p.z0 + h - 1)
+            end
+            local f = S:Op('img_resample', p)
+            if o.flipX or o.flipZ then f = S:Op('img_orient', { a = f, transpose = 0, flip_x = o.flipX and 1 or 0, flip_z = o.flipZ and 1 or 0 }) end
+            if o.stretch then
+                local lo, hi = Fields.Stats(src)
+                if hi > lo then f = S:Op('affine', { a = f, mul = 1 / (hi - lo), add = -lo / (hi - lo) }) end
+            end
+            f = S:Op('clamp', { a = f, lo = 0, hi = 1 })
+            if o.invert then f = S:Op('affine', { a = f, mul = -1, add = 1 }) end
+            values = ed_field_read(f, 0, 0, rw - 1, rh - 1)
+        end)
+    end)
+    Interop.FreeCache()
+    if not ok then return nil, Fields.CleanError(err) end
+    if not values or table.getn(values) ~= Doc.rw * Doc.rh then return nil, 'the picture could not be read into the drawing' end
+    BeginStroke(i)
+    local changed = 0
+    local data = L.data
+    for k = 1, table.getn(values) do
+        local v = values[k]
+        if o.hard then v = (v > 0.5) and 1 or 0 end
+        if o.add and data[k] > v then v = data[k] end
+        v = math.floor(v * 255 + 0.5) / 255
+        if data[k] ~= v then changed = changed + 1 end
+        data[k] = v
+    end
+    EndStroke('import picture into ' .. L.name)
+    Touch()
+    return changed
+end
+
 -- ---- start positions from the drawing -------------------------------------------------------------------------------------------------------------------
 
 --- The blobs drawn on the layers of the kind `base` (cells above one half, joined by their sides) as { { x, z, cells } } in world units (the centre of mass), the biggest first.
 function BaseCentres()
-    local res = Doc.res
-    local size = WorldSize()
-    local k = size / res
+    local rw, rh = Doc.rw, Doc.rh
     local on = {}
     local any = false
     for _, L in Doc.layers do
         if L.kind == 'base' and L.visible then
-            for at = 1, res * res do
+            for at = 1, rw * rh do
                 if L.data[at] >= 0.5 then on[at] = true any = true end
             end
         end
@@ -692,9 +887,9 @@ function BaseCentres()
     if not any then return {} end
     local seen = {}
     local list = {}
-    for z = 0, res - 1 do
-        for x = 0, res - 1 do
-            local at = z * res + x + 1
+    for z = 0, rh - 1 do
+        for x = 0, rw - 1 do
+            local at = z * rw + x + 1
             if on[at] and not seen[at] then
                 local stack, sp = { at }, 1
                 seen[at] = true
@@ -703,13 +898,13 @@ function BaseCentres()
                     local cur = stack[sp]
                     stack[sp] = nil
                     sp = sp - 1
-                    local cz = math.floor((cur - 1) / res)
-                    local cx = cur - 1 - cz * res
+                    local cz = math.floor((cur - 1) / rw)
+                    local cx = cur - 1 - cz * rw
                     sx, sz, n = sx + cx + 0.5, sz + cz + 0.5, n + 1
                     for _, d in { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } } do
                         local nx, nz = cx + d[1], cz + d[2]
-                        if nx >= 0 and nz >= 0 and nx < res and nz < res then
-                            local na = nz * res + nx + 1
+                        if nx >= 0 and nz >= 0 and nx < rw and nz < rh then
+                            local na = nz * rw + nx + 1
                             if on[na] and not seen[na] then
                                 seen[na] = true
                                 sp = sp + 1
@@ -718,7 +913,7 @@ function BaseCentres()
                         end
                     end
                 end
-                if n >= 3 then table.insert(list, { x = sx / n * k, z = sz / n * k, cells = n }) end
+                if n >= 3 then table.insert(list, { x = Doc.ox + sx / n * Doc.cell, z = Doc.oz + sz / n * Doc.cell, cells = n }) end
             end
         end
     end
@@ -767,9 +962,10 @@ function Plain()
         if drawn then break end
     end
     if not drawn then return nil end
-    local t = { res = Doc.res, base = Doc.base, water = Doc.water, seed = Doc.seed, weather = Doc.weather, sel = Doc.sel, generated = Doc.generated, layers = {} }
+    local t = { res = Doc.res, rw = Doc.rw, rh = Doc.rh, cell = Doc.cell, ox = Doc.ox, oz = Doc.oz, base = Doc.base, water = Doc.water, seed = Doc.seed, weather = Doc.weather, sel = Doc.sel,
+                generated = Doc.generated, layers = {} }
     for _, L in Doc.layers do
-        table.insert(t.layers, { name = L.name, kind = L.kind, visible = L.visible, color = L.color, p = L.p, data = Encode(L.data) })
+        table.insert(t.layers, { id = L.id, name = L.name, kind = L.kind, visible = L.visible, color = L.color, p = L.p, data = Encode(L.data) })
     end
     return t
 end
@@ -777,17 +973,26 @@ end
 function Load(t)
     if type(t) ~= 'table' or type(t.layers) ~= 'table' then return false end
     New({ res = t.res, kinds = {} })
+    -- the grid it was drawn on (older files: the whole map, a square)
+    if type(t.rw) == 'number' and type(t.rh) == 'number' and type(t.cell) == 'number' and t.rw >= 1 and t.rh >= 1 and t.cell > 0 then
+        SetFrame(Doc, { rw = math.floor(t.rw), rh = math.floor(t.rh), cell = t.cell, ox = t.ox or 0, oz = t.oz or 0 })
+    else
+        local w = 257
+        if rawget(_G, 'ed_terrain_info') and ed_terrain_info() then w = ed_terrain_info() end
+        SetFrame(Doc, Frame(Doc.res, 0, 0, (w or 257) - 1, (w or 257) - 1))
+    end
     Doc.base, Doc.water, Doc.seed, Doc.weather = t.base or 25, t.water or 20, t.seed or 1, t.weather or 0
     Doc.generated = t.generated or {}
     for _, e in t.layers do
         if Kinds[e.kind] then
             local L = MakeLayer(e.kind, e.name)
+            if type(e.id) == 'number' then L.id = e.id if e.id >= nextId then nextId = e.id + 1 end end
             L.visible = e.visible ~= false
             if type(e.color) == 'table' then L.color = { e.color[1], e.color[2], e.color[3] } end
             for _, info in Kinds[e.kind].params do
                 if type(e.p) == 'table' and type(e.p[info.key]) == 'number' then L.p[info.key] = e.p[info.key] end
             end
-            local d = Decode(e.data, Doc.res * Doc.res)
+            local d = Decode(e.data, Doc.rw * Doc.rh)
             if d then L.data = d end
             table.insert(Doc.layers, L)
         end

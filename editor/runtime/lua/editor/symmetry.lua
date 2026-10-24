@@ -35,9 +35,9 @@ local PI = 3.14159265
 
 --- The centre in world units.
 function Centre()
-    local size = ed_terrain_info and ed_terrain_info() or 256
-    local half = ((size or 256) - 1) / 2
-    return CenterX or half, CenterZ or half
+    local w, h = 256, 256
+    if ed_terrain_info then w, h = ed_terrain_info() end
+    return CenterX or (((w or 256) - 1) / 2), CenterZ or (((h or w or 256) - 1) / 2)
 end
 
 local function Add(list, x, z, yawKind, angle)
@@ -138,11 +138,13 @@ end
 
 --- Line segments of the symmetry axes for the overlay: a list of { x0, z0, x1, z1 } across the whole map.
 function Axes()
-    local size = (ed_terrain_info and ed_terrain_info()) or 256
-    local max = (size or 256) - 1
+    local w, h = 256, 256
+    if ed_terrain_info then w, h = ed_terrain_info() end
+    local max = (w or 256) - 1
+    local maxZ = (h or w or 256) - 1
     local cx, cz = Centre()
     local lines = {}
-    if Mode == 'mirror_x' or Mode == 'mirror_xz' then table.insert(lines, { cx, 0, cx, max }) end
+    if Mode == 'mirror_x' or Mode == 'mirror_xz' then table.insert(lines, { cx, 0, cx, maxZ }) end
     if Mode == 'mirror_z' or Mode == 'mirror_xz' then table.insert(lines, { 0, cz, max, cz }) end
     if Mode == 'diag' or Mode == 'diag_both' then table.insert(lines, { cx - max, cz - max, cx + max, cz + max }) end
     if Mode == 'diag_both' then table.insert(lines, { cx - max, cz + max, cx + max, cz - max }) end
@@ -446,8 +448,9 @@ function AutoDetect(force)
         Detected = { mode = best.mode, cx = best.cx, cz = best.cz, text = best.text, applied = apply and true or false }
         if apply then
             Mode = best.mode
-            local size = (ed_terrain_info and ed_terrain_info()) or data.w
-            local dx, dz = (size - 1) / 2, (size - 1) / 2         -- what Centre() gives without an override
+            local tw, th = data.w, data.h
+            if ed_terrain_info then tw, th = ed_terrain_info() end
+            local dx, dz = ((tw or data.w) - 1) / 2, ((th or data.h or tw or data.w) - 1) / 2         -- what Centre() gives without an override
             CenterX = (math.abs(best.cx - dx) > 0.01) and best.cx or false
             CenterZ = (math.abs(best.cz - dz) > 0.01) and best.cz or false
             Manual = false

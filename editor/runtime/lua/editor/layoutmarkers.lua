@@ -41,9 +41,10 @@ Settings = {
 
 Plan_ = false
 
-local function MapSize()
-    local w = rawget(_G, 'ed_terrain_info') and ed_terrain_info()
-    return (w or 257) - 1
+--- The playable area as its middle and half sizes (cx, cz, hx, hz): the starts, the middle and the facing of the resources are measured from it (a map that is not square has an area that is not square).
+local function Frame()
+    local x0, z0, x1, z1 = Layout.Area()
+    return (x0 + x1) / 2, (z0 + z1) / 2, (x1 - x0) / 2, (z1 - z0) / 2
 end
 
 -- a small random generator whose numbers stay below 2^24 (the numbers of the Lua here are 32 bit floats)
@@ -77,8 +78,7 @@ end
 --- The start positions the settings give. 'existing': the ARMY_<n> markers of the map; 'base': the centres of the bases drawn in the layout; 'pattern': count points by the pattern.
 function Starts()
     local s = Settings
-    local size = MapSize()
-    local half = size / 2
+    local mx, mz, hx, hz = Frame()
     local list = {}
     if s.starts == 'existing' then
         for _, name in import('/lua/editor/armies.lua').Names() do
@@ -90,29 +90,31 @@ function Starts()
     else
         local n = math.max(1, math.floor(s.count))
         local rot = math.rad(s.rotation)
-        local r = s.radius * half
+        -- the pattern is drawn on the unit square / circle and stretched over the playable area, so a long map gets starts spread along it
+        local rx, rz = s.radius * hx, s.radius * hz
+        local function Put(u, v) table.insert(list, { x = mx + rx * u, z = mz + rz * v }) end
         if s.pattern == 'corners' then
             local corners = { { -1, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 } }
             for k = 1, math.min(n, 4) do
                 local c = corners[k]
-                local x, z = c[1] * r * 0.82, c[2] * r * 0.82
-                table.insert(list, { x = half + x * math.cos(rot) - z * math.sin(rot), z = half + x * math.sin(rot) + z * math.cos(rot) })
+                local u, v = c[1] * 0.82, c[2] * 0.82
+                Put(u * math.cos(rot) - v * math.sin(rot), u * math.sin(rot) + v * math.cos(rot))
             end
         elseif s.pattern == 'sides' then
             for k = 1, math.min(n, 2) do
                 local a = rot + (k - 1) * PI
-                table.insert(list, { x = half + r * math.cos(a), z = half + r * math.sin(a) })
+                Put(math.cos(a), math.sin(a))
             end
         elseif s.pattern == 'line' then
             for k = 1, n do
-                local off = (k - 1 - (n - 1) / 2) * (2 * r / math.max(1, n - 1))
+                local off = (k - 1 - (n - 1) / 2) * (2 / math.max(1, n - 1))
                 if n == 1 then off = 0 end
-                table.insert(list, { x = half + off * math.cos(rot), z = half + off * math.sin(rot) })
+                Put(off * math.cos(rot), off * math.sin(rot))
             end
         else
             for k = 1, n do
                 local a = rot + (k - 1) * 2 * PI / n - PI / 2
-                table.insert(list, { x = half + r * math.cos(a), z = half + r * math.sin(a) })
+                Put(math.cos(a), math.sin(a))
             end
         end
     end
@@ -186,10 +188,8 @@ end
 
 --- Finds a valid position near the ideal one: tries the spot, then other angles and distances around the start. `occupied` is a list of { x, z, r }. Returns x, z or nil.
 local function Fit(kind, ideal, sx, sz, occupied, rng, S)
-    local size = MapSize()
-    local playable = { 0, 0, size, size }
-    local px0, pz0, px1, pz1 = import('/lua/editor/playable.lua').Get()
-    playable = { px0 + 4, pz0 + 4, px1 - 4, pz1 - 4 }
+    local px0, pz0, px1, pz1 = Layout.Area()
+    local playable = { px0 + 4, pz0 + 4, px1 - 4, pz1 - 4 }
     local water = WaterLevel()
     local function Ok(x, z)
         if x < playable[1] or z < playable[2] or x > playable[3] or z > playable[4] then return false end
@@ -222,8 +222,7 @@ end
 --- Plans the whole thing without placing anything.
 function Plan()
     local S = Settings
-    local size = MapSize()
-    local half = size / 2
+    local mx, mz = Frame()
     local rng = Rng(S.seed)
     local plan = { starts = Starts(), items = {}, failed = 0 }
     local occupied = {}
@@ -240,7 +239,7 @@ function Plan()
     for _, st in plan.starts do table.insert(occupied, { x = st.x, z = st.z, r = math.max(S.spacing * 1.5, 8) }) end
     local arc = math.rad(S.arc)
     local function FacingOf(st)
-        local a = math.atan2(half - st.z, half - st.x)
+        local a = math.atan2(mz - st.z, mx - st.x)
         if S.facing == 'away' then a = a + PI end
         return a
     end
@@ -264,9 +263,9 @@ function Plan()
     Group('Mass', S.extra, S.extraMin, S.extraMax, S.extraShape, 'extra')
     -- the middle of the map
     if S.middle >= 1 then
-        local ideal = Shape('cluster', half, half, 0, math.floor(S.middle), 0, math.max(2, S.middleRadius * 0.5), arc, S.spacing)
+        local ideal = Shape('cluster', mx, mz, 0, math.floor(S.middle), 0, math.max(2, S.middleRadius * 0.5), arc, S.spacing)
         for _, id in ideal do
-            local x, z = Fit('Mass', id, half, half, occupied, rng, S)
+            local x, z = Fit('Mass', id, mx, mz, occupied, rng, S)
             if x then
                 table.insert(plan.items, { kind = 'Mass', x = x, z = z, start = 0, group = 'middle' })
                 table.insert(occupied, { x = x, z = z, r = S.spacing })

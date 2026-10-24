@@ -31,8 +31,8 @@ sym_rot4_sector1|symmetrize|mode=rot4,sector=1|a=H|8a40f6705068dda4
 sym_rot3|symmetrize|mode=rotn,n=3,cx=30.5,cz=34.25|a=H|d8c62289c655f13b
 sym_rot5_angle|symmetrize|mode=rotn,n=5,angle=20|a=H|07625a375b025875
 sym_nearest|symmetrize|mode=rotn,n=3,cx=30.5,cz=34.25,nearest=1|a=H|3ac3415cc203df50
-sym_rot3_seam|symmetrize|mode=rotn,n=3,cx=32,cz=32,seam=6|a=H|1875dfb026c812bb
-sym_rot4_seam|symmetrize|mode=rot4,seam=8|a=H|5bbd4c5aac10f724
+sym_rot3_seam|symmetrize|mode=rotn,n=3,cx=32,cz=32,seam=6|a=H|1a0d1858e7056705
+sym_rot4_seam|symmetrize|mode=rot4,seam=8|a=H|b330b26f23d3dc54
 sym_rot4_angle90|symmetrize|mode=rot4,angle=90|a=H|8a40f6705068dda4
 sym_rot2_seam|symmetrize|mode=rot2,seam=8,side=1|a=H|db8e07d685d5dfbc
 sym_avg|symmetrize|mode=mirror_x,combine=avg|a=H|7139c28f36e09b16

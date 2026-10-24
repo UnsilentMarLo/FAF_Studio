@@ -44,47 +44,45 @@ local PREVIEW_PREFIX = '/fieldtmp/'
 
 -- ---- the canvas -------------------------------------------------------------------------------------------------------------------------------------------
 
-local function Dot(px, res, x, z, size, r, g, b)
+local function Dot(px, x, z, size, r, g, b)
     Layout.Mark(px, x, z, size, r, g, b)
 end
 
-local function LineCells(px, res, x0, z0, x1, z1, r, g, b)
+local function LineCells(px, x0, z0, x1, z1, r, g, b)
+    local rw, rh = Layout.Doc.rw, Layout.Doc.rh
     local steps = math.max(math.abs(x1 - x0), math.abs(z1 - z0))
     steps = math.max(1, math.ceil(steps))
     for s = 0, steps do
         local t = s / steps
         local x, z = math.floor(x0 + (x1 - x0) * t), math.floor(z0 + (z1 - z0) * t)
-        if x >= 0 and z >= 0 and x < res and z < res then
-            local o = (z * res + x) * 4
+        if x >= 0 and z >= 0 and x < rw and z < rh then
+            local o = (z * rw + x) * 4
             px[o + 1], px[o + 2], px[o + 3] = r, g, b
         end
     end
 end
 
-local function MapSize()
-    local w = rawget(_G, 'ed_terrain_info') and ed_terrain_info()
-    return (w or 257) - 1
-end
-
 --- The start positions and resources on the picture: the map's own markers (when state.markers) and the plan that has not been placed yet.
 local function DrawMarkers(px)
-    local res = Layout.Doc.res
-    local k = res / MapSize()
     if state.markers and Map.Doc then
         for name, m in Map.Doc.save.MasterChain._MASTERCHAIN_.Markers do
             if m.position then
-                local x, z = m.position[1] * k, m.position[3] * k
-                if string.find(name, '^ARMY_') then Dot(px, res, x, z, 5, 255, 255, 255)
-                elseif m.type == 'Mass' then Dot(px, res, x, z, 2, 255, 220, 60)
-                elseif m.type == 'Hydrocarbon' then Dot(px, res, x, z, 3, 90, 255, 120) end
+                local x, z = Layout.ToCell(m.position[1], m.position[3])
+                if string.find(name, '^ARMY_') then Dot(px, x, z, 5, 255, 255, 255)
+                elseif m.type == 'Mass' then Dot(px, x, z, 2, 255, 220, 60)
+                elseif m.type == 'Hydrocarbon' then Dot(px, x, z, 3, 90, 255, 120) end
             end
         end
     end
     local plan = LM.LastPlan()
     if plan then
-        for _, st in plan.starts do Dot(px, res, st.x * k, st.z * k, 5, 255, 90, 90) end
+        for _, st in plan.starts do
+            local x, z = Layout.ToCell(st.x, st.z)
+            Dot(px, x, z, 5, 255, 90, 90)
+        end
         for _, it in plan.items do
-            if it.kind == 'Mass' then Dot(px, res, it.x * k, it.z * k, 2, 255, 160, 30) else Dot(px, res, it.x * k, it.z * k, 3, 40, 220, 90) end
+            local x, z = Layout.ToCell(it.x, it.z)
+            if it.kind == 'Mass' then Dot(px, x, z, 2, 255, 160, 30) else Dot(px, x, z, 3, 40, 220, 90) end
         end
     end
 end
@@ -120,6 +118,16 @@ Panels.Register{
             P:Refresh()
         end, { toggle = true, tip = 'Switch the picture between the layers and the heights the generator would make (a coloured picture, nothing is written).' })
         P.mk = Btn('Markers', 80, function(self) state.markers = self.on P:Render() end, { toggle = true, tip = 'Show the start positions and resources of the map and the plan of the generator on the picture.' })
+        P.fit = Btn('Fit to the area', 110, function()
+            local changed = Layout.Refit()
+            Say(changed and 'the drawing now covers the playable area (what was drawn stays where it is on the map; one undo step)' or 'the drawing already covers the playable area')
+            P:Refresh()
+        end, { tip = 'Make the canvas cover the playable area of the map (its size and shape, also after the area was resized): what is drawn stays at the same place on the map, one undo step.' })
+        P.centre = Btn('Centre symmetry', 120, function()
+            Layout.CentreSymmetry()
+            Say('the symmetry centre is the middle of the drawing')
+            P:Refresh()
+        end, { tip = 'Put the centre of the editor symmetry in the middle of the canvas (the playable area): mirrors and turns then fit the area, also when the area is not in the middle of the terrain.' })
         P.info = W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' })
 
         P.img = Bitmap(group)
@@ -140,6 +148,11 @@ Panels.Register{
         function P:Render()
             local doc = Layout.Doc
             if not doc then return end
+            -- an empty drawing follows the playable area; another shape (a template, undo of a fit) changes the aspect of the picture
+            if Layout.Sync() or P.geo ~= (doc.rw .. 'x' .. doc.rh) then
+                P:OnResize(P.w, P.h)
+                return
+            end
             local px, w, h
             if state.view == 'height' then
                 px, w, h = Layout.Preview(doc.res)
@@ -154,26 +167,25 @@ Panels.Register{
             -- the shape being dragged
             local d = P.drag
             if d then
-                local res = doc.res
                 if d.tool == 'line' then
-                    LineCells(px, res, d.x0, d.z0, d.x1, d.z1, 255, 255, 255)
+                    LineCells(px, d.x0, d.z0, d.x1, d.z1, 255, 255, 255)
                 elseif d.tool == 'rect' or d.tool == 'ellipse' then
                     local a, b, c1, d1 = math.min(d.x0, d.x1), math.max(d.x0, d.x1), math.min(d.z0, d.z1), math.max(d.z0, d.z1)
                     if d.tool == 'rect' then
-                        LineCells(px, res, a, c1, b, c1, 255, 255, 255) LineCells(px, res, b, c1, b, d1, 255, 255, 255)
-                        LineCells(px, res, b, d1, a, d1, 255, 255, 255) LineCells(px, res, a, d1, a, c1, 255, 255, 255)
+                        LineCells(px, a, c1, b, c1, 255, 255, 255) LineCells(px, b, c1, b, d1, 255, 255, 255)
+                        LineCells(px, b, d1, a, d1, 255, 255, 255) LineCells(px, a, d1, a, c1, 255, 255, 255)
                     else
                         local cx, cz, rx, rz = (a + b) / 2, (c1 + d1) / 2, (b - a) / 2, (d1 - c1) / 2
                         local prevx, prevz
                         for s = 0, 48 do
                             local ang = s / 48 * 6.2832
                             local x, z = cx + rx * math.cos(ang), cz + rz * math.sin(ang)
-                            if prevx then LineCells(px, res, prevx, prevz, x, z, 255, 255, 255) end
+                            if prevx then LineCells(px, prevx, prevz, x, z, 255, 255, 255) end
                             prevx, prevz = x, z
                         end
                     end
                 elseif d.tool == 'lasso' then
-                    for i = 2, table.getn(d.pts) do LineCells(px, res, d.pts[i - 1][1], d.pts[i - 1][2], d.pts[i][1], d.pts[i][2], 255, 255, 255) end
+                    for i = 2, table.getn(d.pts) do LineCells(px, d.pts[i - 1][1], d.pts[i - 1][2], d.pts[i][1], d.pts[i][2], 255, 255, 255) end
                 end
             end
             Show(px, w, h)
@@ -181,11 +193,10 @@ Panels.Register{
         end
 
         local function ToCanvas(mx, my)
-            local res = Layout.Doc.res
-            local s = P.img.Width()
-            local cx = (mx - P.img.Left()) / s * res
-            local cz = (my - P.img.Top()) / s * res
-            return math.max(0, math.min(res, cx)), math.max(0, math.min(res, cz))
+            local doc = Layout.Doc
+            local cx = (mx - P.img.Left()) / math.max(1, P.img.Width()) * doc.rw
+            local cz = (my - P.img.Top()) / math.max(1, P.img.Height()) * doc.rh
+            return math.max(0, math.min(doc.rw, cx)), math.max(0, math.min(doc.rh, cz))
         end
 
         local function Pump()
@@ -257,7 +268,11 @@ Panels.Register{
             for _, s in { P.size, P.hard, P.strength } do s:Refresh() end
             local doc = Layout.Doc
             local L = doc and doc.layers[doc.sel]
-            W.Fit(P.info, L and ('Drawing on: ' .. L.name .. '   (' .. doc.res .. ' x ' .. doc.res .. ' cells, a cell is ' .. string.format('%.1f', MapSize() / doc.res) .. ' units)') or '', P.w - 20)
+            local note = ''
+            if doc and Layout.Stale() then note = '   The playable area changed: Fit to the area.'
+            elseif doc and Symmetry.Mode ~= 'off' and not Layout.SymmetryCentred() then note = '   The symmetry centre is not the middle of the canvas: Centre symmetry.'
+            elseif doc and doc.rw ~= doc.rh and (Symmetry.Mode == 'diag' or Symmetry.Mode == 'diag_both' or Symmetry.Mode == 'rot4') then note = '   This symmetry needs a square area.' end
+            W.Fit(P.info, L and ('Drawing on: ' .. L.name .. '   (' .. doc.rw .. ' x ' .. doc.rh .. ' cells, a cell is ' .. string.format('%.1f', doc.cell) .. ' units)' .. note) or '', P.w - 20)
         end
 
         function P:OnResize(w, h)
@@ -272,12 +287,16 @@ Panels.Register{
             P.hard:Place(pad * 2 + sw, y, sw)
             P.strength:Place(pad * 3 + sw * 2, y, sw)
             y = y + Skin.S(50)
-            y = W.Flow(group, { { P.sym, Skin.S(190) }, { P.view, Skin.S(110) }, { P.mk, Skin.S(80) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4)) + Skin.S(4)
+            y = W.Flow(group, { { P.sym, Skin.S(190) }, { P.centre, Skin.S(120) }, { P.view, Skin.S(110) }, { P.mk, Skin.S(80) }, { P.fit, Skin.S(110) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4)) + Skin.S(4)
             W.Place(P.info, group, pad, y)
             y = y + Skin.S(18)
-            local s = math.max(Skin.S(100), math.min(w - 2 * pad, h - y - pad))
-            P.s = s
-            W.Place(P.img, group, pad + math.floor((w - 2 * pad - s) / 2), y, s, s)
+            local doc = Layout.Doc
+            P.geo = doc.rw .. 'x' .. doc.rh
+            local availW, availH = math.max(Skin.S(100), w - 2 * pad), math.max(Skin.S(100), h - y - pad)
+            local scale = math.min(availW / doc.rw, availH / doc.rh)
+            local iw, ih = math.max(Skin.S(60), math.floor(doc.rw * scale)), math.max(Skin.S(60), math.floor(doc.rh * scale))
+            P.s = iw
+            W.Place(P.img, group, pad + math.floor((availW - iw) / 2), y, iw, ih)
             P:Refresh()
             P:Render()
         end
@@ -298,6 +317,16 @@ local KEYTIP = {
     depth = 'How deep the layer digs, in world units (water: below the water level of the layout).',
     level = 'The height the ground is levelled to, relative to the ground height of the layout.',
 }
+
+local COLORS = {
+    { 118, 196, 92 }, { 78, 150, 70 }, { 226, 226, 236 }, { 160, 160, 176 }, { 224, 172, 88 }, { 196, 196, 120 }, { 160, 98, 62 }, { 110, 70, 50 },
+    { 72, 140, 232 }, { 60, 200, 220 }, { 242, 72, 72 }, { 250, 140, 60 }, { 244, 220, 70 }, { 204, 92, 224 }, { 240, 130, 190 }, { 40, 40, 48 },
+}
+
+--- What the Import picture button does (module level: the controls come and go).
+imp = { channel = 'gray', invert = false, stretch = false, hard = false, add = false, contain = false, flipX = false, flipZ = false }
+local CHANNELS = { 'gray', 'r', 'g', 'b', 'a' }
+local CHANNEL_NAMES = { gray = 'Brightness', r = 'Red', g = 'Green', b = 'Blue', a = 'Alpha' }
 
 local function DestroySlider(s)
     for _, part in { s.label, s.track, s.fill, s.thumb, s.minus, s.plus } do part:Destroy() end
@@ -323,6 +352,8 @@ Panels.Register{
         function P:Clear()
             for _, s in P.sliders do DestroySlider(s) end
             P.sliders = {}
+            for _, s in (P.csliders or {}) do DestroySlider(s) end
+            P.csliders = {}
             for _, ctl in P.items do
                 if ctl.Destroy then ctl:Destroy() end
             end
@@ -344,8 +375,9 @@ Panels.Register{
             W.BeginLayout(group)
             for i, L in doc.layers do
                 local idx = i
+                local layer = L                       -- closures share the loop variable (nil after the loop)
                 local row = {}
-                row.eye = Btn(L.visible and 'On' or 'Off', 34, function() L.visible = not L.visible Layout.Changed() Rebuild() end, { tip = 'Show or hide this layer on the canvas (a hidden layer still counts in the generator).' })
+                row.eye = Btn(layer.visible and 'On' or 'Off', 34, function() layer.visible = not layer.visible Layout.Changed() Rebuild() end, { tip = 'Show or hide this layer on the canvas (a hidden layer still counts in the generator).' })
                 row.name = Btn(L.name, 110, function() Layout.Select(idx) end, { toggle = true, tip = 'Choose this layer to draw on and to edit its settings.' })
                 row.name:SetOn(idx == doc.sel)
                 row.up = Btn('Up', 30, function() Layout.MoveLayer(idx, 1) end, { tip = 'Move the layer up: layers are applied from the bottom to the top.' })
@@ -377,6 +409,76 @@ Panels.Register{
             P.fill = Btn('Fill', 50, function() local i = doc.sel Layout.Edit(i, 'fill layer', function() Layout.Fill(i, 1) end) end, { tip = 'Fill the whole selected layer.' })
             P.smooth = Btn('Smooth', 66, function() local i = doc.sel Layout.Edit(i, 'smooth layer', function() Layout.Smooth(i) end) end, { tip = 'Soften what is drawn on the selected layer (one pass).' })
             P.invert = Btn('Invert', 60, function() local i = doc.sel Layout.Edit(i, 'invert layer', function() Layout.Invert(i) end) end, { tip = 'Draw what is empty and empty what is drawn on the selected layer.' })
+            -- the colour of the layer on the canvas: a palette and a mixer
+            P.colorLabel = Add(W.Label(group, 'Colour on the canvas', 0, 0, { color = c.text }))
+            P.swatches = {}
+            for _, col in COLORS do
+                local rgb = col
+                local b = Btn('', 22, function()
+                    if doc.layers[doc.sel] then Layout.SetColor(doc.sel, rgb[1], rgb[2], rgb[3]) end
+                    P:RefreshColour()
+                end, { tip = 'Use this colour for the selected layer on the canvas (it only changes the picture, not the terrain).' })
+                b.Refresh = function(self) self:SetSolidColor('ff' .. string.format('%02x%02x%02x', rgb[1], rgb[2], rgb[3])) end
+                b:Refresh()
+                b.rgb = rgb
+                table.insert(P.swatches, b)
+            end
+            P.csliders = {}
+            for k, name in { 'Red', 'Green', 'Blue' } do
+                local ch = k
+                local s2 = W.Slider(group, { label = name, min = 0, max = 255, step = 1, fmt = '%d', compact = true,
+                    get = function() local l = doc.layers[doc.sel] return l and l.color[ch] or 0 end,
+                    set = function(v)
+                        local l = doc.layers[doc.sel]
+                        if not l then return end
+                        local col = { l.color[1], l.color[2], l.color[3] }
+                        col[ch] = v
+                        Layout.SetColor(doc.sel, col[1], col[2], col[3])
+                    end, tip = 'One channel of the colour of the selected layer on the canvas.' })
+                table.insert(P.csliders, s2)
+            end
+            function P:RefreshColour()
+                local l = doc.layers[doc.sel]
+                for _, b in P.swatches do
+                    local same = l and l.color[1] == b.rgb[1] and l.color[2] == b.rgb[2] and l.color[3] == b.rgb[3]
+                    b:SetText(same and 'x' or '')
+                end
+                for _, s2 in P.csliders do s2:Refresh() end
+            end
+            -- a picture becomes the content of the selected layer
+            P.imgLabel = Add(W.Label(group, 'Picture into this layer', 0, 0, { color = c.text }))
+            P.imgBtn = Btn('Import picture...', 130, function()
+                if not rawget(_G, 'ed_file_dialog') then Say('no file dialog in this build') return end
+                local path = ed_file_dialog(false, 'Import a picture into the layer', import('/lua/editor/interop.lua').FILTER, '')
+                if not path or path == '' then return end
+                local n, why = Layout.ImportImage(doc.sel, path, { channel = imp.channel, invert = imp.invert, stretch = imp.stretch, hard = imp.hard, add = imp.add,
+                                                                    fit = imp.contain and 'contain' or 'fill', flipX = imp.flipX, flipZ = imp.flipZ })
+                Say(n and ('picture drawn into the layer (' .. n .. ' cells changed; one undo step)') or ('not imported: ' .. tostring(why)))
+                local cv = live.canvas
+                if cv then cv:Render() end
+            end, { tip = 'Choose a picture (PNG, TIFF, BMP, JPEG or a raw heightmap): its brightness becomes what is drawn on the selected layer, fitted over the canvas. One undo step.' })
+            P.imgOpts = {}
+            local function Opt(text, w, key, tip)
+                local b = Btn(text, w, function(self) imp[key] = self.on end, { toggle = true, tip = tip })
+                b:SetOn(imp[key])
+                table.insert(P.imgOpts, { b, Skin.S(w) })
+            end
+            P.channel = Btn('', 120, function()
+                for i, ch in CHANNELS do
+                    if ch == imp.channel then imp.channel = CHANNELS[math.mod(i, table.getn(CHANNELS)) + 1] break end
+                end
+                P.channel:SetText('Reads: ' .. CHANNEL_NAMES[imp.channel])
+            end, { tip = 'Which channel of the picture is read: its brightness, or only its red, green, blue or alpha channel.' })
+            P.channel:SetText('Reads: ' .. CHANNEL_NAMES[imp.channel])
+            table.insert(P.imgOpts, { P.channel, Skin.S(120) })
+            Opt('Invert', 60, 'invert', 'Draw the dark parts of the picture instead of the bright ones.')
+            Opt('Stretch', 66, 'stretch', 'Make the darkest value of the picture 0 and the brightest 1 (a heightmap that does not use the whole range).')
+            Opt('Hard edge', 80, 'hard', 'Everything above one half becomes fully drawn, the rest is empty (a black and white picture becomes a clean shape).')
+            Opt('Keep aspect', 90, 'contain', 'Fit the whole picture inside the canvas with its own proportions (otherwise it is stretched over the whole canvas).')
+            Opt('Add', 46, 'add', 'Keep what is drawn already and add the picture (the larger value wins) instead of replacing the layer.')
+            Opt('Flip X', 60, 'flipX', 'Mirror the picture left to right.')
+            Opt('Flip Z', 60, 'flipZ', 'Mirror the picture top to bottom.')
+            P:RefreshColour()
             local function Doc(label, key, min, max, step, fmt, tip)
                 local s = W.Slider(group, { label = label, min = min, max = max, step = step, fmt = fmt, get = function() return doc[key] end, set = function(v) doc[key] = v Layout.Changed() end, tip = tip })
                 table.insert(P.sliders, s)
@@ -463,6 +565,18 @@ Panels.Register{
                 end
             end
             y = W.Flow(group, { { P.solo, Skin.S(110) }, { P.clear, Skin.S(60) }, { P.fill, Skin.S(50) }, { P.smooth, Skin.S(66) }, { P.invert, Skin.S(60) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(3)) + Skin.S(10)
+            W.Place(P.colorLabel, group, pad, y)
+            y = y + Skin.S(20)
+            local sw = {}
+            for _, b in P.swatches do table.insert(sw, { b, Skin.S(22) }) end
+            y = W.Flow(group, sw, pad, y, w - 2 * pad, Skin.S(22), Skin.S(3)) + Skin.S(4)
+            local cw = math.floor((w - 4 * pad) / 3)
+            for k, s2 in P.csliders do s2:Place(pad * k + cw * (k - 1), y, cw) end
+            y = y + Skin.S(50)
+            W.Place(P.imgLabel, group, pad, y)
+            y = y + Skin.S(20)
+            y = W.Flow(group, { { P.imgBtn, Skin.S(130) } }, pad, y, w - 2 * pad, Skin.S(24), Skin.S(3)) + Skin.S(3)
+            y = W.Flow(group, P.imgOpts, pad, y, w - 2 * pad, Skin.S(22), Skin.S(3)) + Skin.S(10)
             for _, s in P.docSliders do
                 s:Place(pad, y, w - 2 * pad)
                 y = y + Skin.S(50)
@@ -481,8 +595,9 @@ Panels.Register{
             local doc = Layout.Doc
             local sig = table.getn(doc.layers) .. ':' .. doc.sel
             for _, l in doc.layers do sig = sig .. '|' .. l.name .. (l.visible and '+' or '-') .. l.kind end
-            if sig ~= P.sig then
+            if sig ~= P.sig or P.docRef ~= doc then
                 P.sig = sig
+                P.docRef = doc
                 P:Build()
             end
         end)
