@@ -26,7 +26,10 @@ TESTS = {"MapDocumentTest": ["moho/editor/MapDocument.cpp"], "EdFieldTest": ["mo
          # GPU erosion ops (hydraulic, droplet) on the emulator: properties, not sample values (docs/projects/editor/GPU_COMPUTE.md, "Erosion kernels")
          "EdGpuErosionTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdErosion.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp", "moho/editor/EdGpuErosion.cpp"],
          # GPU generator and filter kernels (gpu/gen_*, gpu/filt_*) on the CPU emulator, against the CPU ops (docs/projects/editor/GPU_COMPUTE.md, "Generator and filter kernels")
-         "EdGpuGenTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldLand.cpp", "moho/editor/EdFieldGen.cpp", "moho/editor/EdFieldFilt.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp", "moho/editor/EdGpuGen.cpp", "moho/editor/EdGpuGenFilt.cpp"]}
+         "EdGpuGenTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldLand.cpp", "moho/editor/EdFieldGen.cpp", "moho/editor/EdFieldFilt.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp", "moho/editor/EdGpuGen.cpp", "moho/editor/EdGpuGenFilt.cpp"],
+         # GPU versions of more field ops (settle, thermal_map, morph, convolve, unsharp, edge, slope_limit ...; gpu/field_*) against the CPU ops, on the emulator (docs/projects/editor/GPU_COMPUTE.md, "More field ops (GP4)")
+         "EdGpuFieldTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldLand.cpp", "moho/editor/EdFieldFilt.cpp", "moho/editor/EdFieldSc.cpp", "moho/editor/EdFieldEro2.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp",
+                             "moho/editor/EdGpuFieldIter.cpp", "moho/editor/EdGpuFieldFilt.cpp", "moho/editor/EdGpuFieldFlow.cpp"]}
 # command line arguments per test (paths under the repository root, or under $ED_EDITOR_ROOT: the git worktree of a feature branch); extra arguments of this script are passed on to every test
 ARGS = {"EdFieldTest": ["editor/runtime/lua/editor/selftest_fields_cases.lua"],
         "EdErosionTest": ["editor/runtime/lua/editor/selftest_erosion_cases.lua"]}

@@ -1,0 +1,659 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 13:02:31 +0000
+Subject: [PATCH] editor GPU field ops: erode_glacier (shallow ice passes, time
+ step from a group reduced maximum with one atomic per group, alternating max
+ buffers) on the GPU; test bit equal to the CPU op
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdGpuFieldIter.cpp b/src/sdk/moho/editor/EdGpuFieldIter.cpp
+index 950a2be..d9a4a34 100644
+--- a/src/sdk/moho/editor/EdGpuFieldIter.cpp
++++ b/src/sdk/moho/editor/EdGpuFieldIter.cpp
+@@ -9,6 +9,7 @@
+ namespace moho::editor::gpu::hk
+ {
+   using uint = std::uint32_t;
++#include "moho/editor/gpu/field_glacier_params.hlsli"
+ #include "moho/editor/gpu/field_settle_params.hlsli"
+ #include "moho/editor/gpu/field_slide_params.hlsli"
+ #include "moho/editor/gpu/field_snowinit_params.hlsli"
+@@ -426,10 +427,88 @@ namespace moho::editor::gpu
+       return OpResult::Done;
+     }
+ 
++    // ---- erode_glacier ------------------------------------------------------------------------------------------------------------------------------
++
++    OpResult OpGlacierGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
++    {
++      const Grid* src = Source(a);
++      const Grid* accMask = In(a, "b");
++      if (src == nullptr || (accMask != nullptr && !accMask->SameShape(*src))) return OpResult::Unsupported;
++      const std::string want = a.p.S("output", "height");
++      if (want != "height" && want != "ice" && want != "cover" && want != "carve") return OpResult::Unsupported;
++      const int iterations = ItersOf(a, 200, 5000);
++      if (iterations == 0) return OpResult::Unsupported;
++      const int w = src->w, h = src->h;
++      const std::size_t n = src->Count();
++      if (!Fits(ex, n, 9)) return OpResult::Unsupported;
++      const KernelInfo* ka = FindKernel("field_glacier_a");
++      const KernelInfo* kb = FindKernel("field_glacier_b");
++      if (ka == nullptr || kb == nullptr) { err = "kernel field_glacier_a / field_glacier_b is missing"; return OpResult::Failed; }
++      hk::GlacierParams p{};
++      p.w = static_cast<std::uint32_t>(w);
++      p.h = static_cast<std::uint32_t>(h);
++      p.cell = src->cell;
++      p.cc = p.cell * p.cell;
++      p.ela = static_cast<float>(a.p.N("ela", 40.0));
++      p.grad = std::max(0.0f, static_cast<float>(a.p.N("grad", 0.02)));
++      p.accMax = std::max(0.0f, static_cast<float>(a.p.N("acc_max", 0.5)));
++      p.ablMax = std::max(0.0f, static_cast<float>(a.p.N("abl_max", 1.0)));
++      p.flow = std::max(0.0f, static_cast<float>(a.p.N("flow", 0.02)));
++      p.maxIce = std::max(1.0f, static_cast<float>(a.p.N("max_ice", 120.0)));
++      p.erode = std::max(0.0f, static_cast<float>(a.p.N("erode", 0.0005)));
++      p.erodePow = std::max(0.5f, static_cast<float>(a.p.N("erode_pow", 1.5)));
++      p.maxCut = std::max(0.0f, static_cast<float>(a.p.N("max_cut", 25.0)));
++      p.dtMax = std::max(1e-4f, static_cast<float>(a.p.N("dt", 1.0)));
++      p.powKind = p.erodePow == 1.0f ? 1u : (p.erodePow == 2.0f ? 2u : (p.erodePow == 1.5f ? 3u : 0u));
++      p.hasAcc = accMask != nullptr ? 1u : 0u;
++      Field bed, dif, gsl, cut, acc;
++      PingPong ice;
++      std::unique_ptr<Resource> dmaxA, dmaxB, dummy;
++      const float zero = 0.0f;
++      if (!UploadGrid(ex, *src, bed, err) || !MakeField(ex, w, h, ice.f[0], err) || !MakeField(ex, w, h, ice.f[1], err) || !FillBuffer(ex, ice.f[0].R(), 0u, err) || !MakeField(ex, w, h, dif, err) ||
++          !MakeField(ex, w, h, gsl, err) || !MakeField(ex, w, h, cut, err) || !FillBuffer(ex, cut.R(), 0u, err) || !MakeBuffer(ex, 1, dmaxA, err) || !MakeBuffer(ex, 1, dmaxB, err) ||
++          !FillBuffer(ex, *dmaxA, 0u, err) || !FillBuffer(ex, *dmaxB, 0u, err) || !MakeBuffer(ex, 1, dummy, err) || !UploadBuffer(ex, *dummy, &zero, 4, err)) {
++        return OpResult::Failed;
++      }
++      if (accMask != nullptr && !UploadGrid(ex, *accMask, acc, err)) return OpResult::Failed;
++      const Resource& accR = accMask != nullptr ? acc.R() : *dummy;
++      const bool ok = RunIterations(ex, static_cast<u32>(iterations), 60.0, [&](const u32 it, std::string& e) {
++        Resource& cur = (it & 1u) != 0u ? *dmaxB : *dmaxA;
++        Resource& nxt = (it & 1u) != 0u ? *dmaxA : *dmaxB;
++        Bindings ba;
++        ba.Srv(0, bed.R()).Srv(1, ice.Src().R()).Uav(0, dif.R()).Uav(1, gsl.R()).Uav(2, cur).Uav(3, nxt);
++        if (!DispatchGrid(ex, *ka, p.w, p.h, p, ba, e)) return false;
++        Bindings bb;
++        bb.Srv(0, bed.R()).Srv(1, ice.Src().R()).Srv(2, dif.R()).Srv(3, gsl.R()).Srv(4, accR).Srv(5, cur).Uav(0, ice.Dst().R()).Uav(1, cut.R());
++        if (!DispatchGrid(ex, *kb, p.w, p.h, p, bb, e)) return false;
++        ice.Flip();
++        return true;
++      }, err);
++      if (!ok) return OpResult::Failed;
++      Grid gIce = LikeOf(*src), gCut = LikeOf(*src);
++      if (!DownloadGrid(ex, ice.Src(), gIce, err) || !DownloadGrid(ex, cut, gCut, err)) return OpResult::Failed;
++      std::map<std::string, Grid> all;
++      all["height"] = LikeOf(*src);
++      all["ice"] = LikeOf(*src);
++      all["cover"] = LikeOf(*src);
++      all["carve"] = LikeOf(*src);
++      for (std::size_t i = 0; i < n; ++i) {
++        all["height"].v[i] = src->v[i] - gCut.v[i];
++        all["ice"].v[i] = gIce.v[i];
++        all["cover"].v[i] = field::t7::SmoothStep(0.0f, 2.0f, gIce.v[i]);
++        all["carve"].v[i] = gCut.v[i];
++      }
++      Grid result;
++      if (!Emit(a, result, all, "height")) return OpResult::Unsupported;
++      out = std::move(result);
++      return OpResult::Done;
++    }
++
+     struct Registrar
+     {
+       Registrar()
+       {
++        RegisterGpuOp("erode_glacier", &OpGlacierGpu, 16384.0f);
+         RegisterGpuOp("erode_wind", &OpWindGpu, 16384.0f);
+         RegisterGpuOp("erode_snow", &OpSnowGpu, 16384.0f);
+         RegisterGpuOp("erode_rocksoil", &OpRockSoilGpu, 16384.0f);
+diff --git a/src/sdk/moho/editor/EdGpuShaders.generated.h b/src/sdk/moho/editor/EdGpuShaders.generated.h
+index 429b3ba..1a41235 100644
+--- a/src/sdk/moho/editor/EdGpuShaders.generated.h
++++ b/src/sdk/moho/editor/EdGpuShaders.generated.h
+@@ -2899,6 +2899,276 @@ void CSMain(KERNEL_IDS)
+     dst[i] = res;
+ }
+ 
++)HLSL";
++
++  // field_glacier_a: 16x16x1 threads
++  inline constexpr char kSource_field_glacier_a[] =
++    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
++// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
++//
++// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
++// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
++
++#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
++#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
++#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
++#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
++#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
++#define SAMPLER(name, slot) SamplerState name : register(s##slot);
++#define GROUPSHARED(T, name, n) groupshared T name[n];
++#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
++#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
++
++// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
++// live across a BARRIER, on the GPU as in the emulation).
++#define PHASES_BEGIN {
++#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
++#define PHASES_END }
++
++#define UNROLL [unroll]
++#define LOOP [loop]
++#define OUT(T) out T
++#define INOUT(T) inout T
++#define FN
++
++// Op erode_glacier (EdFieldEro2.cpp OpGlacier), the first pass of a step (shallow ice approximation): from the ice surface (bed + ice) the ice diffusivity D = flow * H^5 * |grad s|^2 (n = 3)
++// and the surface slope, and the largest D of the field (for the time step): one maximum per group of 256 cells, then one atomic maximum per group on `dmaxCur` (a non negative float
++// compares like its bits). `dmaxNext` is zeroed for the next step, which uses it as its `dmaxCur` (the two buffers alternate, so no extra clearing dispatch is needed).
++// ---- begin field_glacier_params.hlsli
++// Constant buffer of field_glacier_a.hlsl and field_glacier_b.hlsl (op erode_glacier).
++#ifndef GPU_FIELD_GLACIER_PARAMS_HLSLI
++#define GPU_FIELD_GLACIER_PARAMS_HLSLI
++
++struct GlacierParams
++{
++    uint w;
++    uint h;
++    uint hasAcc;      // 1 = an accumulation factor per cell (a buffer)
++    uint powKind;     // erosion power: 1 = v, 2 = v^2, 3 = v^1.5, 0 = pow(v, erodePow)
++    float cell;
++    float cc;         // cell * cell
++    float flow;
++    float ela;        // equilibrium line altitude
++    float grad;       // mass balance gradient
++    float accMax;
++    float ablMax;
++    float maxIce;
++    float erode;
++    float erodePow;
++    float maxCut;
++    float dtMax;
++};
++
++#endif
++// ---- end field_glacier_params.hlsli
++
++CBUFFER(GlacierParams, P, 0)
++SRV_BUFFER(float, bed, 0)
++SRV_BUFFER(float, ice, 1)
++UAV_BUFFER(float, dif, 0)
++UAV_BUFFER(float, gsl, 1)
++UAV_BUFFER(uint, dmaxCur, 2)
++UAV_BUFFER(uint, dmaxNext, 3)
++GROUPSHARED(float, sh, 256)
++
++// ice surface at sample (x, z) (a macro: a kernel with barriers has no early exit, not even in a helper)
++#define SURF(x, z) (bed[uint(z) * P.w + uint(x)] + ice[uint(z) * P.w + uint(x)])
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    PHASES_BEGIN
++    float dv = 0.0f;
++    if (dtid.x < P.w && dtid.y < P.h)
++    {
++        int x = int(dtid.x);
++        int z = int(dtid.y);
++        int w = int(P.w);
++        int h = int(P.h);
++        uint i = dtid.y * P.w + dtid.x;
++        int xl = max(0, x - 1);
++        int xr = min(w - 1, x + 1);
++        int zu = max(0, z - 1);
++        int zd = min(h - 1, z + 1);
++        float gx = (SURF(xr, z) - SURF(xl, z)) / (2.0f * P.cell);
++        float gz = (SURF(x, zd) - SURF(x, zu)) / (2.0f * P.cell);
++        float s2 = gx * gx + gz * gz;
++        float hh = ice[i];
++        float h2 = hh * hh;
++        float d = P.flow * h2 * h2 * hh * s2;
++        dif[i] = d;
++        gsl[i] = sqrt(s2);
++        dv = d;
++        if (i == 0u) dmaxNext[0] = 0u;
++    }
++    sh[gidx] = dv;
++    BARRIER();
++    if (gidx < 128u) sh[gidx] = max(sh[gidx], sh[gidx + 128u]);
++    BARRIER();
++    if (gidx < 64u) sh[gidx] = max(sh[gidx], sh[gidx + 64u]);
++    BARRIER();
++    if (gidx < 32u) sh[gidx] = max(sh[gidx], sh[gidx + 32u]);
++    BARRIER();
++    if (gidx < 16u) sh[gidx] = max(sh[gidx], sh[gidx + 16u]);
++    BARRIER();
++    if (gidx < 8u) sh[gidx] = max(sh[gidx], sh[gidx + 8u]);
++    BARRIER();
++    if (gidx < 4u) sh[gidx] = max(sh[gidx], sh[gidx + 4u]);
++    BARRIER();
++    if (gidx < 2u) sh[gidx] = max(sh[gidx], sh[gidx + 2u]);
++    BARRIER();
++    if (gidx == 0u) InterlockedMax(dmaxCur[0], asuint(max(sh[0], sh[1])));
++    PHASES_END
++}
++
++)HLSL";
++
++  // field_glacier_b: 16x16x1 threads
++  inline constexpr char kSource_field_glacier_b[] =
++    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
++// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
++//
++// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
++// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
++
++#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
++#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
++#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
++#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
++#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
++#define SAMPLER(name, slot) SamplerState name : register(s##slot);
++#define GROUPSHARED(T, name, n) groupshared T name[n];
++#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
++#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
++
++// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
++// live across a BARRIER, on the GPU as in the emulation).
++#define PHASES_BEGIN {
++#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
++#define PHASES_END }
++
++#define UNROLL [unroll]
++#define LOOP [loop]
++#define OUT(T) out T
++#define INOUT(T) inout T
++#define FN
++
++// Op erode_glacier (EdFieldEro2.cpp OpGlacier), the second pass of a step: the time step dt = min(dtMax, 0.2 cell^2 / largest D), the ice flux divergence plus the mass balance (accumulation above
++// the equilibrium line, ablation below, both limited), the new ice thickness, and the bed cut under thick fast ice.
++// ---- begin common.hlsli
++// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
++#ifndef GPU_COMMON_HLSLI
++#define GPU_COMMON_HLSLI
++
++// Row-major index of sample (x, z) in a field of width w.
++FN uint FieldIndex(uint x, uint z, uint w)
++{
++    return z * w + x;
++}
++
++// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
++FN int ClampIndex(int i, int n)
++{
++    return max(0, min(n - 1, i));
++}
++
++// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
++FN uint Hash32(uint x)
++{
++    x ^= x >> 16;
++    x *= 0x7feb352du;
++    x ^= x >> 15;
++    x *= 0x846ca68bu;
++    x ^= x >> 16;
++    return x;
++}
++
++// A hash as a float in 0..1 (24 bit steps, exact in float32).
++FN float HashToUnit(uint h)
++{
++    return float(h >> 8) * (1.0f / 16777216.0f);
++}
++
++#endif
++// ---- end common.hlsli
++// ---- begin field_glacier_params.hlsli
++// Constant buffer of field_glacier_a.hlsl and field_glacier_b.hlsl (op erode_glacier).
++#ifndef GPU_FIELD_GLACIER_PARAMS_HLSLI
++#define GPU_FIELD_GLACIER_PARAMS_HLSLI
++
++struct GlacierParams
++{
++    uint w;
++    uint h;
++    uint hasAcc;      // 1 = an accumulation factor per cell (a buffer)
++    uint powKind;     // erosion power: 1 = v, 2 = v^2, 3 = v^1.5, 0 = pow(v, erodePow)
++    float cell;
++    float cc;         // cell * cell
++    float flow;
++    float ela;        // equilibrium line altitude
++    float grad;       // mass balance gradient
++    float accMax;
++    float ablMax;
++    float maxIce;
++    float erode;
++    float erodePow;
++    float maxCut;
++    float dtMax;
++};
++
++#endif
++// ---- end field_glacier_params.hlsli
++
++CBUFFER(GlacierParams, P, 0)
++SRV_BUFFER(float, bed, 0)
++SRV_BUFFER(float, ice, 1)
++SRV_BUFFER(float, dif, 2)
++SRV_BUFFER(float, gsl, 3)
++SRV_BUFFER(float, acc, 4)
++SRV_BUFFER(uint, dmaxBits, 5)
++UAV_BUFFER(float, nxt, 0)
++UAV_BUFFER(float, cut, 1)
++
++FN float Surf(uint j)
++{
++    return bed[j] + ice[j];
++}
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.h) return;
++    int x = int(dtid.x);
++    int z = int(dtid.y);
++    int w = int(P.w);
++    int h = int(P.h);
++    uint i = dtid.y * P.w + dtid.x;
++    float dmax = asfloat(dmaxBits[0]);
++    float dt = P.dtMax;
++    if (dmax > 0.0f) dt = min(P.dtMax, 0.2f * P.cc / dmax);
++    float s = Surf(i);
++    float dv = 0.0f;
++    if (x > 0) dv += 0.5f * (dif[i] + dif[i - 1u]) * (Surf(i - 1u) - s) / P.cc;
++    if (x < w - 1) dv += 0.5f * (dif[i] + dif[i + 1u]) * (Surf(i + 1u) - s) / P.cc;
++    if (z > 0) dv += 0.5f * (dif[i] + dif[i - P.w]) * (Surf(i - P.w) - s) / P.cc;
++    if (z < h - 1) dv += 0.5f * (dif[i] + dif[i + P.w]) * (Surf(i + P.w) - s) / P.cc;
++    float b = P.grad * (s - P.ela);
++    float accLimit = P.accMax;
++    if (P.hasAcc != 0u) accLimit = P.accMax * saturate(acc[i]);
++    b = max(-P.ablMax, min(accLimit, b));
++    float nh = max(0.0f, min(P.maxIce, ice[i] + dt * (dv + b)));
++    nxt[i] = nh;
++    if (nh > 0.0f && P.erode > 0.0f && ice[i] > 0.0f)
++    {
++        float v = ice[i] * gsl[i];
++        float p = v;
++        if (P.powKind == 2u) p = v * v;
++        else if (P.powKind == 3u) p = v * sqrt(v);
++        else if (P.powKind == 0u) p = pow(v, P.erodePow);
++        cut[i] = min(P.maxCut, cut[i] + dt * (P.erode * p));
++    }
++}
++
+ )HLSL";
+ 
+   // field_morph: 16x16x1 threads
+@@ -9322,6 +9592,8 @@ void CSMain(KERNEL_IDS)
+     {"field_blurslope", kSource_field_blurslope, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xEEB771530C2DE722ULL},
+     {"field_convolve", kSource_field_convolve, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2D14850FD687FA27ULL},
+     {"field_edge", kSource_field_edge, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x3F26AAC9638A50ADULL},
++    {"field_glacier_a", kSource_field_glacier_a, "CSMain", 16u, 16u, 1u, 0x3u, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0xE1C04353EC498ADBULL},
++    {"field_glacier_b", kSource_field_glacier_b, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x7A0444BEAB57C8A5ULL},
+     {"field_morph", kSource_field_morph, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x52463243DBBAAFBBULL},
+     {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x600636D24769A34FULL},
+     {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0F632EA329C10980ULL},
+@@ -9354,5 +9626,5 @@ void CSMain(KERNEL_IDS)
+     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
+     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
+   };
+-  inline constexpr int kKernelCount = 49;
++  inline constexpr int kKernelCount = 51;
+ } // namespace moho::editor::gpu::shaders
+diff --git a/src/sdk/moho/editor/gpu/field_glacier_a.hlsl b/src/sdk/moho/editor/gpu/field_glacier_a.hlsl
+new file mode 100644
+index 0000000..2225a9d
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_glacier_a.hlsl
+@@ -0,0 +1,63 @@
++// Op erode_glacier (EdFieldEro2.cpp OpGlacier), the first pass of a step (shallow ice approximation): from the ice surface (bed + ice) the ice diffusivity D = flow * H^5 * |grad s|^2 (n = 3)
++// and the surface slope, and the largest D of the field (for the time step): one maximum per group of 256 cells, then one atomic maximum per group on `dmaxCur` (a non negative float
++// compares like its bits). `dmaxNext` is zeroed for the next step, which uses it as its `dmaxCur` (the two buffers alternate, so no extra clearing dispatch is needed).
++#include "field_glacier_params.hlsli"
++
++CBUFFER(GlacierParams, P, 0)
++SRV_BUFFER(float, bed, 0)
++SRV_BUFFER(float, ice, 1)
++UAV_BUFFER(float, dif, 0)
++UAV_BUFFER(float, gsl, 1)
++UAV_BUFFER(uint, dmaxCur, 2)
++UAV_BUFFER(uint, dmaxNext, 3)
++GROUPSHARED(float, sh, 256)
++
++// ice surface at sample (x, z) (a macro: a kernel with barriers has no early exit, not even in a helper)
++#define SURF(x, z) (bed[uint(z) * P.w + uint(x)] + ice[uint(z) * P.w + uint(x)])
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    PHASES_BEGIN
++    float dv = 0.0f;
++    if (dtid.x < P.w && dtid.y < P.h)
++    {
++        int x = int(dtid.x);
++        int z = int(dtid.y);
++        int w = int(P.w);
++        int h = int(P.h);
++        uint i = dtid.y * P.w + dtid.x;
++        int xl = max(0, x - 1);
++        int xr = min(w - 1, x + 1);
++        int zu = max(0, z - 1);
++        int zd = min(h - 1, z + 1);
++        float gx = (SURF(xr, z) - SURF(xl, z)) / (2.0f * P.cell);
++        float gz = (SURF(x, zd) - SURF(x, zu)) / (2.0f * P.cell);
++        float s2 = gx * gx + gz * gz;
++        float hh = ice[i];
++        float h2 = hh * hh;
++        float d = P.flow * h2 * h2 * hh * s2;
++        dif[i] = d;
++        gsl[i] = sqrt(s2);
++        dv = d;
++        if (i == 0u) dmaxNext[0] = 0u;
++    }
++    sh[gidx] = dv;
++    BARRIER();
++    if (gidx < 128u) sh[gidx] = max(sh[gidx], sh[gidx + 128u]);
++    BARRIER();
++    if (gidx < 64u) sh[gidx] = max(sh[gidx], sh[gidx + 64u]);
++    BARRIER();
++    if (gidx < 32u) sh[gidx] = max(sh[gidx], sh[gidx + 32u]);
++    BARRIER();
++    if (gidx < 16u) sh[gidx] = max(sh[gidx], sh[gidx + 16u]);
++    BARRIER();
++    if (gidx < 8u) sh[gidx] = max(sh[gidx], sh[gidx + 8u]);
++    BARRIER();
++    if (gidx < 4u) sh[gidx] = max(sh[gidx], sh[gidx + 4u]);
++    BARRIER();
++    if (gidx < 2u) sh[gidx] = max(sh[gidx], sh[gidx + 2u]);
++    BARRIER();
++    if (gidx == 0u) InterlockedMax(dmaxCur[0], asuint(max(sh[0], sh[1])));
++    PHASES_END
++}
+diff --git a/src/sdk/moho/editor/gpu/field_glacier_b.hlsl b/src/sdk/moho/editor/gpu/field_glacier_b.hlsl
+new file mode 100644
+index 0000000..0c132bf
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_glacier_b.hlsl
+@@ -0,0 +1,54 @@
++// Op erode_glacier (EdFieldEro2.cpp OpGlacier), the second pass of a step: the time step dt = min(dtMax, 0.2 cell^2 / largest D), the ice flux divergence plus the mass balance (accumulation above
++// the equilibrium line, ablation below, both limited), the new ice thickness, and the bed cut under thick fast ice.
++#include "common.hlsli"
++#include "field_glacier_params.hlsli"
++
++CBUFFER(GlacierParams, P, 0)
++SRV_BUFFER(float, bed, 0)
++SRV_BUFFER(float, ice, 1)
++SRV_BUFFER(float, dif, 2)
++SRV_BUFFER(float, gsl, 3)
++SRV_BUFFER(float, acc, 4)
++SRV_BUFFER(uint, dmaxBits, 5)
++UAV_BUFFER(float, nxt, 0)
++UAV_BUFFER(float, cut, 1)
++
++FN float Surf(uint j)
++{
++    return bed[j] + ice[j];
++}
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.h) return;
++    int x = int(dtid.x);
++    int z = int(dtid.y);
++    int w = int(P.w);
++    int h = int(P.h);
++    uint i = dtid.y * P.w + dtid.x;
++    float dmax = asfloat(dmaxBits[0]);
++    float dt = P.dtMax;
++    if (dmax > 0.0f) dt = min(P.dtMax, 0.2f * P.cc / dmax);
++    float s = Surf(i);
++    float dv = 0.0f;
++    if (x > 0) dv += 0.5f * (dif[i] + dif[i - 1u]) * (Surf(i - 1u) - s) / P.cc;
++    if (x < w - 1) dv += 0.5f * (dif[i] + dif[i + 1u]) * (Surf(i + 1u) - s) / P.cc;
++    if (z > 0) dv += 0.5f * (dif[i] + dif[i - P.w]) * (Surf(i - P.w) - s) / P.cc;
++    if (z < h - 1) dv += 0.5f * (dif[i] + dif[i + P.w]) * (Surf(i + P.w) - s) / P.cc;
++    float b = P.grad * (s - P.ela);
++    float accLimit = P.accMax;
++    if (P.hasAcc != 0u) accLimit = P.accMax * saturate(acc[i]);
++    b = max(-P.ablMax, min(accLimit, b));
++    float nh = max(0.0f, min(P.maxIce, ice[i] + dt * (dv + b)));
++    nxt[i] = nh;
++    if (nh > 0.0f && P.erode > 0.0f && ice[i] > 0.0f)
++    {
++        float v = ice[i] * gsl[i];
++        float p = v;
++        if (P.powKind == 2u) p = v * v;
++        else if (P.powKind == 3u) p = v * sqrt(v);
++        else if (P.powKind == 0u) p = pow(v, P.erodePow);
++        cut[i] = min(P.maxCut, cut[i] + dt * (P.erode * p));
++    }
++}
+diff --git a/src/sdk/moho/editor/gpu/field_glacier_params.hlsli b/src/sdk/moho/editor/gpu/field_glacier_params.hlsli
+new file mode 100644
+index 0000000..4a5f6fb
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_glacier_params.hlsli
+@@ -0,0 +1,25 @@
++// Constant buffer of field_glacier_a.hlsl and field_glacier_b.hlsl (op erode_glacier).
++#ifndef GPU_FIELD_GLACIER_PARAMS_HLSLI
++#define GPU_FIELD_GLACIER_PARAMS_HLSLI
++
++struct GlacierParams
++{
++    uint w;
++    uint h;
++    uint hasAcc;      // 1 = an accumulation factor per cell (a buffer)
++    uint powKind;     // erosion power: 1 = v, 2 = v^2, 3 = v^1.5, 0 = pow(v, erodePow)
++    float cell;
++    float cc;         // cell * cell
++    float flow;
++    float ela;        // equilibrium line altitude
++    float grad;       // mass balance gradient
++    float accMax;
++    float ablMax;
++    float maxIce;
++    float erode;
++    float erodePow;
++    float maxCut;
++    float dtMax;
++};
++
++#endif
+diff --git a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+index a1bdcf8..fd91849 100644
+--- a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
++++ b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+@@ -28,6 +28,7 @@
+ #include "moho/editor/gpu/blur_params.hlsli"
+ #include "moho/editor/gpu/filt_common.hlsli"
+ #include "moho/editor/gpu/field_settle_params.hlsli"
++#include "moho/editor/gpu/field_glacier_params.hlsli"
+ #include "moho/editor/gpu/field_slide_params.hlsli"
+ #include "moho/editor/gpu/field_blurslope_params.hlsli"
+ #include "moho/editor/gpu/field_convolve_params.hlsli"
+@@ -97,6 +98,14 @@ EMU_KERNEL_BEGIN(k_field_wind_b)
+ #include "moho/editor/gpu/field_wind_b.hlsl"
+ EMU_KERNEL_END(field_wind_b)
+ 
++EMU_KERNEL_BEGIN(k_field_glacier_a)
++#include "moho/editor/gpu/field_glacier_a.hlsl"
++EMU_KERNEL_END(field_glacier_a)
++
++EMU_KERNEL_BEGIN(k_field_glacier_b)
++#include "moho/editor/gpu/field_glacier_b.hlsl"
++EMU_KERNEL_END(field_glacier_b)
++
+ EMU_KERNEL_BEGIN(k_field_sub)
+ #include "moho/editor/gpu/field_sub.hlsl"
+ EMU_KERNEL_END(field_sub)
+@@ -643,6 +652,55 @@ static void TestWind()
+   CheckDeclines("wind_no_input", "erode_wind", Args({}, {}, {}));
+ }
+ 
++// ---- erode_glacier ---------------------------------------------------------------------------------------------------------------------------------
++
++static void TestGlacier()
++{
++  const GridPtr t = TestTerrain(67, 59, 4.0f, 101, 200.0);
++  const GridPtr acc = TestMask(67, 59, 14);
++  const Num ice = {{"iterations", 25}, {"ela", 70.0}, {"grad", 0.08}, {"flow", 0.2}, {"erode", 0.01}};
++  CheckSame("glacier_default", "erode_glacier", Args(ice, {}, {{"a", t}}), 2e-4, nullptr, true);
++  {
++    Grid g;
++    RunGpu("erode_glacier", Args(ice, {}, {{"a", t}}), g);
++    CHECK(Compare(g, *t).maxAbs > 0.01, "erode_glacier carves the terrain (the comparison is not vacuous)");
++    Grid ig;
++    RunGpu("erode_glacier", Args(ice, {{"output", "ice"}}, {{"a", t}}), ig);
++    double mx = 0.0;
++    for (const float v : ig.v) mx = std::max(mx, static_cast<double>(v));
++    CHECK(mx > 0.5, "erode_glacier grows ice (max %.3f)", mx);
++  }
++  for (const char* o : {"ice", "cover", "carve"}) {
++    CheckSame((std::string("glacier_") + o).c_str(), "erode_glacier", Args(ice, {{"output", o}}, {{"a", t}, {"b", acc}}), 2e-4, nullptr, true);
++  }
++  for (const double pw : {1.0, 2.0, 1.5, 0.8, 2.7}) {
++    Num n = ice;
++    n["erode_pow"] = pw;
++    n["iterations"] = 14;
++    CheckSame(("glacier_pow" + std::to_string(static_cast<int>(pw * 10))).c_str(), "erode_glacier", Args(n, {}, {{"a", t}}), 2e-4, nullptr, true);
++  }
++  {
++    Num n = ice;
++    n["dt"] = 0.05;   // a small time step limit, and a limit that never binds
++    n["max_ice"] = 8;
++    n["acc_max"] = 2;
++    n["abl_max"] = 0.2;
++    n["max_cut"] = 1.5;
++    CheckSame("glacier_limits", "erode_glacier", Args(n, {}, {{"a", t}}), 2e-4, nullptr, true);
++    n["dt"] = 100.0;
++    n["flow"] = 0.0005;
++    CheckSame("glacier_big_dt", "erode_glacier", Args(n, {}, {{"a", t}}), 2e-4, nullptr, true);
++  }
++  for (const auto& sz : kOddSizes) {
++    const GridPtr s = TestTerrain(sz.first, sz.second, 3.0f, 5, 150.0);
++    CheckSame(("glacier_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "erode_glacier", Args({{"iterations", 8}, {"ela", 60.0}, {"grad", 0.1}, {"flow", 0.3}}, {}, {{"a", s}}), 2e-4, nullptr, true);
++  }
++  CheckDeclines("glacier_zero_iterations", "erode_glacier", Args({{"iterations", 0}}, {}, {{"a", t}}));
++  CheckDeclines("glacier_bad_output", "erode_glacier", Args({}, {{"output", "bogus"}}, {{"a", t}}));
++  CheckDeclines("glacier_bad_acc", "erode_glacier", Args({}, {}, {{"a", t}, {"b", TestMask(9, 9, 1)}}));
++  CheckDeclines("glacier_no_input", "erode_glacier", Args({}, {}, {}));
++}
++
+ int main(int argc, char** argv)
+ {
+   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
+@@ -662,6 +720,7 @@ int main(int argc, char** argv)
+   TestRockSoil();
+   TestSnow();
+   TestWind();
++  TestGlacier();
+   gpu::SetBackendForTest(nullptr);
+   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
+   return gFailures == 0 ? 0 : 1;

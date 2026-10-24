@@ -1,0 +1,429 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 12:59:05 +0000
+Subject: [PATCH] editor GPU field ops: erode_snow (snow fall kernel + slide
+ kernels with the ground as the bed) on the GPU; test bit equal to the CPU op
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdGpuFieldIter.cpp b/src/sdk/moho/editor/EdGpuFieldIter.cpp
+index bce4255..d07bc00 100644
+--- a/src/sdk/moho/editor/EdGpuFieldIter.cpp
++++ b/src/sdk/moho/editor/EdGpuFieldIter.cpp
+@@ -11,6 +11,7 @@ namespace moho::editor::gpu::hk
+   using uint = std::uint32_t;
+ #include "moho/editor/gpu/field_settle_params.hlsli"
+ #include "moho/editor/gpu/field_slide_params.hlsli"
++#include "moho/editor/gpu/field_snowinit_params.hlsli"
+ #include "moho/editor/gpu/field_weather_params.hlsli"
+ } // namespace moho::editor::gpu::hk
+ 
+@@ -272,10 +273,84 @@ namespace moho::editor::gpu
+       return OpResult::Done;
+     }
+ 
++    // ---- erode_snow ---------------------------------------------------------------------------------------------------------------------------------
++
++    OpResult OpSnowGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
++    {
++      const Grid* src = Source(a);
++      const Grid* acc = In(a, "mask");
++      if (src == nullptr || (acc != nullptr && !acc->SameShape(*src))) return OpResult::Unsupported;
++      const std::string want = a.p.S("output", "height");
++      if (want != "height" && want != "snow" && want != "cover" && want != "moved") return OpResult::Unsupported;
++      const int iterations = ItersOf(a, 40);
++      if (iterations == 0) return OpResult::Unsupported;   // only the snow that falls: a point pass
++      const int w = src->w, h = src->h;
++      const std::size_t n = src->Count();
++      if (!Fits(ex, n, 10)) return OpResult::Unsupported;
++      const KernelInfo* ki = FindKernel("field_snowinit");
++      if (ki == nullptr) { err = "kernel field_snowinit is missing"; return OpResult::Failed; }
++      const float line = static_cast<float>(a.p.N("snowline", 40.0));
++      const float band = std::max(1e-3f, static_cast<float>(a.p.N("band", 10.0)));
++      const float coverDepth = std::max(1e-3f, static_cast<float>(a.p.N("cover_depth", 0.5)));
++      hk::SnowInitParams ip{};
++      ip.w = static_cast<std::uint32_t>(w);
++      ip.h = static_cast<std::uint32_t>(h);
++      ip.cell = src->cell;
++      ip.amount = std::max(0.0f, static_cast<float>(a.p.N("amount", 3.0)));
++      ip.lineLo = line - band;
++      ip.lineHi = line + band;
++      ip.steepLo = static_cast<float>(a.p.N("steep_lo", 0.8));
++      ip.steepHi = static_cast<float>(a.p.N("steep_hi", 1.4));
++      Field ground, lost;
++      PingPong snow;
++      MaskBind mb;
++      if (!UploadGrid(ex, *src, ground, err) || !MakeField(ex, w, h, snow.f[0], err) || !MakeField(ex, w, h, snow.f[1], err) || !MakeField(ex, w, h, lost, err) ||
++          !FillBuffer(ex, lost.R(), 0u, err) || !BindMask(ex, a, mb, err)) {
++        return OpResult::Failed;
++      }
++      ip.hasMask = mb.has ? 1u : 0u;
++      Bindings bi;
++      bi.Srv(0, ground.R()).Srv(1, mb.R()).Uav(0, snow.f[0].R());
++      if (!DispatchGrid(ex, *ki, ip.w, ip.h, ip, bi, err)) return OpResult::Failed;
++      Slider sl;
++      if (!sl.Init(ex, w, h, err)) return OpResult::Failed;
++      sl.p.cell = src->cell;
++      sl.p.rate = std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("rate", 0.5))));
++      sl.p.talus = std::max(0.0f, static_cast<float>(a.p.N("snow_talus", 0.9)));
++      sl.p.hasRock = 1;
++      sl.p.hasLost = 1;
++      sl.rock = &ground.R();
++      sl.lost = &lost.R();
++      const bool ok = RunIterations(ex, static_cast<u32>(iterations), 60.0, [&](const u32, std::string& e) {
++        if (!sl.Step(ex, snow.Src().R(), snow.Dst().R(), e)) return false;
++        snow.Flip();
++        return true;
++      }, err);
++      if (!ok) return OpResult::Failed;
++      Grid gSnow = LikeOf(*src), gLost = LikeOf(*src);
++      if (!DownloadGrid(ex, snow.Src(), gSnow, err) || !DownloadGrid(ex, lost, gLost, err)) return OpResult::Failed;
++      std::map<std::string, Grid> all;
++      all["height"] = LikeOf(*src);
++      all["snow"] = LikeOf(*src);
++      all["cover"] = LikeOf(*src);
++      all["moved"] = LikeOf(*src);
++      for (std::size_t i = 0; i < n; ++i) {
++        all["height"].v[i] = src->v[i] + gSnow.v[i];
++        all["snow"].v[i] = gSnow.v[i];
++        all["cover"].v[i] = field::t7::SmoothStep(0.0f, coverDepth, gSnow.v[i]);
++        all["moved"].v[i] = Clamp01(gLost.v[i]);
++      }
++      Grid result;
++      if (!Emit(a, result, all, "height")) return OpResult::Unsupported;
++      out = std::move(result);
++      return OpResult::Done;
++    }
++
+     struct Registrar
+     {
+       Registrar()
+       {
++        RegisterGpuOp("erode_snow", &OpSnowGpu, 16384.0f);
+         RegisterGpuOp("erode_rocksoil", &OpRockSoilGpu, 16384.0f);
+         RegisterGpuOp("settle", &OpSettleGpu, 16384.0f);
+         RegisterGpuOp("thermal_map", &OpThermalMapGpu, 16384.0f);
+diff --git a/src/sdk/moho/editor/EdGpuShaders.generated.h b/src/sdk/moho/editor/EdGpuShaders.generated.h
+index 438a876..f3c515a 100644
+--- a/src/sdk/moho/editor/EdGpuShaders.generated.h
++++ b/src/sdk/moho/editor/EdGpuShaders.generated.h
+@@ -3755,6 +3755,181 @@ void CSMain(KERNEL_IDS)
+     }
+ }
+ 
++)HLSL";
++
++  // field_snowinit: 16x16x1 threads
++  inline constexpr char kSource_field_snowinit[] =
++    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
++// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
++//
++// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
++// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
++
++#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
++#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
++#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
++#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
++#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
++#define SAMPLER(name, slot) SamplerState name : register(s##slot);
++#define GROUPSHARED(T, name, n) groupshared T name[n];
++#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
++#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
++
++// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
++// live across a BARRIER, on the GPU as in the emulation).
++#define PHASES_BEGIN {
++#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
++#define PHASES_END }
++
++#define UNROLL [unroll]
++#define LOOP [loop]
++#define OUT(T) out T
++#define INOUT(T) inout T
++#define FN
++
++// Op erode_snow (EdFieldEro2.cpp OpSnow), the snow that falls before it slumps: amount * smoothstep(snowline - band, snowline + band, ground) * (1 - smoothstep(steepLo, steepHi, slope)) * mask.
++// ---- begin filt_common.hlsli
++// Helpers of the filter kernels (filt_*.hlsl). Every filter kernel has a constant buffer P that starts with  uint w, h, z0, rows;  (field size, first row and number of rows of this dispatch) and
++// reads the source field from a structured buffer. Functions that read a buffer cannot take it as an argument in the kernel subset, so they are macros that define a function for the buffer
++// whose name is given (the function reads P.w / P.h, so define it after the CBUFFER).
++#ifndef GPU_FILT_COMMON_HLSLI
++#define GPU_FILT_COMMON_HLSLI
++
++// ---- begin common.hlsli
++// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
++#ifndef GPU_COMMON_HLSLI
++#define GPU_COMMON_HLSLI
++
++// Row-major index of sample (x, z) in a field of width w.
++FN uint FieldIndex(uint x, uint z, uint w)
++{
++    return z * w + x;
++}
++
++// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
++FN int ClampIndex(int i, int n)
++{
++    return max(0, min(n - 1, i));
++}
++
++// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
++FN uint Hash32(uint x)
++{
++    x ^= x >> 16;
++    x *= 0x7feb352du;
++    x ^= x >> 15;
++    x *= 0x846ca68bu;
++    x ^= x >> 16;
++    return x;
++}
++
++// A hash as a float in 0..1 (24 bit steps, exact in float32).
++FN float HashToUnit(uint h)
++{
++    return float(h >> 8) * (1.0f / 16777216.0f);
++}
++
++#endif
++// ---- end common.hlsli
++
++// EdFieldUtil.h SmoothStep (an empty edge range is a step).
++FN float SmoothStep(float e0, float e1, float v)
++{
++    if (e1 == e0) return v < e0 ? 0.0f : 1.0f;
++    float t = saturate((v - e0) / (e1 - e0));
++    return t * t * (3.0f - 2.0f * t);
++}
++
++// BilinearC(gx, gz): bilinear sample of buffer BUF at fractional sample coordinates, clamped edges (EdFieldUtil.h BilinearC).
++#define DEFINE_BILINEAR_C(BUF)                                                                  \
++    FN float BilinearC(float gx, float gz)                                                      \
++    {                                                                                           \
++        float mx = float(P.w - 1u);                                                             \
++        float mz = float(P.h - 1u);                                                             \
++        float cx = gx < 0.0f ? 0.0f : (gx > mx ? mx : gx);                                      \
++        float cz = gz < 0.0f ? 0.0f : (gz > mz ? mz : gz);                                      \
++        int ix = int(cx);                                                                       \
++        int iz = int(cz);                                                                       \
++        if (ix >= int(P.w) - 1) ix = max(0, int(P.w) - 2);                                      \
++        if (iz >= int(P.h) - 1) iz = max(0, int(P.h) - 2);                                      \
++        float tx = cx - float(ix);                                                              \
++        float tz = cz - float(iz);                                                              \
++        int ix1 = min(int(P.w) - 1, ix + 1);                                                    \
++        int iz1 = min(int(P.h) - 1, iz + 1);                                                    \
++        uint r0 = uint(iz) * P.w;                                                               \
++        uint r1 = uint(iz1) * P.w;                                                              \
++        float a0 = BUF[r0 + uint(ix)];                                                          \
++        float a1 = BUF[r0 + uint(ix1)];                                                         \
++        float b0 = BUF[r1 + uint(ix)];                                                          \
++        float b1 = BUF[r1 + uint(ix1)];                                                         \
++        float top = a0 + (a1 - a0) * tx;                                                        \
++        float bottom = b0 + (b1 - b0) * tx;                                                     \
++        return top + (bottom - top) * tz;                                                       \
++    }
++
++// GradientAt(x, z, gx, gz): central difference gradient (rise per run, P.cell world units per sample) with clamped edges (EdFieldUtil.h GradientAt).
++#define DEFINE_GRADIENT_AT(BUF)                                                                 \
++    FN void GradientAt(int x, int z, OUT(float) gx, OUT(float) gz)                              \
++    {                                                                                           \
++        int x0 = max(0, x - 1);                                                                 \
++        int x1 = min(int(P.w) - 1, x + 1);                                                      \
++        int z0 = max(0, z - 1);                                                                 \
++        int z1 = min(int(P.h) - 1, z + 1);                                                      \
++        gx = 0.0f;                                                                              \
++        gz = 0.0f;                                                                              \
++        if (x1 > x0) gx = (BUF[uint(z) * P.w + uint(x1)] - BUF[uint(z) * P.w + uint(x0)]) / (float(x1 - x0) * P.cell); \
++        if (z1 > z0) gz = (BUF[uint(z1) * P.w + uint(x)] - BUF[uint(z0) * P.w + uint(x)]) / (float(z1 - z0) * P.cell); \
++    }
++
++#endif
++// ---- end filt_common.hlsli
++// ---- begin field_snowinit_params.hlsli
++// Constant buffer of field_snowinit.hlsl (op erode_snow).
++#ifndef GPU_FIELD_SNOWINIT_PARAMS_HLSLI
++#define GPU_FIELD_SNOWINIT_PARAMS_HLSLI
++
++struct SnowInitParams
++{
++    uint w;
++    uint h;
++    uint hasMask;
++    uint pad0;
++    float cell;
++    float amount;     // snow depth where it lies
++    float lineLo;     // snowline - band
++    float lineHi;     // snowline + band
++)HLSL"
++    R"HLSL(    float steepLo;    // no snow on ground steeper than steepLo .. steepHi (rise per run)
++    float steepHi;
++    float pad1;
++    float pad2;
++};
++
++#endif
++// ---- end field_snowinit_params.hlsli
++
++CBUFFER(SnowInitParams, P, 0)
++SRV_BUFFER(float, ground, 0)
++SRV_BUFFER(float, mask, 1)
++UAV_BUFFER(float, snow, 0)
++
++DEFINE_GRADIENT_AT(ground)
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.h) return;
++    int x = int(dtid.x);
++    int z = int(dtid.y);
++    uint i = dtid.y * P.w + dtid.x;
++    float gx;
++    float gz;
++    GradientAt(x, z, gx, gz);
++    float s = P.amount * SmoothStep(P.lineLo, P.lineHi, ground[i]) * (1.0f - SmoothStep(P.steepLo, P.steepHi, sqrt(gx * gx + gz * gz)));
++    if (P.hasMask != 0u) s *= saturate(mask[i]);
++    snow[i] = s;
++}
++
+ )HLSL";
+ 
+   // field_sub: 16x16x1 threads
+@@ -8829,6 +9004,7 @@ void CSMain(KERNEL_IDS)
+     {"field_slide_b", kSource_field_slide_b, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8F04CA29A7C94D7AULL},
+     {"field_slopelimit", kSource_field_slopelimit, "CSMain", 16u, 16u, 1u, 0xFu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2B02344E17C970CDULL},
+     {"field_slopescan", kSource_field_slopescan, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DB2A8E0930B861FULL},
++    {"field_snowinit", kSource_field_snowinit, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA15762ADF2F092ACULL},
+     {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x101759797F1D7EACULL},
+     {"field_unsharp", kSource_field_unsharp, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x51536C353B56C1BDULL},
+     {"field_weather", kSource_field_weather, "CSMain", 16u, 16u, 1u, 0x0u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xD84A62CAB2D4E35CULL},
+@@ -8852,5 +9028,5 @@ void CSMain(KERNEL_IDS)
+     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
+     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
+   };
+-  inline constexpr int kKernelCount = 46;
++  inline constexpr int kKernelCount = 47;
+ } // namespace moho::editor::gpu::shaders
+diff --git a/src/sdk/moho/editor/gpu/field_snowinit.hlsl b/src/sdk/moho/editor/gpu/field_snowinit.hlsl
+new file mode 100644
+index 0000000..fafc9ea
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_snowinit.hlsl
+@@ -0,0 +1,25 @@
++// Op erode_snow (EdFieldEro2.cpp OpSnow), the snow that falls before it slumps: amount * smoothstep(snowline - band, snowline + band, ground) * (1 - smoothstep(steepLo, steepHi, slope)) * mask.
++#include "filt_common.hlsli"
++#include "field_snowinit_params.hlsli"
++
++CBUFFER(SnowInitParams, P, 0)
++SRV_BUFFER(float, ground, 0)
++SRV_BUFFER(float, mask, 1)
++UAV_BUFFER(float, snow, 0)
++
++DEFINE_GRADIENT_AT(ground)
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.h) return;
++    int x = int(dtid.x);
++    int z = int(dtid.y);
++    uint i = dtid.y * P.w + dtid.x;
++    float gx;
++    float gz;
++    GradientAt(x, z, gx, gz);
++    float s = P.amount * SmoothStep(P.lineLo, P.lineHi, ground[i]) * (1.0f - SmoothStep(P.steepLo, P.steepHi, sqrt(gx * gx + gz * gz)));
++    if (P.hasMask != 0u) s *= saturate(mask[i]);
++    snow[i] = s;
++}
+diff --git a/src/sdk/moho/editor/gpu/field_snowinit_params.hlsli b/src/sdk/moho/editor/gpu/field_snowinit_params.hlsli
+new file mode 100644
+index 0000000..75c4452
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_snowinit_params.hlsli
+@@ -0,0 +1,21 @@
++// Constant buffer of field_snowinit.hlsl (op erode_snow).
++#ifndef GPU_FIELD_SNOWINIT_PARAMS_HLSLI
++#define GPU_FIELD_SNOWINIT_PARAMS_HLSLI
++
++struct SnowInitParams
++{
++    uint w;
++    uint h;
++    uint hasMask;
++    uint pad0;
++    float cell;
++    float amount;     // snow depth where it lies
++    float lineLo;     // snowline - band
++    float lineHi;     // snowline + band
++    float steepLo;    // no snow on ground steeper than steepLo .. steepHi (rise per run)
++    float steepHi;
++    float pad1;
++    float pad2;
++};
++
++#endif
+diff --git a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+index 03f08bb..aac51e2 100644
+--- a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
++++ b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+@@ -34,6 +34,7 @@
+ #include "moho/editor/gpu/field_edge_params.hlsli"
+ #include "moho/editor/gpu/field_morph_params.hlsli"
+ #include "moho/editor/gpu/field_slopelimit_params.hlsli"
++#include "moho/editor/gpu/field_snowinit_params.hlsli"
+ #include "moho/editor/gpu/field_slopescan_params.hlsli"
+ #include "moho/editor/gpu/field_sub_params.hlsli"
+ #include "moho/editor/gpu/field_unsharp_params.hlsli"
+@@ -83,6 +84,10 @@ EMU_KERNEL_BEGIN(k_field_weather)
+ #include "moho/editor/gpu/field_weather.hlsl"
+ EMU_KERNEL_END(field_weather)
+ 
++EMU_KERNEL_BEGIN(k_field_snowinit)
++#include "moho/editor/gpu/field_snowinit.hlsl"
++EMU_KERNEL_END(field_snowinit)
++
+ EMU_KERNEL_BEGIN(k_field_sub)
+ #include "moho/editor/gpu/field_sub.hlsl"
+ EMU_KERNEL_END(field_sub)
+@@ -574,6 +579,32 @@ static void TestRockSoil()
+   CheckDeclines("rocksoil_no_input", "erode_rocksoil", Args({}, {}, {}));
+ }
+ 
++// ---- erode_snow ------------------------------------------------------------------------------------------------------------------------------------
++
++static void TestSnow()
++{
++  const GridPtr t = TestTerrain(69, 57, 2.0f, 81, 90.0);
++  const GridPtr acc = TestMask(69, 57, 6);
++  CheckSame("snow_default", "erode_snow", Args({{"iterations", 15}}, {}, {{"a", t}}), 1e-5, nullptr, true);
++  {
++    Grid g;
++    RunGpu("erode_snow", Args({{"iterations", 15}}, {}, {{"a", t}}), g);
++    CHECK(Compare(g, *t).maxAbs > 0.5, "erode_snow puts snow on the terrain (the comparison is not vacuous)");
++  }
++  CheckSame("snow_mask", "erode_snow", Args({{"iterations", 10}, {"amount", 6.0}, {"snowline", 30.0}, {"band", 25.0}}, {}, {{"a", t}, {"mask", acc}}), 1e-5, nullptr, true);
++  for (const char* o : {"snow", "cover", "moved"}) {
++    CheckSame((std::string("snow_") + o).c_str(), "erode_snow", Args({{"iterations", 12}, {"snow_talus", 0.3}, {"steep_lo", 0.2}, {"steep_hi", 0.9}, {"cover_depth", 1.5}, {"rate", 0.8}}, {{"output", o}}, {{"a", t}}), 1e-5, nullptr, true);
++  }
++  for (const auto& sz : kOddSizes) {
++    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 70.0);
++    CheckSame(("snow_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "erode_snow", Args({{"iterations", 7}, {"snowline", 25.0}}, {}, {{"a", s}}), 1e-5, nullptr, true);
++  }
++  CheckDeclines("snow_zero_iterations", "erode_snow", Args({{"iterations", 0}}, {}, {{"a", t}}));
++  CheckDeclines("snow_bad_output", "erode_snow", Args({}, {{"output", "bogus"}}, {{"a", t}}));
++  CheckDeclines("snow_bad_mask", "erode_snow", Args({}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
++  CheckDeclines("snow_no_input", "erode_snow", Args({}, {}, {}));
++}
++
+ int main(int argc, char** argv)
+ {
+   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
+@@ -591,6 +622,7 @@ int main(int argc, char** argv)
+   TestBlurBased();
+   TestSlopeLimit();
+   TestRockSoil();
++  TestSnow();
+   gpu::SetBackendForTest(nullptr);
+   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
+   return gFailures == 0 ? 0 : 1;

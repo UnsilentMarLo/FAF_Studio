@@ -1,0 +1,757 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 12:50:27 +0000
+Subject: [PATCH] editor GPU field ops: morph (dilate, erode, open, close,
+ gradient, tophat, bothat; square as two separable passes, disc, diamond,
+ cross windows) on the GPU for windows worth the transfer; test bit equal to
+ the CPU op
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/main_ed.vcxproj b/src/sdk/main_ed.vcxproj
+index 5cb07c4..33b610d 100644
+--- a/src/sdk/main_ed.vcxproj
++++ b/src/sdk/main_ed.vcxproj
+@@ -1278,6 +1278,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClCompile Include="moho\editor\EdGpuGenFilt.cpp" />
+     <ClCompile Include="moho\editor\EdGpuErosion.cpp" />
+     <ClCompile Include="moho\editor\EdGpuFieldIter.cpp" />
++    <ClCompile Include="moho\editor\EdGpuFieldFilt.cpp" />
+     <ClCompile Include="moho\editor\EdGpuLua.cpp" />
+     <ClCompile Include="moho\editor\EdTexConv.cpp" />
+     <ClCompile Include="moho\editor\EdUnitBones.cpp" />
+diff --git a/src/sdk/moho/editor/EdGpuFieldCommon.h b/src/sdk/moho/editor/EdGpuFieldCommon.h
+new file mode 100644
+index 0000000..91b4543
+--- /dev/null
++++ b/src/sdk/moho/editor/EdGpuFieldCommon.h
+@@ -0,0 +1,59 @@
++// EDITOR GPU compute: helpers shared by the field op files (EdGpuFieldIter.cpp, EdGpuFieldFilt.cpp). Internal: no other file includes it. docs/projects/editor/GPU_COMPUTE.md, "More field ops (GP4)".
++#pragma once
++#pragma fp_contract(off)
++
++#include <map>
++
++#include "moho/editor/EdGpuGen.h"
++
++namespace moho::editor::gpu::fops
++{
++  using namespace gen;
++
++  inline float Clamp01(const float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
++
++  /** The `iterations` option the iterated CPU ops read (EdFieldEro2.cpp ItersOf). */
++  inline int ItersOf(const OpArgs& a, const int fallback, const int cap = 20000) { return std::max(0, std::min(cap, static_cast<int>(a.p.N("iterations", fallback)))); }
++
++  /** Input `a` (null = the CPU op reports the error). A `like` of another size is the CPU op's error too. */
++  inline const Grid* Source(const OpArgs& a)
++  {
++    const Grid* src = In(a, "a");
++    if (src == nullptr || src->w < 1 || src->h < 1) return nullptr;
++    if (const Grid* like = In(a, "like"); like != nullptr && !like->SameShape(*src)) return nullptr;
++    return src;
++  }
++
++  /** Like Source, and a `like` must also place the result exactly where `a` lies: ops whose CPU version takes the placement of some results from `like` and of others from `a` leave the odd case to the CPU. */
++  inline const Grid* SourceStrict(const OpArgs& a)
++  {
++    const Grid* src = Source(a);
++    if (src == nullptr) return nullptr;
++    if (const Grid* like = In(a, "like"); like != nullptr && (like->cell != src->cell || like->ox != src->ox || like->oz != src->oz)) return nullptr;
++    return src;
++  }
++
++  /** Puts the chosen result into `out` and the others into the extra outputs (EdFieldEro2.cpp Emit). false = unknown output name (the CPU op reports it). */
++  inline bool Emit(const OpArgs& a, Grid& out, std::map<std::string, Grid>& all, const char* const fallback)
++  {
++    const auto it = all.find(a.p.S("output", fallback));
++    if (it == all.end()) return false;
++    const std::string want = it->first;
++    for (auto& kv : all) {
++      if (kv.first != want && a.extra != nullptr) (*a.extra)[kv.first] = std::move(kv.second);
++    }
++    out = std::move(it->second);
++    return true;
++  }
++
++  /**
++   * Ops with a few operations per sample do not pay for the transfer: `workPerCell` is their cost in "taps" (one memory read and a compare or multiply add). The GPU version runs when
++   * it is at least kMinWork, or when ed_gpu_min_cells is 0 (the tests, and "everything on the GPU"). The registered per op minimum of samples still applies on top (TryRun).
++   */
++  inline constexpr double kMinWork = 8.0;
++  inline bool WorthIt(const double workPerCell) { return GetPolicy().minCells <= 0.0f || workPerCell >= kMinWork; }
++
++  /** An output grid placed like the source. */
++  inline Grid LikeOf(const Grid& g) { return Grid(g.w, g.h, g.cell, g.ox, g.oz); }
++
++} // namespace moho::editor::gpu::fops
+diff --git a/src/sdk/moho/editor/EdGpuFieldFilt.cpp b/src/sdk/moho/editor/EdGpuFieldFilt.cpp
+new file mode 100644
+index 0000000..a051955
+--- /dev/null
++++ b/src/sdk/moho/editor/EdGpuFieldFilt.cpp
+@@ -0,0 +1,144 @@
++// EDITOR GPU compute: GPU versions of more filter ops of the field engine (EdFieldFilt.cpp, EdFieldSc.cpp): morph, convolve, unsharp, edge, blur_slope, slope_limit ... Each op reads its options
++// exactly like the CPU op and answers Unsupported for what it does not handle (the CPU op then runs and reports bad input itself). Ops whose cost per sample is small go to the GPU only when
++// the window is big enough to pay for the transfer (fops::WorthIt). docs/projects/editor/GPU_COMPUTE.md, "More field ops (GP4)".
++#pragma fp_contract(off)
++
++#include "moho/editor/EdGpuFieldCommon.h"
++
++namespace moho::editor::gpu::hk
++{
++  using uint = std::uint32_t;
++#include "moho/editor/gpu/field_morph_params.hlsli"
++#include "moho/editor/gpu/field_sub_params.hlsli"
++} // namespace moho::editor::gpu::hk
++
++namespace moho::editor::gpu
++{
++  using namespace fops;
++
++  namespace
++  {
++    /** Window size in samples from world units (EdFieldFilt.cpp SamplesOf). */
++    inline int SamplesOf(const double units, const Grid& g, const int lo, const int hi)
++    {
++      return std::max(lo, std::min(hi, static_cast<int>(std::lround(units / static_cast<double>(g.cell)))));
++    }
++
++    // ---- morph --------------------------------------------------------------------------------------------------------------------------------------
++
++    struct MorphJob
++    {
++      Executor* ex = nullptr;
++      const KernelInfo* km = nullptr;
++      int w = 0, h = 0, r = 0, shape = 0;   // shape as the CPU op: 0 square, 1 disc, 2 cross, 3 diamond
++      double unitsPerCell = 1.0;
++
++      /** One dilation (isMax) or erosion of `in` into `out`; the square element takes `tmp` as the in-between field (two separable passes). */
++      bool Pass(const Resource& in, Resource& out, Resource& tmp, const bool isMax, std::string& err)
++      {
++        hk::MorphParams p{};
++        p.w = static_cast<std::uint32_t>(w);
++        p.h = static_cast<std::uint32_t>(h);
++        p.rad = static_cast<std::uint32_t>(r);
++        p.isMax = isMax ? 1u : 0u;
++        if (shape == 0) {
++          p.shape = 0;
++          Bindings b0;
++          b0.Srv(0, in).Uav(0, tmp);
++          if (!DispatchBands(*ex, *km, p.w, p.h, unitsPerCell, p, b0, err)) return false;
++          p.shape = 1;
++          Bindings b1;
++          b1.Srv(0, tmp).Uav(0, out);
++          return DispatchBands(*ex, *km, p.w, p.h, unitsPerCell, p, b1, err);
++        }
++        p.shape = shape == 1 ? 2u : (shape == 2 ? 4u : 3u);
++        Bindings b;
++        b.Srv(0, in).Uav(0, out);
++        return DispatchBands(*ex, *km, p.w, p.h, unitsPerCell, p, b, err);
++      }
++    };
++
++    OpResult OpMorphGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
++    {
++      const Grid* src = SourceStrict(a);
++      if (src == nullptr) return OpResult::Unsupported;
++      const std::string op = a.p.S("op", "dilate");
++      static const char* const ops[] = {"dilate", "erode", "open", "close", "gradient", "tophat", "bothat"};
++      int k = -1;
++      for (int i = 0; i < 7; ++i) {
++        if (op == ops[i]) k = i;
++      }
++      const std::string sh = a.p.S("shape", "square");
++      const int shape = sh == "square" ? 0 : (sh == "disc" ? 1 : (sh == "cross" ? 2 : (sh == "diamond" ? 3 : -1)));
++      if (k < 0 || shape < 0) return OpResult::Unsupported;   // the CPU op reports the bad name
++      const int r = SamplesOf(a.p.N("radius", 4.0), *src, 1, shape == 0 ? 32 : 16);
++      // taps of one dilation / erosion: two windows for the square, the candidate positions of the window otherwise
++      const double tapsPerPass = shape == 0 ? 2.0 * (2.0 * r + 1.0) : (shape == 2 ? 2.0 * (2.0 * r + 1.0) : (shape == 3 ? (r + 1.0) * (r + 1.0) * 2.0 : (2.0 * r + 1.0) * (2.0 * r + 1.0)));
++      const int passes = k < 2 ? 1 : 2;
++      if (!WorthIt(tapsPerPass * passes)) return OpResult::Unsupported;
++      if (!Fits(ex, src->Count(), 5)) return OpResult::Unsupported;
++      MorphJob job;
++      job.ex = &ex;
++      job.km = FindKernel("field_morph");
++      const KernelInfo* ks = FindKernel("field_sub");
++      if (job.km == nullptr || ks == nullptr) { err = "kernel field_morph / field_sub is missing"; return OpResult::Failed; }
++      job.w = src->w;
++      job.h = src->h;
++      job.r = r;
++      job.shape = shape;
++      job.unitsPerCell = tapsPerPass * 0.06;
++      Field in, t1, t2, tmp, res;
++      if (!UploadGrid(ex, *src, in, err) || !MakeField(ex, job.w, job.h, t1, err) || !MakeField(ex, job.w, job.h, t2, err) || !MakeField(ex, job.w, job.h, tmp, err) ||
++          !MakeField(ex, job.w, job.h, res, err)) {
++        return OpResult::Failed;
++      }
++      Field* result = &t1;
++      bool ok = true;
++      switch (k) {
++        case 0: ok = job.Pass(in.R(), t1.R(), tmp.R(), true, err); break;
++        case 1: ok = job.Pass(in.R(), t1.R(), tmp.R(), false, err); break;
++        case 2: ok = job.Pass(in.R(), t2.R(), tmp.R(), false, err) && job.Pass(t2.R(), t1.R(), tmp.R(), true, err); break;
++        case 3: ok = job.Pass(in.R(), t2.R(), tmp.R(), true, err) && job.Pass(t2.R(), t1.R(), tmp.R(), false, err); break;
++        default: {
++          // gradient = dilate(a) - erode(a); tophat = a - open(a); bothat = close(a) - a
++          const Resource* x = nullptr;
++          const Resource* y = nullptr;
++          if (k == 4) {
++            ok = job.Pass(in.R(), t1.R(), tmp.R(), true, err) && job.Pass(in.R(), t2.R(), tmp.R(), false, err);
++            x = &t1.R();
++            y = &t2.R();
++          } else if (k == 5) {
++            ok = job.Pass(in.R(), t1.R(), tmp.R(), false, err) && job.Pass(t1.R(), t2.R(), tmp.R(), true, err);
++            x = &in.R();
++            y = &t2.R();
++          } else {
++            ok = job.Pass(in.R(), t1.R(), tmp.R(), true, err) && job.Pass(t1.R(), t2.R(), tmp.R(), false, err);
++            x = &t2.R();
++            y = &in.R();
++          }
++          if (ok) {
++            hk::SubParams sp{};
++            sp.w = static_cast<std::uint32_t>(job.w);
++            sp.h = static_cast<std::uint32_t>(job.h);
++            Bindings b;
++            b.Srv(0, *x).Srv(1, *y).Uav(0, res.R());
++            ok = DispatchGrid(ex, *ks, sp.w, sp.h, sp, b, err);
++          }
++          result = &res;
++          break;
++        }
++      }
++      if (!ok) return OpResult::Failed;
++      Grid g = LikeOf(*src);
++      if (!DownloadGrid(ex, *result, g, err)) return OpResult::Failed;
++      out = std::move(g);
++      return OpResult::Done;
++    }
++
++    struct Registrar
++    {
++      Registrar() { RegisterGpuOp("morph", &OpMorphGpu); }
++    };
++    const Registrar gRegistrar;
++  } // namespace
++} // namespace moho::editor::gpu
+diff --git a/src/sdk/moho/editor/EdGpuFieldIter.cpp b/src/sdk/moho/editor/EdGpuFieldIter.cpp
+index 00d8061..40ebccd 100644
+--- a/src/sdk/moho/editor/EdGpuFieldIter.cpp
++++ b/src/sdk/moho/editor/EdGpuFieldIter.cpp
+@@ -3,7 +3,7 @@
+ // RunIterations: time limited submissions), so only one upload and one download cross the bus. The arithmetic is the CPU op's, in the same order. docs/projects/editor/GPU_COMPUTE.md, "More field ops (GP4)".
+ #pragma fp_contract(off)
+ 
+-#include "moho/editor/EdGpuGen.h"
++#include "moho/editor/EdGpuFieldCommon.h"
+ 
+ namespace moho::editor::gpu::hk
+ {
+@@ -14,37 +14,10 @@ namespace moho::editor::gpu::hk
+ 
+ namespace moho::editor::gpu
+ {
+-  using namespace gen;
++  using namespace fops;
+ 
+   namespace
+   {
+-    inline float Clamp01(const float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+-
+-    /** The `iterations` option the CPU ops read (EdFieldEro2.cpp ItersOf). */
+-    inline int ItersOf(const OpArgs& a, const int fallback, const int cap = 20000) { return std::max(0, std::min(cap, static_cast<int>(a.p.N("iterations", fallback)))); }
+-
+-    /** `a` and the optional same-shaped inputs: false = the CPU op reports the error (or has nothing to do). */
+-    const Grid* Source(const OpArgs& a)
+-    {
+-      const Grid* src = In(a, "a");
+-      if (src == nullptr || src->w < 1 || src->h < 1) return nullptr;
+-      if (const Grid* like = In(a, "like"); like != nullptr && !like->SameShape(*src)) return nullptr;
+-      return src;
+-    }
+-
+-    /** Puts the chosen result into `out` and the others into the extra outputs (EdFieldEro2.cpp Emit). false = unknown output name (the CPU op reports it). */
+-    bool Emit(const OpArgs& a, Grid& out, std::map<std::string, Grid>& all, const char* const fallback)
+-    {
+-      const auto it = all.find(a.p.S("output", fallback));
+-      if (it == all.end()) return false;
+-      const std::string want = it->first;
+-      for (auto& kv : all) {
+-        if (kv.first != want && a.extra != nullptr) (*a.extra)[kv.first] = std::move(kv.second);
+-      }
+-      out = std::move(it->second);
+-      return true;
+-    }
+-
+     // ---- settle -------------------------------------------------------------------------------------------------------------------------------------
+ 
+     OpResult OpSettleGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+diff --git a/src/sdk/moho/editor/EdGpuShaders.generated.h b/src/sdk/moho/editor/EdGpuShaders.generated.h
+index b289f44..aeff437 100644
+--- a/src/sdk/moho/editor/EdGpuShaders.generated.h
++++ b/src/sdk/moho/editor/EdGpuShaders.generated.h
+@@ -2451,6 +2451,152 @@ void CSMain(KERNEL_IDS)
+     next[i] = c - moved[i] + gained;
+ }
+ 
++)HLSL";
++
++  // field_morph: 16x16x1 threads
++  inline constexpr char kSource_field_morph[] =
++    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
++// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
++//
++// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
++// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
++
++#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
++#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
++#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
++#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
++#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
++#define SAMPLER(name, slot) SamplerState name : register(s##slot);
++#define GROUPSHARED(T, name, n) groupshared T name[n];
++#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
++#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
++
++// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
++// live across a BARRIER, on the GPU as in the emulation).
++#define PHASES_BEGIN {
++#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
++#define PHASES_END }
++
++#define UNROLL [unroll]
++#define LOOP [loop]
++#define OUT(T) out T
++#define INOUT(T) inout T
++#define FN
++
++// Op morph (EdFieldFilt.cpp MorphPass): one grey scale dilation (isMax) or erosion over the window of the structuring element. The square element is two separable passes (shape 0 = along x,
++// then shape 1 = along z); disc, diamond and cross read the window directly. A window that leaves the field only reads the samples inside it. Window maximum and minimum are exact, so
++// the result is bit equal to the CPU op's.
++// ---- begin common.hlsli
++// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
++#ifndef GPU_COMMON_HLSLI
++#define GPU_COMMON_HLSLI
++
++// Row-major index of sample (x, z) in a field of width w.
++FN uint FieldIndex(uint x, uint z, uint w)
++{
++    return z * w + x;
++}
++
++// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
++FN int ClampIndex(int i, int n)
++{
++    return max(0, min(n - 1, i));
++}
++
++// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
++FN uint Hash32(uint x)
++{
++    x ^= x >> 16;
++    x *= 0x7feb352du;
++    x ^= x >> 15;
++    x *= 0x846ca68bu;
++    x ^= x >> 16;
++    return x;
++}
++
++// A hash as a float in 0..1 (24 bit steps, exact in float32).
++FN float HashToUnit(uint h)
++{
++    return float(h >> 8) * (1.0f / 16777216.0f);
++}
++
++#endif
++// ---- end common.hlsli
++// ---- begin field_morph_params.hlsli
++// Constant buffer of field_morph.hlsl (op morph).
++#ifndef GPU_FIELD_MORPH_PARAMS_HLSLI
++#define GPU_FIELD_MORPH_PARAMS_HLSLI
++
++struct MorphParams
++{
++    uint w;
++    uint h;
++    uint z0;        // first row of this dispatch (banded dispatch)
++    uint rows;      // rows of this dispatch
++    uint shape;     // 0 = the row window (x), 1 = the column window (z), 2 = disc, 3 = diamond, 4 = cross
++    uint rad;       // radius in samples
++    uint isMax;     // 1 = dilation (window maximum), 0 = erosion (window minimum)
++    uint pad0;
++};
++
++#endif
++// ---- end field_morph_params.hlsli
++
++CBUFFER(MorphParams, P, 0)
++SRV_BUFFER(float, src, 0)
++UAV_BUFFER(float, dst, 0)
++
++FN float Better(float v, float best)
++{
++    if (P.isMax != 0u) return v > best ? v : best;
++    return v < best ? v : best;
++}
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.rows) return;
++    int x = int(dtid.x);
++    int z = int(dtid.y + P.z0);
++    int w = int(P.w);
++    int h = int(P.h);
++    int r = int(P.rad);
++    float best = src[uint(z) * P.w + uint(x)];
++    if (P.shape == 0u || P.shape == 4u)
++    {
++        int x0 = max(0, x - r);
++        int x1 = min(w - 1, x + r);
++        LOOP for (int xx = x0; xx <= x1; ++xx) best = Better(src[uint(z) * P.w + uint(xx)], best);
++    }
++    if (P.shape == 1u || P.shape == 4u)
++    {
++        int z0 = max(0, z - r);
++        int z1 = min(h - 1, z + r);
++        LOOP for (int zz = z0; zz <= z1; ++zz) best = Better(src[uint(zz) * P.w + uint(x)], best);
++    }
++    if (P.shape == 2u || P.shape == 3u)
++    {
++        int z0 = max(0, z - r);
++        int z1 = min(h - 1, z + r);
++        LOOP for (int zz = z0; zz <= z1; ++zz)
++        {
++            int dz = zz - z;
++            // diamond: |dx| <= r - |dz|; disc: dx^2 + dz^2 <= r^2 (the window of the row is symmetric, so the extent is found by the condition)
++            int ext = r;
++            if (P.shape == 3u) ext = r - abs(dz);
++            int x0 = max(0, x - ext);
++            int x1 = min(w - 1, x + ext);
++            LOOP for (int xx = x0; xx <= x1; ++xx)
++            {
++                int dx = xx - x;
++                if (P.shape == 2u && dx * dx + dz * dz > r * r) continue;
++                best = Better(src[uint(zz) * P.w + uint(xx)], best);
++            }
++        }
++    }
++    dst[uint(z) * P.w + uint(x)] = best;
++}
++
+ )HLSL";
+ 
+   // field_settle: 16x16x1 threads
+@@ -2957,6 +3103,68 @@ void CSMain(KERNEL_IDS)
+     if (P.hasLost != 0u) lost[i] = lost[i] + moved[i];
+ }
+ 
++)HLSL";
++
++  // field_sub: 16x16x1 threads
++  inline constexpr char kSource_field_sub[] =
++    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
++// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
++//
++// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
++// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
++
++#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
++#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
++#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
++#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
++#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
++#define SAMPLER(name, slot) SamplerState name : register(s##slot);
++#define GROUPSHARED(T, name, n) groupshared T name[n];
++#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
++#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
++
++// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
++// live across a BARRIER, on the GPU as in the emulation).
++#define PHASES_BEGIN {
++#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
++#define PHASES_END }
++
++#define UNROLL [unroll]
++#define LOOP [loop]
++#define OUT(T) out T
++#define INOUT(T) inout T
++#define FN
++
++// dst = x - y, sample by sample (the gradient, top hat and bottom hat of op morph).
++// ---- begin field_sub_params.hlsli
++// Constant buffer of field_sub.hlsl.
++#ifndef GPU_FIELD_SUB_PARAMS_HLSLI
++#define GPU_FIELD_SUB_PARAMS_HLSLI
++
++struct SubParams
++{
++    uint w;
++    uint h;
++    uint pad0;
++    uint pad1;
++};
++
++#endif
++// ---- end field_sub_params.hlsli
++
++CBUFFER(SubParams, P, 0)
++SRV_BUFFER(float, xs, 0)
++SRV_BUFFER(float, ys, 1)
++UAV_BUFFER(float, dst, 0)
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.h) return;
++    uint i = dtid.y * P.w + dtid.x;
++    dst[i] = xs[i] - ys[i];
++}
++
+ )HLSL";
+ 
+   // filt_bilateral: 16x16x1 threads
+@@ -7725,9 +7933,11 @@ void CSMain(KERNEL_IDS)
+     {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9EB04DF47EC712E6ULL},
+     {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x36C964038468BD87ULL},
+     {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xD889E54F1E4B6956ULL},
++    {"field_morph", kSource_field_morph, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x52463243DBBAAFBBULL},
+     {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x600636D24769A34FULL},
+     {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0F632EA329C10980ULL},
+     {"field_slide_b", kSource_field_slide_b, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8F04CA29A7C94D7AULL},
++    {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x101759797F1D7EACULL},
+     {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6B226CC7B6F8A9DFULL},
+     {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7E0FBD4C9A05041EULL},
+     {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x40DC1A1D6642A2D3ULL},
+@@ -7748,5 +7958,5 @@ void CSMain(KERNEL_IDS)
+     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
+     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
+   };
+-  inline constexpr int kKernelCount = 37;
++  inline constexpr int kKernelCount = 39;
+ } // namespace moho::editor::gpu::shaders
+diff --git a/src/sdk/moho/editor/gpu/field_morph.hlsl b/src/sdk/moho/editor/gpu/field_morph.hlsl
+new file mode 100644
+index 0000000..f3b24c1
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_morph.hlsl
+@@ -0,0 +1,60 @@
++// Op morph (EdFieldFilt.cpp MorphPass): one grey scale dilation (isMax) or erosion over the window of the structuring element. The square element is two separable passes (shape 0 = along x,
++// then shape 1 = along z); disc, diamond and cross read the window directly. A window that leaves the field only reads the samples inside it. Window maximum and minimum are exact, so
++// the result is bit equal to the CPU op's.
++#include "common.hlsli"
++#include "field_morph_params.hlsli"
++
++CBUFFER(MorphParams, P, 0)
++SRV_BUFFER(float, src, 0)
++UAV_BUFFER(float, dst, 0)
++
++FN float Better(float v, float best)
++{
++    if (P.isMax != 0u) return v > best ? v : best;
++    return v < best ? v : best;
++}
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.rows) return;
++    int x = int(dtid.x);
++    int z = int(dtid.y + P.z0);
++    int w = int(P.w);
++    int h = int(P.h);
++    int r = int(P.rad);
++    float best = src[uint(z) * P.w + uint(x)];
++    if (P.shape == 0u || P.shape == 4u)
++    {
++        int x0 = max(0, x - r);
++        int x1 = min(w - 1, x + r);
++        LOOP for (int xx = x0; xx <= x1; ++xx) best = Better(src[uint(z) * P.w + uint(xx)], best);
++    }
++    if (P.shape == 1u || P.shape == 4u)
++    {
++        int z0 = max(0, z - r);
++        int z1 = min(h - 1, z + r);
++        LOOP for (int zz = z0; zz <= z1; ++zz) best = Better(src[uint(zz) * P.w + uint(x)], best);
++    }
++    if (P.shape == 2u || P.shape == 3u)
++    {
++        int z0 = max(0, z - r);
++        int z1 = min(h - 1, z + r);
++        LOOP for (int zz = z0; zz <= z1; ++zz)
++        {
++            int dz = zz - z;
++            // diamond: |dx| <= r - |dz|; disc: dx^2 + dz^2 <= r^2 (the window of the row is symmetric, so the extent is found by the condition)
++            int ext = r;
++            if (P.shape == 3u) ext = r - abs(dz);
++            int x0 = max(0, x - ext);
++            int x1 = min(w - 1, x + ext);
++            LOOP for (int xx = x0; xx <= x1; ++xx)
++            {
++                int dx = xx - x;
++                if (P.shape == 2u && dx * dx + dz * dz > r * r) continue;
++                best = Better(src[uint(zz) * P.w + uint(xx)], best);
++            }
++        }
++    }
++    dst[uint(z) * P.w + uint(x)] = best;
++}
+diff --git a/src/sdk/moho/editor/gpu/field_morph_params.hlsli b/src/sdk/moho/editor/gpu/field_morph_params.hlsli
+new file mode 100644
+index 0000000..7a051dc
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_morph_params.hlsli
+@@ -0,0 +1,17 @@
++// Constant buffer of field_morph.hlsl (op morph).
++#ifndef GPU_FIELD_MORPH_PARAMS_HLSLI
++#define GPU_FIELD_MORPH_PARAMS_HLSLI
++
++struct MorphParams
++{
++    uint w;
++    uint h;
++    uint z0;        // first row of this dispatch (banded dispatch)
++    uint rows;      // rows of this dispatch
++    uint shape;     // 0 = the row window (x), 1 = the column window (z), 2 = disc, 3 = diamond, 4 = cross
++    uint rad;       // radius in samples
++    uint isMax;     // 1 = dilation (window maximum), 0 = erosion (window minimum)
++    uint pad0;
++};
++
++#endif
+diff --git a/src/sdk/moho/editor/gpu/field_sub.hlsl b/src/sdk/moho/editor/gpu/field_sub.hlsl
+new file mode 100644
+index 0000000..7e023ab
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_sub.hlsl
+@@ -0,0 +1,15 @@
++// dst = x - y, sample by sample (the gradient, top hat and bottom hat of op morph).
++#include "field_sub_params.hlsli"
++
++CBUFFER(SubParams, P, 0)
++SRV_BUFFER(float, xs, 0)
++SRV_BUFFER(float, ys, 1)
++UAV_BUFFER(float, dst, 0)
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.h) return;
++    uint i = dtid.y * P.w + dtid.x;
++    dst[i] = xs[i] - ys[i];
++}
+diff --git a/src/sdk/moho/editor/gpu/field_sub_params.hlsli b/src/sdk/moho/editor/gpu/field_sub_params.hlsli
+new file mode 100644
+index 0000000..040aed4
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_sub_params.hlsli
+@@ -0,0 +1,13 @@
++// Constant buffer of field_sub.hlsl.
++#ifndef GPU_FIELD_SUB_PARAMS_HLSLI
++#define GPU_FIELD_SUB_PARAMS_HLSLI
++
++struct SubParams
++{
++    uint w;
++    uint h;
++    uint pad0;
++    uint pad1;
++};
++
++#endif
+diff --git a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+index 78e9222..fa98cfd 100644
+--- a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
++++ b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+@@ -29,6 +29,8 @@
+ #include "moho/editor/gpu/filt_common.hlsli"
+ #include "moho/editor/gpu/field_settle_params.hlsli"
+ #include "moho/editor/gpu/field_slide_params.hlsli"
++#include "moho/editor/gpu/field_morph_params.hlsli"
++#include "moho/editor/gpu/field_sub_params.hlsli"
+ 
+ EMU_KERNEL_BEGIN(k_field_settle)
+ #include "moho/editor/gpu/field_settle.hlsl"
+@@ -42,6 +44,14 @@ EMU_KERNEL_BEGIN(k_field_slide_b)
+ #include "moho/editor/gpu/field_slide_b.hlsl"
+ EMU_KERNEL_END(field_slide_b)
+ 
++EMU_KERNEL_BEGIN(k_field_morph)
++#include "moho/editor/gpu/field_morph.hlsl"
++EMU_KERNEL_END(field_morph)
++
++EMU_KERNEL_BEGIN(k_field_sub)
++#include "moho/editor/gpu/field_sub.hlsl"
++EMU_KERNEL_END(field_sub)
++
+ // the Gaussian blur of the foundation (EdGpuOps.cpp BlurFieldDevice) and its mask blend run their kernels here too
+ EMU_KERNEL_BEGIN(k_blur_pass)
+ #include "moho/editor/gpu/blur_pass.hlsl"
+@@ -259,6 +269,56 @@ static void TestThermalMap()
+   CheckDeclines("thermal_bad_mask", "thermal_map", Args({}, {}, {{"a", t}, {"mask", TestMask(10, 10, 1)}}));
+ }
+ 
++// ---- morph -----------------------------------------------------------------------------------------------------------------------------------------
++
++static void TestMorph()
++{
++  const GridPtr t = TestTerrain(61, 47, 2.0f, 31, 50.0);
++  for (const char* op : {"dilate", "erode", "open", "close", "gradient", "tophat", "bothat"}) {
++    for (const char* shape : {"square", "disc", "cross", "diamond"}) {
++      const std::string label = std::string("morph_") + op + "_" + shape;
++      CheckSame(label.c_str(), "morph", Args({{"radius", 7.0}}, {{"op", op}, {"shape", shape}}, {{"a", t}}), 0.0);
++    }
++  }
++  {
++    Grid g;
++    RunGpu("morph", Args({{"radius", 8.0}}, {{"op", "dilate"}, {"shape", "disc"}}, {{"a", t}}), g);
++    CHECK(Compare(g, *t).maxAbs > 1.0, "morph changes the terrain (the comparison is not vacuous)");
++  }
++  // radii: 1 sample, the clamp (square 32 samples, others 16), a window larger than the field
++  for (const double rad : {0.1, 2.0, 40.0, 500.0}) {
++    for (const char* shape : {"square", "disc", "diamond", "cross"}) {
++      CheckSame((std::string("morph_r") + std::to_string(static_cast<int>(rad)) + "_" + shape).c_str(), "morph", Args({{"radius", rad}}, {{"op", "open"}, {"shape", shape}}, {{"a", t}}), 0.0);
++    }
++  }
++  for (const auto& sz : kOddSizes) {
++    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
++    for (const char* shape : {"square", "disc"}) {
++      CheckSame(("morph_" + std::to_string(sz.first) + "x" + std::to_string(sz.second) + "_" + shape).c_str(), "morph", Args({{"radius", 5.0}}, {{"op", "gradient"}, {"shape", shape}}, {{"a", s}}), 0.0);
++    }
++  }
++  // placement: dilate keeps the source's, a `like` with the same placement is fine, another placement is left to the CPU
++  CheckSame("morph_like", "morph", Args({{"radius", 4.0}}, {{"op", "gradient"}}, {{"a", t}, {"like", t}}), 0.0);
++  auto moved = std::make_shared<Grid>(*t);
++  moved->ox += 5.0f;
++  CheckDeclines("morph_like_other_placement", "morph", Args({{"radius", 4.0}}, {{"op", "tophat"}}, {{"a", t}, {"like", moved}}));
++  CheckDeclines("morph_bad_op", "morph", Args({}, {{"op", "bogus"}}, {{"a", t}}));
++  CheckDeclines("morph_bad_shape", "morph", Args({}, {{"shape", "bogus"}}, {{"a", t}}));
++  CheckDeclines("morph_no_input", "morph", Args({}, {}, {}));
++  // a tiny window on the default policy stays on the CPU (the transfer costs more than the work); a big one does not
++  {
++    gpu::GetPolicy().minCells = 65536.0f;
++    const GridPtr big = TestTerrain(300, 300, 1.0f, 3, 30.0);
++    Grid g;
++    bool onGpu = true;
++    RunGpu("morph", Args({{"radius", 1.0}}, {{"op", "dilate"}, {"shape", "cross"}}, {{"a", big}}), g, &onGpu);
++    CHECK(!onGpu, "morph with a 3 sample cross stays on the CPU on the default policy");
++    RunGpu("morph", Args({{"radius", 6.0}}, {{"op", "dilate"}, {"shape", "disc"}}, {{"a", big}}), g, &onGpu);
++    CHECK(onGpu, "morph with a 13 sample disc goes to the GPU on the default policy");
++    gpu::GetPolicy().minCells = 0.0f;
++  }
++}
++
+ int main(int argc, char** argv)
+ {
+   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
+@@ -271,6 +331,7 @@ int main(int argc, char** argv)
+   field::SetThreads(4);
+   TestSettle();
+   TestThermalMap();
++  TestMorph();
+   gpu::SetBackendForTest(nullptr);
+   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
+   return gFailures == 0 ? 0 : 1;

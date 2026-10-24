@@ -1,0 +1,436 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 12:51:58 +0000
+Subject: [PATCH] editor GPU field ops: convolve (n x n kernels up to 15, clamp
+ / wrap / mirror edges, scale / bias / normalise) on the GPU; test bit equal
+ to the CPU op
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdGpuFieldFilt.cpp b/src/sdk/moho/editor/EdGpuFieldFilt.cpp
+index a051955..5a8cd1a 100644
+--- a/src/sdk/moho/editor/EdGpuFieldFilt.cpp
++++ b/src/sdk/moho/editor/EdGpuFieldFilt.cpp
+@@ -3,11 +3,13 @@
+ // the window is big enough to pay for the transfer (fops::WorthIt). docs/projects/editor/GPU_COMPUTE.md, "More field ops (GP4)".
+ #pragma fp_contract(off)
+ 
++#include "moho/editor/EdFieldUtil.h"
+ #include "moho/editor/EdGpuFieldCommon.h"
+ 
+ namespace moho::editor::gpu::hk
+ {
+   using uint = std::uint32_t;
++#include "moho/editor/gpu/field_convolve_params.hlsli"
+ #include "moho/editor/gpu/field_morph_params.hlsli"
+ #include "moho/editor/gpu/field_sub_params.hlsli"
+ } // namespace moho::editor::gpu::hk
+@@ -135,9 +137,53 @@ namespace moho::editor::gpu
+       return OpResult::Done;
+     }
+ 
++    // ---- convolve -----------------------------------------------------------------------------------------------------------------------------------
++
++    OpResult OpConvolveGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
++    {
++      const Grid* src = Source(a);
++      const std::vector<double>* kv = a.p.A("kernel");
++      Shape shape;
++      if (src == nullptr || kv == nullptr || kv->empty() || !ShapeOf(a, shape)) return OpResult::Unsupported;
++      const int n = static_cast<int>(std::lround(std::sqrt(static_cast<double>(kv->size()))));
++      if (n * n != static_cast<int>(kv->size()) || n % 2 == 0 || n > 15) return OpResult::Unsupported;   // the CPU op reports the bad kernel
++      if (!WorthIt(static_cast<double>(n) * n) || !Fits(ex, src->Count(), 2)) return OpResult::Unsupported;
++      std::vector<float> k(kv->size());
++      double sum = 0.0;
++      for (std::size_t i = 0; i < k.size(); ++i) {
++        k[i] = static_cast<float>((*kv)[i]);
++        sum += static_cast<double>(k[i]);
++      }
++      float mul = static_cast<float>(a.p.N("scale", 1.0));
++      if (a.p.N("normalize", 1) != 0 && std::fabs(sum) > 1e-6) mul /= static_cast<float>(sum);
++      hk::ConvolveParams p{};
++      p.w = static_cast<std::uint32_t>(src->w);
++      p.h = static_cast<std::uint32_t>(src->h);
++      p.n = static_cast<std::uint32_t>(n);
++      p.edge = static_cast<std::uint32_t>(field::t7::ParseEdge(a, field::t7::kClamp));
++      p.mul = mul;
++      p.bias = static_cast<float>(a.p.N("bias", 0.0));
++      const KernelInfo* kc = FindKernel("field_convolve");
++      if (kc == nullptr) { err = "kernel field_convolve is missing"; return OpResult::Failed; }
++      Field in, res;
++      std::unique_ptr<Resource> kbuf;
++      if (!UploadGrid(ex, *src, in, err) || !MakeField(ex, src->w, src->h, res, err) || !UploadVec(ex, k, kbuf, err)) return OpResult::Failed;
++      Bindings b;
++      b.Srv(0, in.R()).Srv(1, *kbuf).Uav(0, res.R());
++      if (!DispatchBands(ex, *kc, p.w, p.h, static_cast<double>(n) * n * 0.05, p, b, err)) return OpResult::Failed;
++      Grid g = NewGrid(shape);   // placed like the CPU op places it (`like`, else `a`)
++      if (!DownloadGrid(ex, res, g, err)) return OpResult::Failed;
++      out = std::move(g);
++      return OpResult::Done;
++    }
++
+     struct Registrar
+     {
+-      Registrar() { RegisterGpuOp("morph", &OpMorphGpu); }
++      Registrar()
++      {
++        RegisterGpuOp("morph", &OpMorphGpu);
++        RegisterGpuOp("convolve", &OpConvolveGpu);
++      }
+     };
+     const Registrar gRegistrar;
+   } // namespace
+diff --git a/src/sdk/moho/editor/EdGpuShaders.generated.h b/src/sdk/moho/editor/EdGpuShaders.generated.h
+index aeff437..fa6bd20 100644
+--- a/src/sdk/moho/editor/EdGpuShaders.generated.h
++++ b/src/sdk/moho/editor/EdGpuShaders.generated.h
+@@ -2451,6 +2451,147 @@ void CSMain(KERNEL_IDS)
+     next[i] = c - moved[i] + gained;
+ }
+ 
++)HLSL";
++
++  // field_convolve: 16x16x1 threads
++  inline constexpr char kSource_field_convolve[] =
++    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
++// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
++//
++// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
++// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
++
++#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
++#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
++#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
++#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
++#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
++#define SAMPLER(name, slot) SamplerState name : register(s##slot);
++#define GROUPSHARED(T, name, n) groupshared T name[n];
++#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
++#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
++
++// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
++// live across a BARRIER, on the GPU as in the emulation).
++#define PHASES_BEGIN {
++#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
++#define PHASES_END }
++
++#define UNROLL [unroll]
++#define LOOP [loop]
++#define OUT(T) out T
++#define INOUT(T) inout T
++#define FN
++
++// Op convolve (EdFieldFilt.cpp OpConvolve): out(x, z) = bias + mul * sum over the n x n kernel of k[j * n + i] * src(x + i - r, z + j - r), edges clamp / wrap / mirror. The taps are added
++// in the CPU op's order (rows j outside, i inside), so the result matches it bit for bit when the compiler does not fuse multiply and add.
++// ---- begin common.hlsli
++// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
++#ifndef GPU_COMMON_HLSLI
++#define GPU_COMMON_HLSLI
++
++// Row-major index of sample (x, z) in a field of width w.
++FN uint FieldIndex(uint x, uint z, uint w)
++{
++    return z * w + x;
++}
++
++// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
++FN int ClampIndex(int i, int n)
++{
++    return max(0, min(n - 1, i));
++}
++
++// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
++FN uint Hash32(uint x)
++{
++    x ^= x >> 16;
++    x *= 0x7feb352du;
++    x ^= x >> 15;
++    x *= 0x846ca68bu;
++    x ^= x >> 16;
++    return x;
++}
++
++// A hash as a float in 0..1 (24 bit steps, exact in float32).
++FN float HashToUnit(uint h)
++{
++    return float(h >> 8) * (1.0f / 16777216.0f);
++}
++
++#endif
++// ---- end common.hlsli
++// ---- begin field_convolve_params.hlsli
++// Constant buffer of field_convolve.hlsl (op convolve).
++#ifndef GPU_FIELD_CONVOLVE_PARAMS_HLSLI
++#define GPU_FIELD_CONVOLVE_PARAMS_HLSLI
++
++struct ConvolveParams
++{
++    uint w;
++    uint h;
++    uint z0;        // first row of this dispatch (banded dispatch)
++    uint rows;
++    uint n;         // the kernel is n x n (n odd)
++    uint edge;      // 0 clamp, 1 wrap, 2 mirror
++    uint pad0;
++    uint pad1;
++    float mul;      // scale (divided by the kernel sum when normalising)
++    float bias;
++    float pad2;
++    float pad3;
++};
++
++#endif
++// ---- end field_convolve_params.hlsli
++
++CBUFFER(ConvolveParams, P, 0)
++SRV_BUFFER(float, src, 0)
++SRV_BUFFER(float, kern, 1)
++UAV_BUFFER(float, dst, 0)
++
++FN int WrapIdx(int i, int n)
++{
++    int m = i % n;
++    return m < 0 ? m + n : m;
++}
++
++FN int EdgeIdx(int i, int n)
++{
++    if (P.edge == 1u) return WrapIdx(i, n);
++    if (P.edge == 2u)
++    {
++        if (n == 1) return 0;
++        int period = 2 * (n - 1);
++        int m = WrapIdx(i, period);
++        return m < n ? m : period - m;
++    }
++    return i < 0 ? 0 : (i >= n ? n - 1 : i);
++}
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.rows) return;
++    int x = int(dtid.x);
++    int z = int(dtid.y + P.z0);
++    int w = int(P.w);
++    int h = int(P.h);
++    int n = int(P.n);
++    int r = n / 2;
++    float acc = 0.0f;
++    LOOP for (int j = 0; j < n; ++j)
++    {
++        int zz = EdgeIdx(z + j - r, h);
++        LOOP for (int i = 0; i < n; ++i)
++        {
++            int xx = EdgeIdx(x + i - r, w);
++            acc += kern[j * n + i] * src[uint(zz) * P.w + uint(xx)];
++        }
++    }
++    dst[uint(z) * P.w + uint(x)] = acc * P.mul + P.bias;
++}
++
+ )HLSL";
+ 
+   // field_morph: 16x16x1 threads
+@@ -7933,6 +8074,7 @@ void CSMain(KERNEL_IDS)
+     {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9EB04DF47EC712E6ULL},
+     {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x36C964038468BD87ULL},
+     {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xD889E54F1E4B6956ULL},
++    {"field_convolve", kSource_field_convolve, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2D14850FD687FA27ULL},
+     {"field_morph", kSource_field_morph, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x52463243DBBAAFBBULL},
+     {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x600636D24769A34FULL},
+     {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0F632EA329C10980ULL},
+@@ -7958,5 +8100,5 @@ void CSMain(KERNEL_IDS)
+     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
+     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
+   };
+-  inline constexpr int kKernelCount = 39;
++  inline constexpr int kKernelCount = 40;
+ } // namespace moho::editor::gpu::shaders
+diff --git a/src/sdk/moho/editor/gpu/field_convolve.hlsl b/src/sdk/moho/editor/gpu/field_convolve.hlsl
+new file mode 100644
+index 0000000..ab5b84e
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_convolve.hlsl
+@@ -0,0 +1,51 @@
++// Op convolve (EdFieldFilt.cpp OpConvolve): out(x, z) = bias + mul * sum over the n x n kernel of k[j * n + i] * src(x + i - r, z + j - r), edges clamp / wrap / mirror. The taps are added
++// in the CPU op's order (rows j outside, i inside), so the result matches it bit for bit when the compiler does not fuse multiply and add.
++#include "common.hlsli"
++#include "field_convolve_params.hlsli"
++
++CBUFFER(ConvolveParams, P, 0)
++SRV_BUFFER(float, src, 0)
++SRV_BUFFER(float, kern, 1)
++UAV_BUFFER(float, dst, 0)
++
++FN int WrapIdx(int i, int n)
++{
++    int m = i % n;
++    return m < 0 ? m + n : m;
++}
++
++FN int EdgeIdx(int i, int n)
++{
++    if (P.edge == 1u) return WrapIdx(i, n);
++    if (P.edge == 2u)
++    {
++        if (n == 1) return 0;
++        int period = 2 * (n - 1);
++        int m = WrapIdx(i, period);
++        return m < n ? m : period - m;
++    }
++    return i < 0 ? 0 : (i >= n ? n - 1 : i);
++}
++
++NUMTHREADS(16, 16, 1)
++void CSMain(KERNEL_IDS)
++{
++    if (dtid.x >= P.w || dtid.y >= P.rows) return;
++    int x = int(dtid.x);
++    int z = int(dtid.y + P.z0);
++    int w = int(P.w);
++    int h = int(P.h);
++    int n = int(P.n);
++    int r = n / 2;
++    float acc = 0.0f;
++    LOOP for (int j = 0; j < n; ++j)
++    {
++        int zz = EdgeIdx(z + j - r, h);
++        LOOP for (int i = 0; i < n; ++i)
++        {
++            int xx = EdgeIdx(x + i - r, w);
++            acc += kern[j * n + i] * src[uint(zz) * P.w + uint(xx)];
++        }
++    }
++    dst[uint(z) * P.w + uint(x)] = acc * P.mul + P.bias;
++}
+diff --git a/src/sdk/moho/editor/gpu/field_convolve_params.hlsli b/src/sdk/moho/editor/gpu/field_convolve_params.hlsli
+new file mode 100644
+index 0000000..7a4be4e
+--- /dev/null
++++ b/src/sdk/moho/editor/gpu/field_convolve_params.hlsli
+@@ -0,0 +1,21 @@
++// Constant buffer of field_convolve.hlsl (op convolve).
++#ifndef GPU_FIELD_CONVOLVE_PARAMS_HLSLI
++#define GPU_FIELD_CONVOLVE_PARAMS_HLSLI
++
++struct ConvolveParams
++{
++    uint w;
++    uint h;
++    uint z0;        // first row of this dispatch (banded dispatch)
++    uint rows;
++    uint n;         // the kernel is n x n (n odd)
++    uint edge;      // 0 clamp, 1 wrap, 2 mirror
++    uint pad0;
++    uint pad1;
++    float mul;      // scale (divided by the kernel sum when normalising)
++    float bias;
++    float pad2;
++    float pad3;
++};
++
++#endif
+diff --git a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+index fa98cfd..ae73f65 100644
+--- a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
++++ b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+@@ -29,6 +29,7 @@
+ #include "moho/editor/gpu/filt_common.hlsli"
+ #include "moho/editor/gpu/field_settle_params.hlsli"
+ #include "moho/editor/gpu/field_slide_params.hlsli"
++#include "moho/editor/gpu/field_convolve_params.hlsli"
+ #include "moho/editor/gpu/field_morph_params.hlsli"
+ #include "moho/editor/gpu/field_sub_params.hlsli"
+ 
+@@ -44,6 +45,10 @@ EMU_KERNEL_BEGIN(k_field_slide_b)
+ #include "moho/editor/gpu/field_slide_b.hlsl"
+ EMU_KERNEL_END(field_slide_b)
+ 
++EMU_KERNEL_BEGIN(k_field_convolve)
++#include "moho/editor/gpu/field_convolve.hlsl"
++EMU_KERNEL_END(field_convolve)
++
+ EMU_KERNEL_BEGIN(k_field_morph)
+ #include "moho/editor/gpu/field_morph.hlsl"
+ EMU_KERNEL_END(field_morph)
+@@ -319,6 +324,70 @@ static void TestMorph()
+   }
+ }
+ 
++// ---- convolve --------------------------------------------------------------------------------------------------------------------------------------
++
++static OpArgs ConvArgs(const std::vector<double>& k, const GridPtr& a, Num n = {}, Str s = {})
++{
++  OpArgs args = Args(n, s, {{"a", a}});
++  args.p.arr["kernel"] = k;
++  return args;
++}
++
++static void TestConvolve()
++{
++  const GridPtr t = TestTerrain(53, 41, 2.0f, 41, 50.0);
++  const std::vector<double> sharp = {0, -1, 0, -1, 5, -1, 0, -1, 0};
++  const std::vector<double> edge = {-1, -1, -1, -1, 8, -1, -1, -1, -1};
++  const std::vector<double> asym = {1, 2, 3, 0, 1, 0, -2, 0, 4};
++  std::vector<double> big(225), mid(25);
++  for (std::size_t i = 0; i < big.size(); ++i) big[i] = 1.0 + static_cast<double>((i * 7) % 5) - 0.5 * static_cast<double>(i % 3);
++  for (std::size_t i = 0; i < mid.size(); ++i) mid[i] = std::exp(-0.1 * static_cast<double>((i / 5 - 2) * (i / 5 - 2) + (i % 5 - 2) * (i % 5 - 2)));
++  for (const char* e : {"clamp", "wrap", "mirror", ""}) {
++    const Str es = {{"edge", e}};
++    CheckSame((std::string("convolve_sharp_") + e).c_str(), "convolve", ConvArgs(sharp, t, {}, es), 0.0);
++    CheckSame((std::string("convolve_asym_") + e).c_str(), "convolve", ConvArgs(asym, t, {{"scale", 1.5}, {"bias", -2.0}}, es), 0.0);
++    CheckSame((std::string("convolve_edge_") + e).c_str(), "convolve", ConvArgs(edge, t, {{"normalize", 0}}, es), 0.0);
++    CheckSame((std::string("convolve_5_") + e).c_str(), "convolve", ConvArgs(mid, t, {}, es), 0.0);
++    CheckSame((std::string("convolve_15_") + e).c_str(), "convolve", ConvArgs(big, t, {{"scale", 0.5}}, es), 0.0);
++  }
++  {
++    Grid g;
++    RunGpu("convolve", ConvArgs(edge, t, {{"normalize", 0}}), g);
++    CHECK(Compare(g, *t).maxAbs > 1.0, "convolve changes the terrain (the comparison is not vacuous)");
++  }
++  CheckSame("convolve_1x1_kernel", "convolve", ConvArgs({2.0}, t, {{"bias", 1.0}}), 0.0);   // a 1 x 1 kernel is below the work limit on the default policy only
++  for (const auto& sz : kOddSizes) {
++    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
++    for (const char* e : {"clamp", "wrap", "mirror"}) {
++      CheckSame(("convolve_" + std::to_string(sz.first) + "x" + std::to_string(sz.second) + "_" + e).c_str(), "convolve", ConvArgs(mid, s, {}, {{"edge", e}}), 0.0);
++    }
++  }
++  {
++    auto like = std::make_shared<Grid>(*t);   // the result is placed like `like`
++    like->ox = 100.0f;
++    like->cell = 3.0f;
++    OpArgs args = ConvArgs(sharp, t);
++    args.in["like"] = like;
++    CheckSame("convolve_like", "convolve", args, 0.0);
++  }
++  CheckDeclines("convolve_even_kernel", "convolve", ConvArgs({1, 2, 3, 4}, t));
++  CheckDeclines("convolve_not_square", "convolve", ConvArgs({1, 2, 3, 4, 5, 6, 7, 8}, t));
++  CheckDeclines("convolve_too_big", "convolve", ConvArgs(std::vector<double>(289, 1.0), t));
++  CheckDeclines("convolve_no_kernel", "convolve", Args({}, {}, {{"a", t}}));
++  CheckDeclines("convolve_no_input", "convolve", Args({}, {}, {}));
++  {
++    gpu::GetPolicy().minCells = 65536.0f;
++    const GridPtr bigf = TestTerrain(300, 300, 1.0f, 3, 30.0);
++    Grid g;
++    bool onGpu = true;
++    RunGpu("convolve", ConvArgs({0, 1, 0, 1, 1, 1, 0, 1, 0}, bigf), g, &onGpu);
++    CHECK(onGpu, "a 3 x 3 convolution goes to the GPU on the default policy");
++    RunGpu("convolve", ConvArgs({1.0}, bigf), g, &onGpu);
++    CHECK(!onGpu, "a 1 x 1 kernel stays on the CPU on the default policy");
++    gpu::GetPolicy().minCells = 0.0f;
++  }
++}
++
+ int main(int argc, char** argv)
+ {
+   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
+@@ -332,6 +401,7 @@ int main(int argc, char** argv)
+   TestSettle();
+   TestThermalMap();
+   TestMorph();
++  TestConvolve();
+   gpu::SetBackendForTest(nullptr);
+   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
+   return gFailures == 0 ? 0 : 1;

@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 12:45:46 +0000
+Subject: [PATCH] editor GPU: MaskBind / BindMask move to EdGpuGen.h (shared by
+ the filter op files)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdGpuGen.h b/src/sdk/moho/editor/EdGpuGen.h
+index ccbc6c4..f63ec7d 100644
+--- a/src/sdk/moho/editor/EdGpuGen.h
++++ b/src/sdk/moho/editor/EdGpuGen.h
+@@ -74,6 +74,25 @@ namespace moho::editor::gpu::gen
+     return MakeBuffer(ex, static_cast<u32>(src->size()), out, err) && UploadBuffer(ex, *out, src->data(), src->size() * sizeof(T), err);
+   }
+ 
++  /** The optional `mask` input as a field (or a one element dummy: every slot a kernel declares must be bound). */
++  struct MaskBind
++  {
++    Field field;
++    std::unique_ptr<Resource> dummy;
++    bool has = false;
++    [[nodiscard]] const Resource& R() const { return has ? field.R() : *dummy; }
++  };
++
++  [[nodiscard]] inline bool BindMask(Executor& ex, const OpArgs& a, MaskBind& m, std::string& err)
++  {
++    if (const Grid* g = In(a, "mask"); g != nullptr) {
++      m.has = true;
++      return UploadGrid(ex, *g, m.field, err);
++    }
++    const float zero = 0.0f;
++    return MakeBuffer(ex, 1, m.dummy, err) && UploadBuffer(ex, *m.dummy, &zero, 4, err);
++  }
++
+   /** One dispatch of `unitsPerCell` * cells "octave evaluations" at most this big (a few ms on a discrete card, well below the 2 second driver reset on a weak one). */
+   inline constexpr double kBandUnits = 2.5e7;
+ 
+diff --git a/src/sdk/moho/editor/EdGpuGenFilt.cpp b/src/sdk/moho/editor/EdGpuGenFilt.cpp
+index 9b01cf1..4c91061 100644
+--- a/src/sdk/moho/editor/EdGpuGenFilt.cpp
++++ b/src/sdk/moho/editor/EdGpuGenFilt.cpp
+@@ -98,25 +98,6 @@ namespace moho::editor::gpu
+       return Finish(ex, j, out, err);
+     }
+ 
+-    /** The optional `mask` input as a field (or a one element dummy: every slot a kernel declares must be bound). */
+-    struct MaskBind
+-    {
+-      Field field;
+-      std::unique_ptr<Resource> dummy;
+-      bool has = false;
+-      [[nodiscard]] const Resource& R() const { return has ? field.R() : *dummy; }
+-    };
+-
+-    bool BindMask(Executor& ex, const OpArgs& a, MaskBind& m, std::string& err)
+-    {
+-      if (const Grid* g = In(a, "mask"); g != nullptr) {
+-        m.has = true;
+-        return UploadGrid(ex, *g, m.field, err);
+-      }
+-      const float zero = 0.0f;
+-      return MakeBuffer(ex, 1, m.dummy, err) && UploadBuffer(ex, *m.dummy, &zero, 4, err);
+-    }
+-
+     // ---- bilateral ----------------------------------------------------------------------------------------------------------------------------------
+ 
+     OpResult OpBilateralGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
