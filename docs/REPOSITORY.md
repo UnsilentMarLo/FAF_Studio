@@ -22,6 +22,8 @@ docs/projects/editor/          design documents, QA reports, packaging / release
 3. Lay buttons out with `W.Flow` (rows that wrap at the panel's width). The nightly's `layout` step (`layoutcheck.lua`) fails when a widget runs past its panel or overlaps another.
 4. `python scripts/studio.py check` before every commit; `python scripts/editor_nightly.py --tag <own tag> --skip stress` for a thorough run.
 
+**Taking over from a cloud session:** read `docs/projects/editor/LOCAL_HANDOFF_2026-10.md` (what is unverified, what to run first).
+
 ## Parallel feature branches
 
 `python scripts/editor_merge.py new <name>` makes a worktree `.claude/worktrees/ed-<name>` on branch `ed/<name>`; `try <name> --test` merges it into an integration tree and runs the
