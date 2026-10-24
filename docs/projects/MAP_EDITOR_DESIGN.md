@@ -706,7 +706,7 @@ The engine rates slope in two ways, both read from its own code and computed nat
   are air units: no effect.)
 - **Structures** (two rules, picked by the blueprint's `Physics.FlattenSkirt`; **2026-10-23**, details and data in `editor/SLOPE_VIEW.md`): buildings with `FlattenSkirt = true` (nearly all of
   them) are checked with `OCCUPY_CheckEdgeFlatness` (0x00564F80): only the 1-cell ring around the skirt, against a pivot of `ceil(last ring sample)` (native kind `ring`);
-  the others (extractors, walls, point defence, radar, naval factories) with `OCCUPY_CheckAreaFlatness`: highest minus lowest over the skirt (native kind `build`). Both
+  the others (point defence, radar, naval factories; extractors and walls ignore slope) with `OCCUPY_CheckAreaFlatness`: highest minus lowest over the skirt (native kind `build`). Both
   against `Physics.MaxGroundVariation`: 1.1 for most buildings, 1.0 when unspecified (the engine's constructor default), 1.2 for a few; walls (50) and extractors /
   hydrocarbon plants (512) ignore slope. The skirt is N x N cells = N + 1 samples per side (rect x0 .. x0 + N inclusive, as `OCCUPY_Check` truncates it); the View panel
   has a skirt size slider over the sizes real blueprints have (not one setting per blueprint).

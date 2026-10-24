@@ -76,7 +76,7 @@ WaterLand 1x1 .. 4x4; the bigger ones (Water 8x8, 11x11, SurfacingSub 12x12) are
 
 ## What the panel does (View panel, "Slope shows")
 
-- Mobile units / Structures buttons. Structures: **Rule** toggles `Buildings (ring)` (default; native kind `ring`) and `Area (extractors, walls)` (native kind `build`), a
+- Mobile units / Structures buttons. Structures: **Rule** toggles `Buildings (ring)` (default; native kind `ring`) and `Not levelled (radar, defence)` (renamed from "Area (extractors, walls)": extractors and walls ignore slope) (native kind `build`), a
   **Skirt size (cells)** slider (a W.Slider over the stops: bar, - / + step to the neighbouring stop, a typed number goes to the nearest), a **Limit** slider, and under the
   legend a line with the structures that have this skirt size, the explanation of the selected rule and the note "Walls (50) and extractors (512) ignore slope."
 - Mobile units: the **Footprint (cells)** slider. The choices (skirt, footprint, rule, limits) are remembered in the user settings (`slope.*`, `userdata.lua`).

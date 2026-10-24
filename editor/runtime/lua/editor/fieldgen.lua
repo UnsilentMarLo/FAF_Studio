@@ -60,19 +60,19 @@ end
 
 Presets = {
     { id = 'hills', label = 'Hills', scale = 140, amplitude = 18, gullies = 0, warp = 0.5, detail = 0.5,
-      tip = 'Rolling hills: rounded hills and broad swells with a little warp, gentle slopes.',
+      tip = 'Rolling hills: rounded hills and broad swells with a little warp, gentle slopes. Fine detail is damped on the steep ground, so the slopes stay smooth like worn land.',
       build = function(S, like, p)
-          local a = Fractal(S, like, p, 0, { scale = p.scale, kind = 'billow', persistence = 0.42, warp = p.warp * 0.2 * p.scale })
-          local b = Fractal(S, like, p, 1, { scale = p.scale * 1.8, kind = 'fbm', persistence = 0.5, warp = p.warp * 0.15 * p.scale, slope_detail = 0.3 })
+          local a = Fractal(S, like, p, 0, { scale = p.scale, kind = 'billow', persistence = 0.42, warp = p.warp * 0.2 * p.scale, style = 'erosive', erosion = 1.5 })
+          local b = Fractal(S, like, p, 1, { scale = p.scale * 1.8, kind = 'fbm', persistence = 0.5, warp = p.warp * 0.15 * p.scale, slope_detail = 0.3, style = 'erosive', erosion = 1.5 })
           return S:Op('blend', { a = a, b = b, mode = 'normal', opacity = 0.5 })
       end },
     { id = 'mountains', label = 'Mountains', scale = 240, amplitude = 60, gullies = 0.5, warp = 0.4, detail = 0.6,
       tip = 'Mountain ranges: ridged multifractal with sharp crests, finer detail on the steep ground, weathered by gullies.',
       build = function(S, like, p)
-          local r = Fractal(S, like, p, 0, { scale = p.scale, kind = 'ridged', persistence = 0.5, sharpness = 2.2, warp = p.warp * 0.2 * p.scale, slope_detail = 0.5 })
+          local r = Fractal(S, like, p, 0, { scale = p.scale, kind = 'ridged', persistence = 0.5, sharpness = 2.2, warp = p.warp * 0.2 * p.scale, slope_detail = 0.5, style = 'erosive', erosion = 1 })
           local peaks = S:Op('gamma', { a = r, gamma = 1.3 })
           -- a broad, smooth massif under the crests: ridged noise alone makes rings and loops around its own bumps
-          local massif = Fractal(S, like, p, 1, { scale = p.scale * 1.35, kind = 'fbm', persistence = 0.5, warp = p.warp * 0.2 * p.scale })
+          local massif = Fractal(S, like, p, 1, { scale = p.scale * 1.35, kind = 'fbm', persistence = 0.5, warp = p.warp * 0.2 * p.scale, style = 'erosive', erosion = 1.5 })
           return S:Op('blend', { a = peaks, b = massif, mode = 'normal', opacity = 0.4 })
       end },
     { id = 'badlands', label = 'Badlands', scale = 200, amplitude = 35, gullies = 0.3, warp = 0.4, detail = 0.5,
@@ -103,7 +103,7 @@ Presets = {
     { id = 'plains', label = 'Plains detail', scale = 90, amplitude = 4, gullies = 0, warp = 0.3, detail = 0.8,
       tip = 'Small, soft relief for flat ground: gentle swells and a little roughness, so open ground does not look ironed.',
       build = function(S, like, p)
-          return Fractal(S, like, p, 0, { scale = p.scale, kind = 'fbm', persistence = 0.45, warp = p.warp * 0.15 * p.scale, slope_detail = 0.7 })
+          return Fractal(S, like, p, 0, { scale = p.scale, kind = 'fbm', persistence = 0.45, warp = p.warp * 0.15 * p.scale, slope_detail = 0.7, style = 'erosive', erosion = 1 })
       end },
     { id = 'rocks', label = 'Rocks', scale = 45, amplitude = 10, gullies = 0, warp = 0.3, detail = 0.6,
       tip = 'Fields of boulders: rounded cells (cellular noise) roughened by fractal noise.',
