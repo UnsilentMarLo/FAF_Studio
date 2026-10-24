@@ -10,7 +10,7 @@
 --   Length(name)                                     world length of the chain's line
 --   Draw(ui) / Forget()                              the lines in the world (overlay.lua calls Draw every frame); a marker of a layer that is switched off in the View panel
 --                                                    (markerfilter.lua) breaks the line; with OnlySelected only the chain of the selected marker (else the chain chosen in the panel) is drawn
---   SetOnlySelected(on)                              the View panel's "Only the selected chain"
+--   SetOnlySelected(on)                              the View panel's "Selected chain only"
 --   DrawPress(wx, wz, event) / DrawTail() / Finish() the Draw chain tool: every click places a Blank Marker and appends it to the current chain (a new chain when there is none,
 --                                                    Ctrl+click starts a new one); with symmetry on the images get chains of their own (<chain>_mx ...). One undo step per click.
 --
@@ -22,7 +22,7 @@ local Tools = import('/lua/editor/tools.lua')
 
 Current = false        -- the chain the panel shows (highlighted in the world)
 Show = true            -- draw the chains
-OnlySelected = false   -- draw only the chain of the selected marker (else the current chain): the View panel's "Only the selected chain"
+OnlySelected = false   -- draw only the chain of the selected marker (else the current chain): the View panel's "Selected chain only"
 Revision = 0           -- bumped by every change (the panel and the overlay follow it)
 
 local function ChainTable()
@@ -366,7 +366,7 @@ local function Remove(keep)
     end
 end
 
---- Switches the View panel's "Only the selected chain" (the overlay redraws at once).
+--- Switches the View panel's "Selected chain only" (the overlay redraws at once).
 function SetOnlySelected(on)
     OnlySelected = on and true or false
     Bump()

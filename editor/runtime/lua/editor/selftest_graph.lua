@@ -279,10 +279,11 @@ function Run(verbose)
             end
         end
         check('Turn by 90 is symmetric under quarter turns', okSym)
+        local sumH = Fields.Checksum(fh)      -- (the next Refresh frees the handle)
         Graph.SetParam(sy.id, 'seam', 24)
         GRun.Refresh()
         local fs2 = GRun.Main:Value(sy.id, 'out')
-        check('the soft seam changes the borders', fs2 ~= nil and Fields.Checksum(fs2) ~= Fields.Checksum(fh))
+        check('the soft seam changes the borders', fs2 ~= nil and Fields.Checksum(fs2) ~= sumH)
         Graph.Remove({ sy.id })
         GRun.Refresh()
     end
@@ -451,7 +452,7 @@ function Run(verbose)
     Fields.OpMulti = realMulti
     used.erode_hydraulic, used.erode_droplet, used.erode_stream = true, true, true
     local dishonest = {}
-    local exempt = { crop = true, path_paste = true, resize = true }
+    local exempt = { crop = true, path_paste = true, resize = true, amplitude = true, keep_side = true, terrain_mix = true }
     for op, _ in Nodes.Covers do
         if not used[op] and not exempt[op] then table.insert(dishonest, op) end
     end

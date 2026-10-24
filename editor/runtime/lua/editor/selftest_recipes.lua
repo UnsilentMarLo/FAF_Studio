@@ -45,6 +45,12 @@ local function Has(list, value)
     return false
 end
 
+local function Join(t, sep)
+    local out = {}
+    for i = 1, table.getn(t) do out[i] = tostring(t[i]) end
+    return table.concat(out, sep)
+end
+
 function Run(verbose)
     local failures, lines = {}, {}
     local function check(name, ok, detail)
@@ -88,7 +94,7 @@ function Run(verbose)
         local role = Detect.ClassifyName('/env/test/layers/' .. n[1])
         if role ~= n[2] then table.insert(bad, n[1] .. '=' .. tostring(role)) end
     end
-    check('names: ' .. table.getn(names) .. ' file names give the right kind of ground', table.getn(bad) == 0, table.concat(bad, ', '))
+    check('names: ' .. table.getn(names) .. ' file names give the right kind of ground', table.getn(bad) == 0, Join(bad, ', '))
     local r1, c1 = Detect.ClassifyName('/env/x/layers/macrotexture000_albedo.dds')
     check('names: a name with no known word says nothing', r1 == nil and c1 == 0)
     local _, cSure = Detect.ClassifyName('/x/sand_albedo.dds')
@@ -112,7 +118,7 @@ function Run(verbose)
         local role, conf = Detect.ClassifyColour(f)
         if role ~= c[5] then table.insert(badc, c[1] .. '=' .. tostring(role)) end
     end
-    check('colours: ' .. table.getn(colours) .. ' synthetic textures give the right kind of ground', table.getn(badc) == 0, table.concat(badc, ', '))
+    check('colours: ' .. table.getn(colours) .. ' synthetic textures give the right kind of ground', table.getn(badc) == 0, Join(badc, ', '))
     local fs = Detect.Features(Solid(200, 185, 145), 16, 16)
     local fg = Detect.Features(Solid(95, 105, 55), 16, 16)
     check('colours: sand is yellow-tan (hue below 60, no green dominance), grass is green dominant', fs.hue < 60 and fs.gdom < 0.02 and fg.gdom > 0.02 and fg.hue > 60, fs.hue .. ' ' .. fg.gdom)
@@ -319,7 +325,7 @@ function Run(verbose)
             for layer = 1, 7 do
                 if cov.mask[layer] and cov.mask[layer] > 0.001 then used = used + 1 else table.insert(empty, A[layer] or layer) end
             end
-            check('eight kinds: at least five of the seven kind layers are painted on a dry varied terrain (sand needs water, wet ground drainage)', used >= 5, 'unpainted: ' .. table.concat(empty, ', '))
+            check('eight kinds: at least five of the seven kind layers are painted on a dry varied terrain (sand needs water, wet ground drainage)', used >= 5, 'unpainted: ' .. Join(empty, ', '))
             check('eight kinds: the second grass layer holds patches inside the grass', cov.mask[8] ~= nil and cov.mask[8] > 0.001, tostring(cov.mask[8]))
             -- smooth: what each layer shows changes by at most 0.3 per cell (a transition is at least 4 cells wide), and no line one cell wide (the second difference stays small)
             local worstGrad, worstLap = Fields.Run(function(S)
@@ -406,7 +412,7 @@ function Run(verbose)
             local auto = Recipes.AutoLayers(Recipes.Roles())
             local kept = 0
             for _, l in auto do if l >= 1 then kept = kept + 1 end end
-            check('4-layer shader: the texture set layout keeps four kinds (grass, rock, sand, dirt first)', kept == 4 and auto[1] == 1 and auto[5] == 2 and auto[4] == 3 and auto[2] == 4, table.concat(auto, ','))
+            check('4-layer shader: the texture set layout keeps four kinds (grass, rock, sand, dirt first)', kept == 4 and auto[1] == 1 and auto[5] == 2 and auto[4] == 3 and auto[2] == 4, Join(auto, ','))
             local sumC = Run1(C, '4-layer shader')
             if sumC then
                 local cov = Recipes.Coverage()
@@ -453,7 +459,7 @@ function Run(verbose)
         table.insert(shown, '  ' .. (table.getn(lines) - table.getn(shown)) .. ' checks ok')
     end
     if table.getn(failures) > 0 then
-        return 'FAIL (' .. table.getn(failures) .. ': ' .. table.concat(failures, ', ') .. ')\n' .. table.concat(shown, '\n')
+        return 'FAIL (' .. table.getn(failures) .. ': ' .. Join(failures, ', ') .. ')\n' .. Join(shown, '\n')
     end
-    return 'PASS recipes\n' .. table.concat(shown, '\n')
+    return 'PASS recipes\n' .. Join(shown, '\n')
 end

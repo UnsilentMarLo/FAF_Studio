@@ -34,7 +34,7 @@ FORBIDDEN = [
     (r"\b(StructuredBuffer|RWStructuredBuffer|ByteAddressBuffer|RWByteAddressBuffer|RWBuffer|Texture2D|RWTexture2D|Texture3D|RWTexture3D|SamplerState|ConstantBuffer)\b", "use SRV_BUFFER / UAV_BUFFER / SRV_TEX / UAV_TEX / SAMPLER"),
     (r"\bBuffer\s*<", "typed buffers are not in the subset: use SRV_BUFFER"),
     (r"\bSV_\w+", "system value semantics are in KERNEL_IDS"),
-    (r"\b(GroupMemoryBarrier\w*|DeviceMemoryBarrier\w*|AllMemoryBarrier\w*)\b", "use BARRIER() inside PHASES_BEGIN / PHASES_END"),
+    (r"\b(GroupMemoryBarrier\w*|DeviceMemoryBarrier\w*|AllMemoryBarrier\w*)\b", "use BARRIER(0) inside PHASES_BEGIN / PHASES_END"),
     (r"\[\s*(unroll|loop|branch|flatten|call|fastopt|allow_uav_condition)\b", "use UNROLL / LOOP (other attributes are not in the subset)"),
     (r"\b(out|inout)\b", "use OUT(T) / INOUT(T)"),
     (r"\b(double|half|min16\w+|min10float|bool[234]|float[234]x[234]|matrix|vector)\b", "type not in the subset (float, int, uint, float2-4, int2-4, uint2-4 only)"),
@@ -111,9 +111,9 @@ class Gen:
 
     def lint_phases(self, name, code):
         uses = "PHASES_BEGIN" in code
-        bars = len(re.findall(r"\bBARRIER\s*\(\s*\)", code))
+        bars = len(re.findall(r"\bBARRIER\s*\(\s*0\s*\)", code))
         if bars and not uses:
-            self.err(name, "BARRIER() without PHASES_BEGIN / PHASES_END")
+            self.err(name, "BARRIER(0) without PHASES_BEGIN / PHASES_END")
         if uses:
             if not re.search(r"\bPHASES_END\b", code):
                 self.err(name, "PHASES_BEGIN without PHASES_END")
@@ -131,7 +131,7 @@ class Gen:
                     elif c == "}":
                         depth -= 1
                     elif code.startswith("BARRIER", i) and depth != 1:
-                        self.err(name, "BARRIER() inside a block or loop (line %d): it has to stand at the top level of CSMain" % (code.count("\n", 0, i) + 1))
+                        self.err(name, "BARRIER(0) inside a block or loop (line %d): it has to stand at the top level of CSMain" % (code.count("\n", 0, i) + 1))
                     i += 1
 
     def kernel(self, name):

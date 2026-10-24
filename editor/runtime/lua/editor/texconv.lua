@@ -104,6 +104,9 @@ end
 --- Returns the new file's VFS path and lossless, or nil and a message.
 function Alpha(src, chan)
     local lossless = false
+    -- the native reader takes a disk path (entries inside .scd archives included), not a VFS path
+    local disk0 = rawget(_G, 'ed_vfs_to_disk') and ed_vfs_to_disk(src)
+    if disk0 then src = disk0 end
     local vfs, disk = Stage('conv', function(path)
         local bytes, w, h, same = ed_tex_convert(src, path, { a = chan })
         if not bytes then return false, w end

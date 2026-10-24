@@ -71,3 +71,15 @@ python scripts/ed_native_tests.py               # MSVC; EdGpuTest, EdGpuErosionT
 ```
 
 Console: `dev.gpu`, `/perf`, `ed_gpu_compute 0|1`, `ed_gpu_min_cells N`, `ed_overlay_depth 0|1`, `ed_present_wait`, `ed_fps_limit`.
+
+## Verified locally (2026-10-24, RX 7900 XTX, MSVC)
+
+1. **Build**: ok (patches 0102, 0103 added; do not re-run `studio.py engine export` blindly: the local engine checkout has five upstream "Update .gitignore" commits in its history, an export renumbers the whole series. Use `git format-patch -N --start-number <next>` for new commits).
+2. **GPU**: found two real bugs, both fixed (GPU_COMPUTE.md "First run on a real card"): no kernel compiled (`BARRIER()` rejected by fxc) and `erode_droplet` changed nothing without extra outputs (one dummy bound to three UAV slots). Self test passes; `gpu_fxc_check.py` 60/60.
+3. **GPU A/B**: all ops match the CPU to float precision except the two erosion solvers (by design). Generate presets on a 257 map: hills and plains identical, mountains differ by sd 0.36 on a relief of sd 32 and take 345 ms against 694 ms. Native tests `EdGpu*Test` pass. The droplet solver is not repeatable (seed does not reproduce a mountain while the GPU is on): open decision.
+4. **CPU use**: the editor idles at 0.4 of one core (41 threads).
+5. **Overlays**: the slope overlay lies on the ground and refines with distance (screenshots at 120 and 400 units, hills). Valid depth buffer at the overlay stage: yes (no show-through).
+6. **Self tests**: the five named pass. The whole set had stale tests and real bugs, fixed: console command line (loadstring raises: `local x = 5` failed), `texconv.Alpha` read a VFS path with the native reader (the TTerrain conversion wrote no files), undo of a map texture on a layer that held nothing left the new texture, `fieldgen` repeatability and all CPU goldens now run on the CPU (`editor_inst.py selftests` switches the GPU off), tooltips for the Settings panel / command, Generate helper ops listed as covered.
+7. **UI layouts**: the nightly layout step passes (1746 widgets at 100 and 150 %) after two fixes: the Settings preset buttons wrap into two rows in a narrow panel, "Only the selected chain" is now "Selected chain only".
+
+Still open: `selftest_sctools` seam goldens `sym_rot3_seam` and `sym_rot4_seam` differ in the editor (the native `EdScTest` passes the same goldens: find which build flag or input differs); `selftest_maskgen`, `selftest_graph` (field leak count) and `selftest_unitview2` (camera Update) fail only in the nightly's run order (state of earlier tests): run `editor_nightly.py` step `selfloop`; native `EdOverlaySlopeTest` "levels are maxima of the cells below" fails on MSVC 1951 (the test's own reference loop returns a sum of the four cells instead of the maximum: compiler problem or test bug, `BuildLevels` itself returns plausible values).

@@ -65,15 +65,19 @@ Panels.Register{
             Keep(W.Label(group, 'Quality preset', pad, y, { color = c.textDim }))
             y = y + Skin.S(22)
             local count = table.getn(Graphics.PresetOrder)
-            local bw = math.floor((w - 2 * pad - (count - 1) * gap) / count)
+            -- one row of buttons, or two rows when the panel is too narrow for the longest label ("Medium") in a quarter of the width
+            local cols = count
+            if math.floor((w - 2 * pad - (count - 1) * gap) / count) < Skin.S(72) then cols = math.ceil(count / 2) end
+            local bw = math.floor((w - 2 * pad - (cols - 1) * gap) / cols)
             for i, name in Graphics.PresetOrder do
                 local preset = name
-                self.presetButtons[preset] = Btn(Graphics.PresetLabels[preset], pad + (i - 1) * (bw + gap), y, bw, function()
+                local col, row = math.mod(i - 1, cols), math.floor((i - 1) / cols)
+                self.presetButtons[preset] = Btn(Graphics.PresetLabels[preset], pad + col * (bw + gap), y + row * (rowH + gap), bw, function()
                     Graphics.SetPreset(preset)
                     P:Refresh()
                 end, { toggle = true, tip = 'Sets every graphics setting below to the ' .. Graphics.PresetLabels[preset] .. ' preset.' })
             end
-            y = y + rowH + Skin.S(12)
+            y = y + (math.ceil(count / cols)) * (rowH + gap) - gap + Skin.S(12)
 
             local cw = math.max(Skin.S(110), math.floor((w - 2 * pad) * 0.4))
             local labelW = math.max(Skin.S(60), w - 2 * pad - cw - gap)

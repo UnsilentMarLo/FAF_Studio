@@ -276,6 +276,9 @@ def cmd_list(a):
 
 
 SELFTEST_SCRIPT = r"""
+-- the goldens and the repeatability checks are about the CPU solvers (the GPU erosion solvers differ by design and the droplet one is not repeatable): run them on the CPU
+local gpuWas = rawget(_G, 'ed_gpu_info') and ed_gpu_info(false).enabled
+if rawget(_G, 'ed_gpu_enable') then ed_gpu_enable(false) end
 local out = {}
 for _, name in { 'selftest_terrain', 'selftest_cmd', 'selftest_mission', 'selftest_qa', 'selftest_modproj' } do
     local good, mod = pcall(import, '/lua/editor/' .. name .. '.lua')
@@ -292,6 +295,7 @@ for _, name in { 'selftest_terrain', 'selftest_cmd', 'selftest_mission', 'selfte
         table.insert(out, name .. ': not in this tree')
     end
 end
+if gpuWas and rawget(_G, 'ed_gpu_enable') then ed_gpu_enable(true) end
 return table.concat(out, '\n')
 """
 

@@ -77,7 +77,7 @@ Panels.Register{
         end
 
         -- chains: a hidden layer also hides the chain lines of its markers (chains.lua Draw); this shows only the chain of the selected marker
-        P.chainsOnly = Btn('Only the selected chain', Skin.S(170), Skin.S(24), function(self)
+        P.chainsOnly = Btn('Selected chain only', Skin.S(170), Skin.S(24), function(self)
             import('/lua/editor/chains.lua').SetOnlySelected(self.on)
         end, { toggle = true })
 

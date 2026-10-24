@@ -61,6 +61,10 @@ function Pure()
     check('the Generate ops are in the engine (fractal, amplitude, terrain_mix, keep_side)', haveNew)
     if not haveNew then return R.head() end
 
+    -- the repeatability checks run on the CPU: the GPU droplet solver adds to shared integer buffers while other droplets read them, so its result varies from run to run (by design,
+    -- docs/projects/editor/GPU_COMPUTE.md); the CPU solvers are bit identical for any thread count
+    local gpuWas = rawget(_G, 'ed_gpu_info') and ed_gpu_info(false).enabled
+    if rawget(_G, 'ed_gpu_enable') then ed_gpu_enable(false) end
     -- presets: every relief has exactly the asked size, no offset, is repeatable and depends on the seed
     for _, def in Gen.Presets do
         local p = Copy(Gen.Settings)
@@ -97,6 +101,7 @@ function Pure()
         ed_field_threads(threads0)
         check('the relief is the same with 1, 3 and 7 threads', sums[1] == sums[2] and sums[2] == sums[3], table.concat(sums, ' '))
     end
+    if rawget(_G, 'ed_gpu_enable') and gpuWas then ed_gpu_enable(true) end
     -- choosing a preset takes its numbers
     Gen.Choose('mountains')
     check('Choose takes the preset values', Gen.Settings.preset == 'mountains' and Gen.Settings.amplitude == 60 and Gen.Settings.scale == 240)

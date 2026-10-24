@@ -94,6 +94,7 @@ Panel = {
     maptextures = 'The pictures that cover the whole map and that newer terrain shaders read: normal map, baked shadow, specular and macrotexture. Generate, import, export or clear each.',
     recipes = 'Terrain texturing presets: grass, dirt, rock, snow from slope and height rules.',
     scatter = 'Fills the map with props by rules: density, slope, spacing.',
+    settings = 'Graphics quality, the size of the interface and the GPU compute check. Saved for every session.',
     sctools = 'Base pads and resource rings, symmetry, slope limits, skeleton generator.',
     paths = 'Spline paths: list, points, profile and what they carve or paint.',
     graphcanvas = 'The terrain graph: nodes and wires that generate terrain.',

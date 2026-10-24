@@ -76,6 +76,20 @@ function Run(verbose)
         end
     end
 
+    -- what the layers hold after the fixture above: the undo checks below compare with this (keep is the map as it was opened, for the restore at the end)
+    local base = {}
+    for _, i in { 8, 9, 18, 19 } do
+        local p, s = ed_stratum_layer(i)
+        base[i] = { p, s }
+    end
+
+    -- an undo puts a layer that held nothing back to the neutral texture (Strata.NONE_NORMAL for the normal layers, Strata.CLEAR for the others)
+    local function Is(layer)
+        local want = base[layer][1]
+        if want == nil or want == '' then want = (layer == 18 or layer == 19) and import('/lua/editor/strata.lua').NONE_NORMAL or import('/lua/editor/strata.lua').CLEAR end
+        return (ed_stratum_layer(layer)) == want
+    end
+
     -- ---- the generators, directly ----------------------------------------------------------------------------------------------------------
     Fields.Run(function(S)
         local h = S:Height(1)
@@ -104,7 +118,7 @@ function Run(verbose)
     check('layer 8 normal map is a staged file, bigger than the map', path and string.find(path, '/edmaptex/maptex_normal_', 1, true) and size == W + 1, tostring(path) .. ' ' .. tostring(size))
     local cur = MT.Current('normal')
     check('the slot is active and made here', cur.active and cur.managed and not cur.empty)
-    local px, tw, th = ed_dds_read(path)
+    local px, tw, th = ed_dds_read(ed_vfs_to_disk(path) or path)
     check('the file is 128 x 128', px and tw == 128 and th == 128, tostring(tw))
     if px then
         local bad = 0
@@ -121,13 +135,13 @@ function Run(verbose)
     History.Undo()
     check('undo of clear', (ed_stratum_layer(18)) == before)
     History.Undo()
-    check('undo of generate', (ed_stratum_layer(18)) == keep[18][1], tostring((ed_stratum_layer(18))))
+    check('undo of generate', Is(18), tostring((ed_stratum_layer(18))))
 
     local e2, err2 = MT.Generate('light', { size = 128, soft = 1, reach = 300, ao = 0.3 })
     check('the lighting texture is made', e2 ~= nil, err2)
     local lpath, lsize = ed_stratum_layer(8)
     check('layer 8 albedo is a staged file', lpath and string.find(lpath, '/edmaptex/maptex_light_', 1, true) and lsize == W + 1, tostring(lpath))
-    local lpx, lw = ed_dds_read(lpath)
+    local lpx, lw = ed_dds_read(ed_vfs_to_disk(lpath) or lpath)
     if lpx then
         local alphaOk = true
         for i = 0, lw * lw - 1, 13 do
@@ -136,7 +150,7 @@ function Run(verbose)
         check('the shadow is in the alpha channel', alphaOk)
     end
     History.Undo()
-    check('undo of the lighting texture', (ed_stratum_layer(8)) == keep[8][1])
+    check('undo of the lighting texture', Is(8), tostring((ed_stratum_layer(8))) .. ' vs ' .. tostring(base[8][1]))
     ed_stratum_shader('TTerrainXP')
     local none, why = MT.Generate('normal', {})
     check('a legacy shader refuses, with a reason', none == nil and why ~= nil and string.find(why, 'Terrain000', 1, true) ~= nil, tostring(why))
@@ -198,7 +212,7 @@ function Run(verbose)
     check('as one undo step', depth1 == depth0 + 1, depth0 .. ' -> ' .. depth1)
     check('layer 8 has both textures', string.find((ed_stratum_layer(18)) or '', 'maptex_normal_', 1, true) ~= nil and string.find((ed_stratum_layer(8)) or '', 'maptex_light_', 1, true) ~= nil)
     History.Undo()
-    check('undo gives the layers back', (ed_stratum_layer(18)) == keep[18][1] and (ed_stratum_layer(8)) == keep[8][1])
+    check('undo gives the layers back', Is(18) and Is(8))
 
     -- ---- a shader that does not read the map-wide textures: Build skips them with a warning and builds the rest ------------------------------------
     do
@@ -215,7 +229,7 @@ function Run(verbose)
         check('no map texture is made, the heights are built as one undo step', r3 and (r3.maptextures or 0) == 0 and r3.changed > 0 and History.Depth() == depthA + 1, r3 and (tostring(r3.maptextures) .. ' ' .. r3.changed .. ' ' .. (History.Depth() - depthA)))
         check('each skipped output is a warning with the sentence, not a failure', r3 and r3.warnings and table.getn(r3.warnings) == 2 and r3.warnings[1].code == 'shader'
             and string.find(r3.warnings[1].text, 'Map normal map not applied', 1, true) ~= nil and string.find(r3.warnings[2].text, 'Map lighting not applied', 1, true) ~= nil)
-        check('the layers are untouched', (ed_stratum_layer(18)) == keep[18][1] and (ed_stratum_layer(8)) == keep[8][1])
+        check('the layers are untouched', Is(18) and Is(8))
         History.Undo()
         -- Use it on the map off: the file is written although the shader does not read it
         Graph.SetParam(onm.id, 'assign', false)
@@ -223,7 +237,7 @@ function Run(verbose)
         local depthB = History.Depth()
         local r4, msg4 = GRun.Build()
         check('with Use it on the map off the files are written even though the shader does not read them', r4 ~= nil and r4.maptextures == 2 and not r4.warnings, tostring(msg4) .. ' ' .. tostring(r4 and r4.maptextures))
-        check('and the layers still hold what they held', (ed_stratum_layer(18)) == keep[18][1] and (ed_stratum_layer(8)) == keep[8][1])
+        check('and the layers still hold what they held', Is(18) and Is(8))
         if r4 and r4.mapNote and ed_file_delete then
             for file in string.gfind(r4.mapNote, 'written to ([^%s;%)]+)') do pcall(ed_file_delete, file) end
         end

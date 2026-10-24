@@ -21,6 +21,12 @@ local function Same(a, b)
     return true
 end
 
+local function Join(t, sep)
+    local out = {}
+    for i = 1, table.getn(t) do out[i] = tostring(t[i]) end
+    return table.concat(out, sep)
+end
+
 function Run()
     local failures, lines = {}, {}
     local function check(name, ok, detail)
@@ -106,13 +112,13 @@ function Run()
         check('a shader that is not biplanar keeps the order', p5[1] == 1 and p5[3] == 3 and p5[5] == 5 and p5[8] == 8)
         local movePlan = { toP = { painted = 7 }, fromP = {}, extra = { 8 }, canMove = true, layers = Layers({ [1] = 5, [4] = 5, [8] = 5 }) }
         local p6 = Conv.Arrange(movePlan, 'move')
-        check('Move: the layers with paint come first (1, 4, 8), the others follow in order', p6[1] == 1 and p6[2] == 4 and p6[3] == 8 and p6[4] == 2 and p6[5] == 3 and p6[8] == 7, table.concat(p6, ','))
+        check('Move: the layers with paint come first (1, 4, 8), the others follow in order', p6[1] == 1 and p6[2] == 4 and p6[3] == 8 and p6[4] == 2 and p6[5] == 3 and p6[8] == 7, Join(p6, ','))
     end
 
     if not rawget(_G, 'ed_stratum_info') or not ed_stratum_info() or not import('/lua/editor/fields.lua').IsAvailable() then
         table.insert(lines, '  (no paint masks: the conversion checks are skipped)')
-        if table.getn(failures) > 0 then return 'FAIL (' .. table.getn(failures) .. ')\n' .. table.concat(lines, '\n') end
-        return 'PASS strataconv (data only)\n' .. table.concat(lines, '\n')
+        if table.getn(failures) > 0 then return 'FAIL (' .. table.getn(failures) .. ')\n' .. Join(lines, '\n') end
+        return 'PASS strataconv (data only)\n' .. Join(lines, '\n')
     end
 
     -- save the map's state
@@ -228,11 +234,12 @@ function Run()
         local mis = Shaders.Mismatch()
         check('a plain switch XP -> Terrain000 leaves a range mismatch', okSet and mis ~= nil and mis.range == 'half' and mis.now == 'full' and mis.shader == 'TTerrainXP' and mis.current == 'Terrain000')
         check('the mismatch is saved with the map', string.find(Shaders.SidecarText(), 'StrataAuthored', 1, true) ~= nil)
-        if Shaders.Set('TTerrainXPExt') then check('a switch to a shader of the same range as the masks clears it', Shaders.Mismatch() == nil) end
+        local okExt = Shaders.Set('TTerrainXPExt')
+        if okExt then check('a switch to a shader of the same range as the masks clears it', Shaders.Mismatch() == nil) end
         Shaders.Set('Terrain000')
         check('switching again brings it back', Shaders.Mismatch() ~= nil)
         local planM = Conv.Plan('Terrain000')
-        check('convert plan after a plain switch starts from the authored shader', planM.refused == nil and planM.from == 'TTerrainXP' and planM.cur == 'Terrain000' and planM.fromP.range == 'half' and planM.toP.range == 'full', tostring(planM.refused))
+        check('convert plan after a plain switch starts from the authored shader', planM.refused == nil and planM.from == (okExt and 'TTerrainXPExt' or 'TTerrainXP') and planM.cur == 'Terrain000' and planM.fromP.range == 'half' and planM.toP.range == 'full', tostring(planM.refused) .. ' from=' .. tostring(planM.from) .. ' cur=' .. tostring(planM.cur) .. ' fromRange=' .. tostring(planM.fromP and planM.fromP.range) .. ' toRange=' .. tostring(planM.toP and planM.toP.range))
         local repM = Conv.Run(planM, { layer8 = 'move', upper = false })
         check('the conversion runs and the masks match the shader afterwards', repM ~= nil and Shaders.Mismatch() == nil and Shaders.SidecarText() == '')
         History.Undo()
@@ -310,7 +317,7 @@ function Run()
             ed_stratum_shader('TTerrainXP')
             local planI = Conv.Plan('TTerrain')
             local repI, whyI = Conv.Run(planI, { layer8 = 'drop', textures = true })
-            check('XP -> TTerrain with textures runs and writes alpha files', repI ~= nil and repI.files >= 1, whyI)
+            check('XP -> TTerrain with textures runs and writes alpha files', repI ~= nil and repI.files >= 1, tostring(whyI) .. ' files=' .. tostring(repI and repI.files) .. ' lines=' .. (repI and Join(repI.lines or {}, ' / ') or ''))
             if repI then History.Undo() end
         else
             table.insert(lines, '  (this build has no ed_tex_convert: the texture conversion itself is not run)')
@@ -320,6 +327,6 @@ function Run()
     if not ok then check('no error while running', false, err) end
     Restore()
     check('the map is put back', ed_stratum_shader() == shader0)
-    if table.getn(failures) > 0 then return 'FAIL (' .. table.getn(failures) .. ')\n' .. table.concat(lines, '\n') end
-    return 'PASS strataconv\n' .. table.concat(lines, '\n')
+    if table.getn(failures) > 0 then return 'FAIL (' .. table.getn(failures) .. ')\n' .. Join(lines, '\n') end
+    return 'PASS strataconv\n' .. Join(lines, '\n')
 end

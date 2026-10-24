@@ -110,7 +110,7 @@ Topics = {
             { "li", "The Properties panel shows the selected object's values; the Outliner lists every marker and area (click to select, right-click for its menu)." },
             { "li", "Ctrl+C, Ctrl+X, Ctrl+V (pastes at the pointer), Ctrl+D (duplicate), Delete, Ctrl+A (select all), Ctrl+Shift+A (deselect). They work for markers, areas, units, props and decals of the active select tool." },
             { "li", "Right-click in the Viewport for the place and paste menu, right-click an object for its own menu." },
-            { "li", "View panel, Show markers: switches the marker layers (resources, areas and points, paths, other). A switched-off layer hides the icons, names, 3D props, footprints and the chain lines of its markers (a selected marker stays visible). Only the selected chain draws just the chain of the selected marker (else the one chosen in the Chains panel), with a ring on each member." },
+            { "li", "View panel, Show markers: switches the marker layers (resources, areas and points, paths, other). A switched-off layer hides the icons, names, 3D props, footprints and the chain lines of its markers (a selected marker stays visible). Selected chain only draws just the chain of the selected marker (else the one chosen in the Chains panel), with a ring on each member." },
             { "li", "Symmetry (Symmetry panel) mirrors what you place, including start positions." },
             { "h", "Hints" },
             { "li", "The status line shows what is selected." },

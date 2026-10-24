@@ -338,16 +338,26 @@ function Execute(text, hooks)
     end
     local compile = hooks.loadstring or loadstring
     -- a bare expression ("1 + 2", "table.getn(x)") prints its value: try it as `return <code>` first, a statement ("x = 5") falls back to the plain chunk
+    -- (the engine's loadstring RAISES on a syntax error instead of returning nil, message: `return local x = 5` must not end the command, it falls back to the statement)
+    local function Compile(chunk)
+        local good, f, e = pcall(compile, chunk, '=console')
+        if good then return f, e end
+        return nil, tostring(f)
+    end
     local fn, err = nil, nil
-    if string.sub(code, 1, 7) ~= 'return ' then fn = compile('return ' .. code, '=console') end
-    if not fn then fn, err = compile(code, '=console') end
+    if string.sub(code, 1, 7) ~= 'return ' then fn = Compile('return ' .. code) end
+    if not fn then fn, err = Compile(code) end
     if not fn then
         Add('error', tostring(err), 'command')
         return false
     end
     local res = { pcall(fn) }
     if not res[1] then
-        Add('error', tostring(res[2]), 'command')
+        -- the engine appends a stack traceback to a message raised under pcall: the console shows the message (one line, not ten)
+        local msg = tostring(res[2])
+        local at = string.find(msg, 'stack traceback:', 1, true)
+        if at then msg = string.gsub(string.sub(msg, 1, at - 1), '%s+$', '') end
+        Add('error', msg, 'command')
         return false
     end
     for i = 2, table.getn(res) do Add('info', Describe(res[i]), 'result') end

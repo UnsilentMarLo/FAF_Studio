@@ -381,12 +381,18 @@ end
 
 local function Restore(snap)
     for _, s in snap do
-        if s.path ~= '' then
-            local exists = DiskGetFileInfo(s.path)
+        -- a layer that held no texture before goes back to the neutral one (the engine cannot clear a layer; leaving the new texture there would make the undo a no-op)
+        local path, size = s.path, s.size
+        if path == '' then
+            path = (s.layer == 18 or s.layer == 19) and Strata.NONE_NORMAL or Strata.CLEAR
+            size = 4
+        end
+        if path ~= '' then
+            local exists = DiskGetFileInfo(path)
             if exists then
-                ed_stratum_set_layer(s.layer, s.path, s.size)
+                ed_stratum_set_layer(s.layer, path, size)
             else
-                Say('a map texture file is gone (' .. Basename(s.path) .. '): the layer keeps its texture')
+                Say('a map texture file is gone (' .. Basename(path) .. '): the layer keeps its texture')
             end
         end
     end

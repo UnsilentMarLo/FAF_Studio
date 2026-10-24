@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Marlo <Plays.xenon@yahoo.de>
+Date: Sat, 24 Oct 2026 17:44:26 +0200
+Subject: [PATCH] Request the high performance GPU: NvOptimusEnablement and
+ AmdPowerXpressRequestHighPerformance exports (the Direct3D 9 renderer opened
+ the integrated adapter on hybrid graphics machines)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+diff --git a/src/sdk/moho/app/WinMain.cpp b/src/sdk/moho/app/WinMain.cpp
+index cd525c6c..a19ddacf 100644
+--- a/src/sdk/moho/app/WinMain.cpp
++++ b/src/sdk/moho/app/WinMain.cpp
+@@ -42,6 +42,15 @@
+ #include "moho/editor/EdBootstrap.h"
+ #endif
+ 
++// FAF Studio: on a machine with an integrated and a dedicated GPU (laptops, desktops with the monitor on the motherboard output) the Direct3D 9 renderer
++// opened adapter 0, the integrated one. These two exported variables are the drivers' documented request (NVIDIA Optimus, AMD PowerXpress / Switchable
++// Graphics) to run the process on the high performance GPU; they are read from the exe's export table before the first Direct3D call.
++extern "C"
++{
++  __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
++  __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
++}
++
+ // crashtest lua_table_corrupt builds a raw VM; lua_open is recovered in
+ // lua/LuaObject.cpp inside `extern "C"`.
+ extern "C" lua_State* lua_open();
