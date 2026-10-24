@@ -38,7 +38,7 @@ Topics = {
         blocks = {
             { "p", "This is the shortest path from an empty map to something you can play on. Every step can be undone." },
             { "h", "1. A blank map" },
-            { "step", "Start screen > New map, or File > New map. Pick a size: 5 km (256) for a small map, 10 km (512) for the usual 1v1 and 2v2 size, 20 km (1024) for big maps. The map starts flat with one start position.", 1 },
+            { "step", "Start screen > New map, or File > New map. Pick a size: 5 km (256) for a small map, 10 km (512) for the usual 1v1 and 2v2 size, 20 km (1024) for big maps. **Any size...** makes a map of any width and height from 1 to 80 km (for example 7.5 x 12 km): the terrain is the next power of two and the playable area is cut to your size, in the middle of it. The map starts flat with one start position.", 1 },
             { "h", "2. Shape the land" },
             { "step", "Terrain workspace. Terrain > Generate... makes a whole landscape from a few settings (fractal noise); try it, and press Ctrl+Z if you do not like the result.", 1 },
             { "step", "Refine with the brushes of the Tools panel: Raise and Lower, Flatten (levels to the height under the first click), Smooth, Plateau, Noise, Erode (paints erosion by hand). The Brush panel sets radius, strength and falloff; hold Shift to invert the brush.", 2 },

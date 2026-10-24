@@ -165,6 +165,8 @@ function Run(verbose)
             if r.id == id then return table.getn(r.rules), r end
         end
     end
+    local presetWas = Recipes.State.preset
+    Recipes.State.preset = 2          -- alpine: altitude counts whatever the relief of the map under test (flat country has no snow line)
     local plan = PlanOf({ [0] = 'sand', [1] = 'grass', [3] = 'snow' })
     check('plan: base = sand, grass on layer 1, snow on layer 3', plan.base == 'sand' and plan.byRole.grass[1] == 1 and plan.byRole.snow[1] == 3)
     check('plan: kinds with no texture are missing, not painted', Has(plan.missing, 'rock') and Has(plan.missing, 'dirt') and not Has(plan.missing, 'sand'))
@@ -186,6 +188,7 @@ function Run(verbose)
     end
     check('base snow: no snow rule, snow is the base', rSnow.base and nSnow == 0)
     check('base snow: grass stays below the snow line (height rule)', hasHeight)
+    Recipes.State.preset = presetWas
 
     plan = PlanOf({ [0] = 'grass', [1] = 'sand', [2] = 'rock' })
     roles = Recipes.Roles(Recipes.Context(plan))
@@ -345,7 +348,7 @@ function Run(verbose)
                 return g, l
             end)
             check('smooth: what a layer shows changes by at most 0.3 per cell', worstGrad <= 0.3, worstGrad)
-            check('smooth: no line one cell wide (second difference at most 0.25)', worstLap <= 0.25, worstLap)
+            check('smooth: no line one cell wide (second difference at most 0.4: ragged edges are steeper than the old ramps)', worstLap <= 0.4, worstLap)
             -- no cell with two layers at full opacity
             local worstFull = Fields.Run(function(S)
                 local sum1
@@ -412,7 +415,7 @@ function Run(verbose)
             local auto = Recipes.AutoLayers(Recipes.Roles())
             local kept = 0
             for _, l in auto do if l >= 1 then kept = kept + 1 end end
-            check('4-layer shader: the texture set layout keeps four kinds (grass, rock, sand, dirt first)', kept == 4 and auto[1] == 1 and auto[5] == 2 and auto[4] == 3 and auto[2] == 4, Join(auto, ','))
+            check('4-layer shader: the texture set layout keeps four kinds (rock, sand, dirt, snow; grass is the base)', kept == 4 and auto[5] == 1 and auto[4] == 2 and auto[2] == 3 and auto[8] == 4 and auto[1] == -1, Join(auto, ','))
             local sumC = Run1(C, '4-layer shader')
             if sumC then
                 local cov = Recipes.Coverage()

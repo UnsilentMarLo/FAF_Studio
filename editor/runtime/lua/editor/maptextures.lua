@@ -41,7 +41,7 @@ MOUNT = '/edmaptex'
 
 State = { serial = 0, mounted = false, created = {}, thumbs = {}, made = {}, sumVersion = -1, nowSum = '', resized = {} }
 
-Order = { 'normal', 'light', 'specular', 'macro' }
+Order = { 'normal', 'light', 'specular', 'macro', 'atlas' }
 
 Kinds = {
     normal = { label = 'Normal map', generate = true,
@@ -50,12 +50,15 @@ Kinds = {
     light = { label = 'Lighting (shadow)', generate = true,
         desc = 'Baked sun shadow (1 = lit, 0 = in shadow), ambient occlusion and water depth for the whole ground. The shader multiplies it into the sun light, so shadows can be soft and long without the cost of live shadows.',
         usedBy = 'TTerrainXPExt, Terrain000, Terrain001, Terrain050, Terrain051, the Terrain1xx / 2xx shaders and Terrain301' },
-    specular = { label = 'Specular', generate = false,
-        desc = 'How strongly and in what colour the ground shines, as one picture for the whole map (RGB = colour, alpha = sharpness).',
+    specular = { label = 'Specular', generate = true,
+        desc = 'How strongly and in what colour the ground shines, as one picture for the whole map (RGB = colour, alpha = sharpness). Made from the paint: wet ground, snow and the waterline shine, rock and sand do not.',
         usedBy = 'Terrain001 and Terrain051' },
-    macro = { label = 'Macrotexture', generate = false,
-        desc = 'A large colour picture laid over the whole ground to break up repetition (RGB = colour, alpha = how much).',
-        usedBy = 'TTerrainXPExt, Terrain000 and Terrain050' },
+    macro = { label = 'Macrotexture', generate = true,
+        desc = 'A large colour picture laid over the whole ground to break up repetition (RGB = colour, alpha = how much). Made from the paint: the colour the ground has, a little lighter and darker in broad patches and darker in cavities.',
+        usedBy = 'TTerrain, TTerrainXP, TTerrainXPExt, Terrain000 and Terrain050' },
+    atlas = { label = 'Roughness / height atlas', generate = true,
+        desc = 'One small picture that gives every layer its roughness (how sharp the highlights are) and its height (which layer wins where two overlap). Made from the layer textures and the kind of ground of each.',
+        usedBy = 'the Terrain1xx and Terrain2xx shaders (in the Upper layer)' },
 }
 
 -- Which layer slot each shader reads the kinds from comes from shaders.lua (Profile(id).maps, MapSlots(class)): one table for the editor.
@@ -105,10 +108,12 @@ end
 function Unsupported(kind, shaderId)
     local id = shaderId or ShaderId()
     if Slot(kind, id) then return nil end
-    local noun = (kind == 'light') and 'Map lighting' or 'Map normal map'
+    local noun = (kind == 'light') and 'Map lighting' or (kind == 'normal' and 'Map normal map') or (Kinds[kind] and Kinds[kind].label) or kind
     local name = (id ~= '') and id or 'The shader'
+    local remedy = (kind == 'normal' or kind == 'light') and 'Choose Terrain000 or a later shader (Layers > Shader), or turn off Use it on the map to only write the file.'
+                   or ('It is read by ' .. ((Kinds[kind] and Kinds[kind].usedBy) or 'other shaders') .. ': choose one of them in Layers > Shader.')
     return { kind = kind, shader = id, noun = noun,
-        text = noun .. ' not applied: ' .. name .. ' does not use one. Choose Terrain000 or a later shader (Layers > Shader), or turn off Use it on the map to only write the file.' }
+        text = noun .. ' not applied: ' .. name .. ' does not use one. ' .. remedy }
 end
 
 --- The side of the map in world units, or nil without a terrain.
@@ -117,6 +122,8 @@ function MapSize()
     if not w then return nil end
     return w - 1
 end
+
+NEUTRAL_ATLAS = '/textures/editor/layers/pbr_atlas_neutral.dds'       -- the atlas of a PBR map that has none of its own (stratumconv.lua ATLAS)
 
 local function IsEmptyPath(path)
     if not path or path == '' then return true end
@@ -139,7 +146,7 @@ function Current(kind)
     info.path, info.size = path or '', size or 0
     info.file = Basename(info.path)
     local W = MapSize() or 0
-    info.empty = IsEmptyPath(info.path) or (slot.tile and (info.size or 0) <= W)
+    info.empty = IsEmptyPath(info.path) or (slot.tile and (info.size or 0) <= W) or (slot.pack == 'atlas' and string.lower(info.path) == NEUTRAL_ATLAS)
     info.active = not info.empty
     info.managed = Managed(info.path)
     return info
@@ -368,6 +375,161 @@ local function Channels(pack, f, env, h)
     error('no generator for ' .. tostring(pack))
 end
 
+-- ---- generators that read the PAINT (macrotexture, specular, atlas, roughness) ------------------------------------------------------------------------------
+
+local Assign          -- defined with the layers below
+
+--- The average colour (0..1 r, g, b) of the albedo texture of a layer; a mid grey when the file cannot be read. Cached per path.
+local avgCache = {}
+local function LayerColour(layer)
+    local path = ed_stratum_layer(layer)
+    if not path or path == '' then return 0.4, 0.4, 0.4 end
+    local c = avgCache[path]
+    if not c then
+        c = { 96, 96, 96 }
+        local disk = ed_vfs_to_disk(path)
+        if disk and rawget(_G, 'ed_image_avg') then
+            local ok, r, g, b = pcall(ed_image_avg, disk)
+            if ok and r then c = { r, g, b } end
+        end
+        avgCache[path] = c
+    end
+    return c[1] / 255, c[2] / 255, c[3] / 255
+end
+
+--- What each painted layer SHOWS on the map: vis[layer] = a field 0..1 (the mask times what the layers above leave free), vis[0] = the base layer. Layers without a texture are left out
+--- (their paint shows nothing). Fields belong to the scope S; `like` is the field the result is sampled like (the heights).
+function VisibleWeights(S, like)
+    local cap = Strata.PaintCap()
+    local free = S:Op('const', { like = like, value = 1 })
+    local vis = {}
+    local Detect = import('/lua/editor/roledetect.lua')
+    for layer = cap, 1, -1 do
+        if Detect.Albedo(layer) then
+            local m = S:Op('resample', { a = S:Stratum(layer), like = like })
+            vis[layer] = S:Op('mul', { a = m, b = free })
+            free = S:Op('mul', { a = free, b = S:Op('invert', { a = m, lo = 0, hi = 1 }) })
+        end
+    end
+    vis[0] = free
+    return vis
+end
+
+--- The same grouped by kind of ground: roleW[role] = a field (the sum of the layers that hold the role). Layers with an unknown kind are in roleW.other.
+function RoleWeights(S, like)
+    local vis = VisibleWeights(S, like)
+    local plan = import('/lua/editor/recipes.lua').Plan()
+    local byLayer = {}
+    for role, list in plan.byRole do
+        for _, l in list do byLayer[l] = role end
+    end
+    local out = {}
+    for layer, f in vis do
+        local role = byLayer[layer] or 'other'
+        out[role] = out[role] and S:Op('add', { a = out[role], b = f }) or f
+    end
+    return out, vis
+end
+
+local function Scaled(S, f, k) return S:Op('affine', { a = f, mul = k, add = 0 }) end
+
+--- The macrotexture of the map as channels { r, g, b, a }: the colour the paint shows (each layer's average colour weighted by what it shows), made lighter and darker in broad patches
+--- (o.contrast of a fractal noise of o.scale units) and darker in cavities (o.cavity), laid over the ground with o.opacity. The shaders blend lerp(ground, macro, alpha): the macro has the colour of
+--- the ground, so it varies the brightness and keeps the hue.
+function MacroChannels(S, h, o)
+    local vis = VisibleWeights(S, h)
+    local r, g, b
+    for layer, w in vis do
+        local cr, cg, cb = LayerColour(layer)
+        r = r and S:Op('add', { a = r, b = Scaled(S, w, cr) }) or Scaled(S, w, cr)
+        g = g and S:Op('add', { a = g, b = Scaled(S, w, cg) }) or Scaled(S, w, cg)
+        b = b and S:Op('add', { a = b, b = Scaled(S, w, cb) }) or Scaled(S, w, cb)
+    end
+    local contrast = o.contrast or 0.25
+    local n = S:Op('fractal', { like = h, seed = math.floor(o.seed or 7), scale = o.scale or 180, octaves = 5 })
+    local k = S:Op('affine', { a = n, mul = 2 * contrast, add = 1 - contrast })
+    if (o.cavity or 0) > 0 then
+        local ao = S:Op('occlusion', { a = h, mode = 'cavity', radius = 30, directions = 12, gain = 2 })
+        k = S:Op('mul', { a = k, b = S:Op('affine', { a = ao, mul = -(o.cavity or 0), add = 1 }) })
+    end
+    local function Fin(c) return S:Op('clamp', { a = S:Op('mul', { a = c, b = k }), lo = 0, hi = 1 }) end
+    return { r = Fin(r), g = Fin(g), b = Fin(b), a = S:Op('const', { like = h, value = o.opacity or 0.35 }) }
+end
+
+--- The specular picture (RGB = highlight colour, A = sharpness): wet ground, snow and the waterline shine, the rest hardly. strength 0..1, sharpness 0..1.
+function SpecularChannels(S, h, o)
+    local roles = RoleWeights(S, h)
+    local shine
+    local function Add(f) shine = shine and S:Op('max', { a = shine, b = f }) or f end
+    if roles.wet then Add(Scaled(S, roles.wet, 1.0)) end
+    if roles.snow then Add(Scaled(S, roles.snow, 0.6)) end
+    if roles.rock then Add(Scaled(S, roles.rock, 0.12)) end
+    local w = World.Get()
+    if (w.water_on or 0) ~= 0 then
+        local band = S:Op('shore', { a = h, level = w.water_elev or 0, width = 2.5, soft = 3 })
+        Add(Scaled(S, band, 0.9))
+    end
+    shine = shine or S:Op('const', { like = h, value = 0 })
+    local base = S:Op('const', { like = h, value = 0.08 })
+    local level = S:Op('clamp', { a = S:Op('add', { a = base, b = Scaled(S, shine, o.strength or 0.8) }), lo = 0, hi = 1 })
+    local sharp = S:Op('clamp', { a = S:Op('affine', { a = shine, mul = 0.45 * (o.sharpness or 1), add = 0.3 }), lo = 0, hi = 1 })
+    return { r = level, g = level, b = level, a = sharp }
+end
+
+--- The roughness multiplier mask of layer 8 for the Terrain1xx / 2xx shaders as a raw byte field (128 = neutral, lower shinier, higher rougher): dry rock and sand rougher, wet ground, ice and
+--- snow shinier. `amount` 0..1 scales the effect.
+function RoughnessField(S, h, o)
+    local roles = RoleWeights(S, h)
+    local rough = S:Op('const', { like = h, value = 0 })
+    local function Add(role, k)
+        if roles[role] then rough = S:Op('add', { a = rough, b = Scaled(S, roles[role], k) }) end
+    end
+    Add('rock', 0.5) Add('highrock', 0.5) Add('darkrock', 0.45) Add('sand', 0.3) Add('dirt', 0.2) Add('grass', 0.1)
+    Add('wet', -0.7) Add('snow', -0.5)
+    local amount = o.amount or 0.6
+    return S:Op('clamp', { a = S:Op('affine', { a = rough, mul = 90 * amount, add = 128 }), lo = 24, hi = 232 })
+end
+
+--- Writes the roughness multiplier into the mask of layer 8 (the shaders that read layer 8 as a roughness mask: shaders.lua Profile l8 = 'rough'). One undo entry. o.amount; o.field (a
+--- ready field in a scope the caller owns instead of the one made from the paint). Returns the entry and the number of cells changed, or nil and a message.
+function GenerateRoughness(o)
+    o = o or {}
+    local p = Strata.Profile()
+    if not p or p.l8 ~= 'rough' then
+        return nil, ShaderId() .. ' does not read a roughness mask in layer 8 (the Terrain1xx and Terrain2xx shaders do).'
+    end
+    local entry, n
+    local ok, err = pcall(function()
+        Fields.Run(function(S)
+            local h = S:Height(1)
+            local f = o.field or RoughnessField(S, h, o)
+            entry, n = Fields.CommitMask(f, 8, { raw = true, label = 'roughness mask' })
+        end)
+    end)
+    if not ok then return nil, Clean(err) end
+    if entry then return entry, n end
+    return nil, 'the roughness mask is already like that'
+end
+
+--- The roughness / height atlas of the layers (stratumconv: the same file the conversion makes), given to the Upper layer. o.size. Returns the undo entry, or nil and a message.
+function GenerateAtlas(o)
+    o = o or {}
+    local slot, why = Slot('atlas')
+    if not slot then return nil, why end
+    local TexConv = import('/lua/editor/texconv.lua')
+    if not TexConv.Available() then return nil, 'this editor build cannot make textures (ed_tex_atlas is missing)' end
+    local paths, roles = {}, {}
+    local Detect = import('/lua/editor/roledetect.lua')
+    local det = Detect.Layers(7)
+    for layer = 0, 7 do
+        paths[layer] = ed_stratum_layer(layer)
+        roles[layer] = det[layer] and det[layer].role or nil
+    end
+    local vfs, report = TexConv.Atlas(paths, nil, tonumber(o.size) or 1024, roles)
+    if not vfs then return nil, tostring(report) end
+    return Assign('atlas', slot, vfs, o)
+end
+
 -- ---- the layers --------------------------------------------------------------------------------------------------------------------------------------
 
 local function Snapshot(writes)
@@ -418,14 +580,15 @@ end
 local function TileSize(slot)
     local W = MapSize() or 512
     if slot.tile then return W + 1 end
+    if slot.pack == 'atlas' then return 2 * W end
     local path, size = ed_stratum_layer(slot.layer)
     if size and size > 0 and not IsEmptyPath(path) then return size end
     return W + 1
 end
 
-local function Assign(kind, slot, vfs, o)
+Assign = function(kind, slot, vfs, o)
     local info = Kinds[kind]
-    local writes = { { layer = slot.layer, path = vfs, size = TileSize(slot) } }
+    local writes = { { layer = slot.layer, path = vfs, size = (o and o.tile) or TileSize(slot) } }
     return Apply('map ' .. string.lower(info.label), writes, o)
 end
 
@@ -438,6 +601,7 @@ function Generate(kind, o)
     local slot, why = Slot(kind)
     if not slot then return nil, why end
     if not Kinds[kind].generate then return nil, 'there is nothing to make this texture from: import an image' end
+    if kind == 'atlas' then return GenerateAtlas(o) end
     if slot.shared then
         kind = slot.shared
         slot = Slot(kind)
@@ -464,7 +628,10 @@ function Generate(kind, o)
                 if (o.ao or 0) > 0 then f.ao = Occlusion(env, h, o.ao, o.aoRadius) end
                 f.depth = WaterDepth(env, h)
             end
-            local chan = Channels(pack, f, env, h)
+            local chan
+            if kind == 'macro' then chan = MacroChannels(S, h, o)
+            elseif kind == 'specular' then chan = SpecularChannels(S, h, o)
+            else chan = Channels(pack, f, env, h) end
             local prepare, done = MapPrepare(size, W)
             local wrote, werr = pcall(function()
                 vfs, disk = StageFile(kind, function(path)
@@ -478,7 +645,13 @@ function Generate(kind, o)
         end)
     end)
     if not ok then return nil, Clean(err) end
-    local entry, aerr = Assign(kind, slot, vfs, o)
+    local assignOpts = o
+    if kind == 'macro' then
+        assignOpts = {}
+        for k, v in o do assignOpts[k] = v end
+        assignOpts.tile = W + 1          -- one repeat over the whole map
+    end
+    local entry, aerr = Assign(kind, slot, vfs, assignOpts)
     if not entry then return nil, aerr end
     State.made[string.lower(vfs)] = { heights = heightSum, sun = string.format('%.2f,%.2f', sun_az, sun_alt) }
     return entry
@@ -703,6 +876,8 @@ function Clear(kind, o)
     local path, size
     if slot.layer == 18 or slot.layer == 19 then
         path, size = Strata.NONE_NORMAL, 4
+    elseif slot.pack == 'atlas' then
+        path, size = NEUTRAL_ATLAS, 2 * (MapSize() or 512)
     elseif slot.pack == 'info7' or slot.pack == 'light301' then
         -- Terrain001 and Terrain301 read the shadow of this slot without a size check: a transparent texture would shade the whole map, so the neutral one is white
         local vfs, disk = StageFile('light', function(p)

@@ -67,6 +67,8 @@ Types = {
     water = { label = 'Water', kind = 'source', params = {
         P('mode', 'Mode (1 land above, 2 under water, 3 shore band)', 1, 3, 1, '%d', 1), P('offset', 'Level above the water surface (units)', -60, 200, 0.5, '%.1f', 0),
         P('width', 'Band half width (mode 3, units)', 0, 50, 0.5, '%.1f', 2), P('soft', 'Soft edge (units)', 0, 50, 0.5, '%.1f', 2) } },
+    shoredist = { label = 'Shore (width along the ground)', kind = 'source', params = {
+        P('width', 'Width on land (units)', 0, 100, 0.5, '%.1f', 6), P('depth', 'Shallow water that counts (units)', 0, 30, 0.5, '%.1f', 3), P('soft', 'Soft edge (units)', 0, 50, 0.5, '%.1f', 3) } },
     noise = { label = 'Noise', kind = 'source', params = {
         P('kind', 'Kind (1 perlin, 2 simplex, 3 ridged, 4 billow, 5 fractal)', 1, 5, 1, '%d', 1), P('seed', 'Seed', 0, 9999, 1, '%d', 1), P('size', 'Feature size (units)', 4, 600, 2, '%d', 60),
         P('octaves', 'Octaves', 1, 8, 1, '%d', 4), P('from', 'From', 0, 1, 0.01, '%.2f', 0.45), P('to', 'To', 0, 1, 0.01, '%.2f', 0.65) } },
@@ -91,10 +93,14 @@ Types = {
     threshold = { label = 'Threshold', kind = 'modifier', params = { P('value', 'Above', 0, 1, 0.01, '%.2f', 0.5) } },
     smoothstep = { label = 'Smooth step', kind = 'modifier', params = { P('edge0', 'Edge 0', 0, 1, 0.01, '%.2f', 0.3), P('edge1', 'Edge 1', 0, 1, 0.01, '%.2f', 0.7) } },
     amount = { label = 'Amount', kind = 'modifier', params = { P('factor', 'Multiply by', 0, 10, 0.05, '%.2f', 1.5) } },
+    crisp = { label = 'Ragged edge', kind = 'modifier', params = {
+        P('crisp', 'Crispness (0 soft, 1 sharp)', 0, 1, 0.05, '%.2f', 0.5), P('noise', 'Edge noise', 0, 1, 0.05, '%.2f', 0.35), P('size', 'Noise feature size (units)', 4, 300, 2, '%d', 24), P('seed', 'Seed', 0, 9999, 1, '%d', 1) } },
+    grain = { label = 'Fine grain', kind = 'modifier', params = {
+        P('amount', 'How much the paint varies (0..1)', 0, 1, 0.05, '%.2f', 0.3), P('size', 'Grain size (units)', 2, 60, 1, '%d', 7), P('seed', 'Seed', 0, 9999, 1, '%d', 1) } },
 }
 
-Order = { 'slope', 'unitclass', 'height', 'curvature', 'aspect', 'water', 'noise', 'flow', 'position', 'layer', 'free_above', 'near_layer', 'const', 'named',
-          'not', 'blur', 'grow', 'shrink', 'open', 'close', 'threshold', 'smoothstep', 'amount' }
+Order = { 'slope', 'unitclass', 'height', 'curvature', 'aspect', 'water', 'shoredist', 'noise', 'flow', 'position', 'layer', 'free_above', 'near_layer', 'const', 'named',
+          'not', 'blur', 'grow', 'shrink', 'open', 'close', 'threshold', 'smoothstep', 'amount', 'crisp', 'grain' }
 
 --- A rule of `type` with the default values.
 function NewRule(type)
@@ -234,6 +240,15 @@ function SOURCE.water(c, v)
     return Op(c, 'water_above', { a = c.H, level = level, soft = v.soft })
 end
 
+--- A band along the water: the land up to `width` units (along the ground, not up the slope) from the waterline, and the shallow water (up to `depth` units deep) in front of it.
+function SOURCE.shoredist(c, v)
+    local wet = Op(c, 'water_below', { a = c.H, level = c.water, soft = 0.01 })           -- 1 under water
+    local d = Op(c, 'distance', { a = wet, threshold = 0.5, mode = 'outside' })           -- 0 under water, the distance to the water on land
+    local land = Op(c, 'water_below', { a = d, level = v.width, soft = math.max(0.5, v.soft) })
+    local gate = Op(c, 'water_above', { a = c.H, level = c.water - v.depth, soft = math.max(0.5, v.depth * 0.5) })
+    return Op(c, 'mul', { a = land, b = gate })
+end
+
 local NOISE = { 'perlin', 'simplex', 'ridged', 'billow', 'fractal' }
 
 function SOURCE.noise(c, v)
@@ -293,6 +308,20 @@ MODIFY.blur = function(c, m, v) return Clamp01(c, Op(c, 'blur', { a = m, radius 
 MODIFY.threshold = function(c, m, v) return Op(c, 'threshold', { a = m, value = v.value }) end
 MODIFY.smoothstep = function(c, m, v) return Op(c, 'smoothstep', { a = m, edge0 = v.edge0, edge1 = v.edge1 }) end
 MODIFY.amount = function(c, m, v) return Clamp01(c, Op(c, 'affine', { a = m, mul = v.factor, add = 0 })) end
+--- Edges that follow a noise instead of a smooth ramp: the mask plus a noise, run through a smoothstep around one half. crisp 0 keeps the soft ramp (a wide smoothstep), 1 makes the edge sharp,
+--- the noise makes it ragged. The inside of the mask (1) and the outside (0) stay as they are.
+MODIFY.crisp = function(c, m, v)
+    local n = Op(c, 'fractal', { like = c.H, seed = math.floor(v.seed), scale = v.size, octaves = 4 })
+    local shifted = Op(c, 'add', { a = m, b = Op(c, 'affine', { a = n, mul = v.noise, add = -0.5 * v.noise }) })
+    local w = math.max(0.05, 0.5 * (1 - v.crisp))
+    return Clamp01(c, Op(c, 'smoothstep', { a = shifted, edge0 = 0.5 - w, edge1 = 0.5 + w }))
+end
+
+--- The paint varies at the size of the texture detail: the mask times a fine noise (1 - amount .. 1).
+MODIFY.grain = function(c, m, v)
+    local n = Op(c, 'fractal', { like = c.H, seed = math.floor(v.seed), scale = v.size, octaves = 3 })
+    return Clamp01(c, Op(c, 'mul', { a = m, b = Op(c, 'affine', { a = n, mul = v.amount, add = 1 - v.amount }) }))
+end
 
 local function Grow(c, m, distance, soft)
     local d = Op(c, 'distance', { a = m, threshold = 0.5, mode = 'outside' })          -- 0 inside the mask, the distance to it outside

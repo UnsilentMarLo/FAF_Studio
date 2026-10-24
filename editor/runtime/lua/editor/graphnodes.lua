@@ -774,6 +774,19 @@ Def('out_layer', { label = 'Output: texture layer', cat = 'outputs', kw = 'outpu
                C('texture', 'Layer texture', TextureRoleIds, TextureRoleLabels, 'keep') },
     eval = function(E, v, ins) return { view = ins.a } end })
 
+-- Output: ground kind  -  the mask goes to the layer that holds that KIND of ground, whatever the map's shader and layer order are (recipes.lua finds the kinds from the textures)
+local RoleIds, RoleLabels = {}, {}
+for _, r in import('/lua/editor/texsets.lua').Roles do
+    table.insert(RoleIds, r)
+    table.insert(RoleLabels, import('/lua/editor/texsets.lua').RoleLabels[r])
+end
+Def('out_role', { label = 'Output: ground kind', cat = 'outputs', kw = 'output ground kind role grass rock sand dirt snow wet stratum layer texture paint mask write shader independent',
+    desc = 'Writes a mask into the paint of the layer that holds this kind of ground (grass, rock, sand ...): the kind is found from the textures of the map, so the graph works with any layer order and any shader (TTerrain with its four layers, the 7 layer shaders, the biplanar ones where rock goes to the side-mapped layers). A layer with no texture yet gets the texture of its kind from the map\'s texture set. The base layer has no mask: a kind that is the base is left alone.',
+    inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'layer', role = true,
+    params = { C('role', 'Kind of ground', RoleIds, RoleLabels, 'rock'), C('mode', 'Mode', { 'replace', 'add', 'subtract' }, { 'Replace', 'Add to (the larger)', 'Subtract from' }, 'replace'),
+               N('strength', 'Strength', 0, 1, 0.05, '%.2f', 1, { wire = true }), B('takeAway', 'Layers above take away', false), B('texture', 'Give an empty layer its texture', true) },
+    eval = function(E, v, ins) return { view = ins.a } end })
+
 Def('out_types', { label = 'Output: terrain type', cat = 'outputs', kw = 'output terrain type code surface write',
     desc = 'Sets a terrain type code in the terrain-type grid where the mask is above a threshold.',
     inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'types',

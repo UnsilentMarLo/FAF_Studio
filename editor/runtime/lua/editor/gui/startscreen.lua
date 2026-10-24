@@ -154,11 +154,14 @@ function Open(opts)
     W.Label(g, 'New map', rx, ry, { color = c.textDim })
     ry = ry + Skin.S(24)
     local tileGap = Skin.S(12)
-    local count = table.getn(Maps.Sizes)
+    local sizes = {}
+    for _, s in Maps.Sizes do table.insert(sizes, s) end
+    table.insert(sizes, { label = 'Any size...', custom = true })          -- any width and height: the terrain of the next power of two, the playable area cut to the size
+    local count = table.getn(sizes)
     local tw = math.floor((rw - tileGap * (count - 1)) / count)
     local th = Skin.S(64)
-    local subtitles = { 'a small, quick map: 1v1, practice', 'the usual 1v1 and 2v2 size', 'big maps for 4+ players', 'huge maps, many players', 'the largest the game supports' }
-    for i, s in Maps.Sizes do
+    local subtitles = { 'a small, quick map: 1v1, practice', 'the usual 1v1 and 2v2 size', 'big maps for 4+ players', 'huge maps, many players', 'the largest the game supports', 'your width and height, with a playable area' }
+    for i, s in sizes do
         local index = i
         local tile = Bitmap(g)
         tile.Depth:Set(function() return g.Depth() + 4 end)
@@ -168,6 +171,10 @@ function Open(opts)
             if event.Type == 'MouseEnter' then self:SetSolidColor(c.buttonHi) return true
             elseif event.Type == 'MouseExit' then self:SetSolidColor(c.button) return true
             elseif event.Type == 'ButtonPress' then
+                if sizes[index].custom then
+                    Maps_().NewCustomMap()
+                    return true
+                end
                 if not Maps.TemplateReady(Maps.Sizes[index].template) then
                     pcall(function() import('/lua/editor/gui/shell.lua').Say('the blank map for ' .. Maps.Sizes[index].label .. ' is not installed: run  python scripts/studio.py generate') end)
                     return true

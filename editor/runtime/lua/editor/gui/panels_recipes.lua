@@ -155,6 +155,7 @@ Panels.Register{
             Pn:Refresh()
         end, { tip = 'Measure how much of the map each layer covers now, from its paint mask.' })
         Pn.bTypes = Btn('Terrain types too', 110, function(self) Recipes.State.types = self.on end, { toggle = true, tip = 'Also write the terrain types (how ground sounds and slows units) from the layer seen most in each cell.' })
+        Pn.bRough = Btn('Roughness too', 100, function(self) Recipes.State.roughness = self.on end, { toggle = true, tip = 'For the Terrain1xx and Terrain2xx shaders: also set the roughness multiplier of layer 8 from the paint (wet ground, ice and snow shiny, dry rock and sand rough).' })
         Pn.bApply = Btn('Apply recipe', 100, function()
             Fresh()
             local summary, cells = Recipes.Apply()
@@ -219,6 +220,7 @@ Panels.Register{
         function Pn:Refresh()
             self.bPreset:SetText('Style: ' .. Recipes.Presets[Recipes.State.preset].name)
             self.bTypes:SetOn(Recipes.State.types)
+            self.bRough:SetOn(Recipes.State.roughness ~= false)
             if not self.plan then Fresh() end
             self.sigShown = Signature()
             self:RefreshRows()
@@ -314,7 +316,7 @@ Panels.Register{
                 sl:Place(pad + math.mod(i - 1, cols) * (colW + pad), y + math.floor((i - 1) / cols) * Skin.S(46), colW)
             end
             y = y + math.ceil(table.getn(self.knobSliders) / cols) * Skin.S(46) + Skin.S(4)
-            Flow({ self.bTypes, self.bApply })
+            Flow({ self.bTypes, self.bRough, self.bApply })
             W.Place(self.status, group, pad, y)
             y = y + Skin.S(20)
             for i = 1, 10 do

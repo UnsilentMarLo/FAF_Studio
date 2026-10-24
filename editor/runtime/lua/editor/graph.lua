@@ -621,11 +621,30 @@ function Presets()
     return list
 end
 
+-- The shipped graphs name their texture layers by number (layer 2 = rock, 3 = sand ... of the standard layout of texsets.lua). A preset is loaded with those outputs turned into Output: ground kind
+-- nodes, so it textures the right kinds of ground whatever the map's shader and layer order are (TTerrain's four layers, the seven layer shaders, the biplanar ones).
+local STANDARD_KINDS = { 'grass', 'rock', 'sand', 'dirt', 'wet', 'highrock', 'darkrock', 'snow' }
+
+local function KindsForLayers(g)
+    for _, n in g.nodes or {} do
+        if n.type == 'out_layer' then
+            local p = n.params or {}
+            local role = (p.texture and p.texture ~= 'keep') and p.texture or STANDARD_KINDS[math.floor((p.layer or 2) + 0.5)]
+            if role then
+                n.type = 'out_role'
+                p.role, p.layer, p.texture = role, nil, nil
+                n.params = p
+            end
+        end
+    end
+end
+
 function LoadPreset(id)
     local env = {}
     local ok, err = pcall(doscript, '/lua/editor/graphpresets/' .. id .. '.lua', env)
     if not ok then return false, tostring(err) end
     if type(env.Graph) ~= 'table' then return false, 'preset ' .. id .. ' has no Graph' end
+    KindsForLayers(env.Graph)
     Replace(env.Graph, 'load ' .. id)
     Current.name = env.Graph.name or id
     FileName = ''

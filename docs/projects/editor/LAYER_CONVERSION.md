@@ -114,6 +114,8 @@ undo / redo always finds them); saving copies the files the layers use into `<ma
 Natives (`EdTexConv.cpp`): `ed_tex_convert(src, dst, spec)` - channels from r g b a lum const or an atlas tile, with invert / scale / bias / centre / clamp, any size, DXT5 with mips; when the source is DXT5 and only
 the alpha changes the colour blocks are copied bit for bit. `ed_tex_atlas(dst, spec)` - eight tiles. 1024 x 1024 takes well under a second (a Lua table would need minutes and 250 MB).
 
+**Update 2026-10-24** (SHADER_TEXTURING.md): the atlas heights follow the kind of ground, the cliff layers of a B shader are chosen with the kind of ground, the normal tiles of a 2xx target follow the albedo tile, the Splat settings have sliders, and the generators for the macrotexture, specular, atlas and roughness mask exist. The list below is what is still open.
+
 ## Not done / left to the user
 
 * Heights are a guess (above). No per-role bias (rock above grass).

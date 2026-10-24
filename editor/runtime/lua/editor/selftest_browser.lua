@@ -190,6 +190,13 @@ function Run()
     local i25, n25 = Maps.SizeForKm(2.5)
     check('map sizes in kilometres map to templates', i5 == 1 and i80 == 5 and n80 == 4096 and i25 == 0 and n25 == 128, tostring(i5) .. ' ' .. tostring(i80))
     check('a size the terrain does not support is refused', Maps.SizeForKm(7) == nil and Maps.SizeForKm(160) == nil and Maps.SizeForKm('x') == nil)
+    -- any size: the terrain of the next power of two, the playable area in the middle of it
+    local pl = Maps.CustomPlan(7.5, 12)
+    check('7.5 x 12 km: terrain 1024, a playable area of 384 x 614 units in the middle', pl and pl.terrain == 1024 and pl.w == 384 and pl.h == 614 and pl.rect and pl.rect[1] == 320 and pl.rect[2] == 205
+        and pl.rect[3] == 704 and pl.rect[4] == 819 and not pl.whole and pl.template == Maps.Sizes[3].template)
+    local p10, p80, p25 = Maps.CustomPlan(10, 10), Maps.CustomPlan(80, 80), Maps.CustomPlan(2.5, 2.5)
+    check('a size that is a terrain needs no playable area', p10 and p10.whole and p10.rect == false and p10.terrain == 512 and p80 and p80.whole and p25 and p25.whole and p25.terrain == 128)
+    check('too small, too big or not a number is refused', Maps.CustomPlan(0.5, 5) == nil and Maps.CustomPlan(5, 81) == nil and Maps.CustomPlan('x', 5) == nil)
     if table.getn(fails) == 0 then return 'PASS browser (' .. checks .. ' checks)' end
     return 'FAIL browser: ' .. table.concat(fails, '; ')
 end

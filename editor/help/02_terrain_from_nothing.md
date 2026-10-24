@@ -6,7 +6,7 @@ This is the shortest path from an empty map to something you can play on. Every 
 
 ## 1. A blank map
 
-1. Start screen > New map, or File > New map. Pick a size: 5 km (256) for a small map, 10 km (512) for the usual 1v1 and 2v2 size, 20 km (1024) for big maps. The map starts flat with one start position.
+1. Start screen > New map, or File > New map. Pick a size: 5 km (256) for a small map, 10 km (512) for the usual 1v1 and 2v2 size, 20 km (1024) for big maps. **Any size...** makes a map of any width and height from 1 to 80 km (for example 7.5 x 12 km): the terrain is the next power of two and the playable area is cut to your size, in the middle of it. The map starts flat with one start position.
 
 ## 2. Shape the land
 

@@ -409,12 +409,20 @@ function Layers(cap)
         if a then
             local c = Classify(a)
             local ov = Override(a)
+            -- a texture of the editor's own texture sets (texsets.lua) is known exactly: no guessing from its name or colour
+            local known = nil
+            if not ov and not Fake then
+                local okSet, role = pcall(function() return import('/lua/editor/texsets.lua').RoleOfTexture(a, l) end)
+                if okSet then known = role end
+            end
             local e = { layer = l, albedo = a, short = string.gsub(string.gsub(a, '^.*[/\\]', ''), '[_]?[aA][lL][bB][eE][dD][oO]%.[dD][dD][sS]$', ''),
                         auto = c.role, autoConf = c.conf, source = c.source, override = ov, nameRole = c.name.role, colourRole = c.colour.role }
             if ov == 'none' then
                 e.role, e.conf, e.source = nil, 1, 'user'
             elseif ov then
                 e.role, e.conf, e.source = ov, 1, 'user'
+            elseif known then
+                e.role, e.conf, e.source = known, 1, 'texture set'
             else
                 e.role, e.conf = c.role, c.conf
             end

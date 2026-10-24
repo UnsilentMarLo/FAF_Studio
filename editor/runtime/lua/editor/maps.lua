@@ -43,23 +43,64 @@ function SizeForKm(km)
     return nil, 'no template for this size'
 end
 
---- A new map of a size (km, fractions allowed) with the name.
-function NewKm(km, name)
-    local index, samples = SizeForKm(km)
-    if not index then return nil, samples end
-    if index == 0 then
-        if not TemplateReady('/maps/editor_blank_128/editor_blank_128_scenario.lua') then
-            return nil, 'the blank 2.5 km map is not installed: run  python scripts/studio.py generate'
-        end
-        ed_write_file(PENDING, 'name=' .. (name or 'My map') .. '\n')
-        import('/lua/editor/control.lua').LoadMap('/maps/editor_blank_128/editor_blank_128_scenario.lua')
-        return true
-    end
-    return New(index, name)
-end
-
 local PENDING = 'editor_pending_map.txt'
 local TEMPLATE_NAMES = { ['Editor blank world'] = true }
+
+-- ---- any size: the terrain of the next power of two, the playable area cut to the size asked for -----------------------------------------------------------------------------
+--
+-- The terrain can only be 128 ... 4096 samples a side (powers of two), but the PLAYABLE AREA (AREA_1, playable.lua) is any rectangle in it: that is how maps of 7.5 x 12 km or
+-- 15 x 15 km are made. A custom map is a blank template of the smallest terrain that holds the size, with the playable area in the middle of it and the start position in the
+-- middle of the area.
+
+SAMPLES_PER_KM = 51.2
+MIN_KM, MAX_KM = 1, 80
+
+local function TemplateOf(samples)
+    if samples == 128 then return '/maps/editor_blank_128/editor_blank_128_scenario.lua' end
+    for _, s in Sizes do
+        if s.samples == samples then return s.template end
+    end
+end
+
+--- The plan for a map of width x height kilometres: { terrain (samples a side), template, w, h (units of the playable area), rect = { x0, z0, x1, z1 } | false (the whole terrain),
+--- used (share of the terrain that is playable), whole = true when the size needs no playable area }; nil and a message for a size the terrain cannot hold.
+function CustomPlan(widthKm, heightKm)
+    local wk, hk = tonumber(widthKm), tonumber(heightKm)
+    if not wk or not hk then return nil, 'type the width and the height in kilometres, for example 7.5' end
+    if wk < MIN_KM or hk < MIN_KM then return nil, 'the smallest map is ' .. MIN_KM .. ' km a side' end
+    if wk > MAX_KM or hk > MAX_KM then return nil, 'the terrain holds at most ' .. MAX_KM .. ' km a side' end
+    local w, h = math.floor(wk * SAMPLES_PER_KM + 0.5), math.floor(hk * SAMPLES_PER_KM + 0.5)
+    local terrain = 128
+    while terrain < math.max(w, h) do terrain = terrain * 2 end
+    local plan = { terrain = terrain, template = TemplateOf(terrain), w = w, h = h, used = (w * h) / (terrain * terrain) }
+    if w == terrain and h == terrain then
+        plan.whole, plan.rect = true, false
+    else
+        local x0, z0 = math.floor((terrain - w) / 2), math.floor((terrain - h) / 2)
+        plan.rect = { x0, z0, x0 + w, z0 + h }
+    end
+    return plan
+end
+
+--- A new map of width x height km (fractions allowed) with the name. Returns true, or nil and a message.
+function NewCustom(widthKm, heightKm, name)
+    local plan, why = CustomPlan(widthKm, heightKm)
+    if not plan then return nil, why end
+    if not TemplateReady(plan.template) then
+        return nil, 'the blank map for ' .. plan.terrain .. ' samples is not installed: run  python scripts/studio.py generate'
+    end
+    local text = 'name=' .. (name or 'My map') .. '\n'
+    if plan.rect then text = text .. 'playable=' .. plan.rect[1] .. ',' .. plan.rect[2] .. ',' .. plan.rect[3] .. ',' .. plan.rect[4] .. '\n' end
+    ed_write_file(PENDING, text)
+    import('/lua/editor/control.lua').LoadMap(plan.template)
+    return true
+end
+
+--- A square map of `km` km a side.
+function NewKm(km, name)
+    return NewCustom(km, km, name)
+end
+
 
 saveDir = false      -- where the open map was last saved / opened from (disk folder)
 saveStem = false
@@ -223,6 +264,19 @@ function ApplyPending(doc)
             saveDir = value
         elseif key == 'stem' then
             saveStem = value
+        elseif key == 'playable' then
+            -- a custom size: the playable area in the middle of the terrain, the start position in the middle of the area
+            local _, _, x0, z0, x1, z1 = string.find(value, '^(%d+),(%d+),(%d+),(%d+)')
+            if x0 then
+                x0, z0, x1, z1 = tonumber(x0), tonumber(z0), tonumber(x1), tonumber(z1)
+                doc.save.Areas = doc.save.Areas or {}
+                doc.save.Areas.AREA_1 = { rectangle = { x0, z0, x1, z1, type = 'RECTANGLE' } }
+                local markers = doc.save.MasterChain and doc.save.MasterChain._MASTERCHAIN_ and doc.save.MasterChain._MASTERCHAIN_.Markers
+                local start = markers and markers.ARMY_1
+                if start and start.position then
+                    start.position = Map.MakeVec3(math.floor((x0 + x1) / 2), start.position[2], math.floor((z0 + z1) / 2))
+                end
+            end
         elseif key == 'resize' then
             doc.resizePayload = value        -- resize.lua applies the heights, masks, props and decals of a resized map (Map.Load calls it)
         end

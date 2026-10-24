@@ -781,6 +781,76 @@ end
 
 function DropBuildCache() DropBuild(BuildRun) end
 
+--- The painted layer an Output: ground kind node writes to: the layer that holds a texture of that kind in the map (recipes.lua Plan: found from the textures, not from layer numbers), else the layer the
+--- map's shader gives that kind (texsets.lua Layout). Returns layer, nil, whether the layer still needs a texture; or nil and why not (the kind is the base layer, the shader has no layer for it).
+function RoleLayer(role)
+    local Recipes = import('/lua/editor/recipes.lua')
+    local plan = Recipes.Plan()
+    local cap = Recipes.Cap()
+    local list = plan.byRole[role]
+    if list then
+        for _, l in list do
+            if l >= 1 and l <= cap then return l, nil, false end
+        end
+        return nil, 'the base layer holds this kind of ground (it has no mask)'
+    end
+    local l = import('/lua/editor/texsets.lua').RoleLayer(role)
+    if l and l <= cap then return l, nil, true end
+    return nil, 'the shader ' .. tostring(rawget(_G, 'ed_stratum_shader') and ed_stratum_shader() or '?') .. ' has no layer for this kind of ground'
+end
+
+--- The layer an output node of the kind 'layer' writes to (a fixed layer, or the one of a kind of ground), nil and why when it has none. needsTexture: the layer is empty and gets the kind's texture.
+function NodeLayer(run, node)
+    local def = Nodes.Defs[node.type]
+    if def.role then
+        local l, why, needs = RoleLayer(V(run, node, 'role'))
+        return l, why, needs
+    end
+    return math.floor(V(run, node, 'layer') + 0.5)
+end
+
+--- The map-wide textures that are MADE FROM THE PAINT (macrotexture, specular, roughness / height atlas) and the roughness mask of layer 8: written after the layers, so they see what this build painted.
+local GENERATED = { { 'mapmacro', 'macro' }, { 'mapspecular', 'specular' }, { 'mapatlas', 'atlas' } }
+function BuildPaintTextures(run, graph, result)
+    local MT = import('/lua/editor/maptextures.lua')
+    local notes = {}
+    for _, g in GENERATED do
+        for _, node in OutputNodes(graph, g[1]) do
+            local kind = g[2]
+            local un = MT.Unsupported(kind)
+            if un then
+                result.warnings = result.warnings or {}
+                table.insert(result.warnings, { text = un.text, code = 'shader', kind = kind, node = node.id })
+            else
+                local o = {}
+                for _, p in Nodes.Defs[node.type].params do o[p.key] = V(run, node, p.key) end
+                local entry, err = MT.Generate(kind, o)
+                if not entry then return MT.Kinds[kind].label .. ': ' .. tostring(err) end
+                result.maptextures = (result.maptextures or 0) + 1
+            end
+        end
+    end
+    for _, node in OutputNodes(graph, 'roughness') do
+        local p = import('/lua/editor/strata.lua').Profile()
+        if not p or p.l8 ~= 'rough' then
+            result.warnings = result.warnings or {}
+            table.insert(result.warnings, { text = 'Roughness mask not written: ' .. tostring(rawget(_G, 'ed_stratum_shader') and ed_stratum_shader() or '?') .. ' does not read a roughness mask in layer 8 (the Terrain1xx and Terrain2xx shaders do).', code = 'shader', node = node.id })
+        else
+            local amount = V(run, node, 'amount')
+            local mask = run:Value(node.id, 'view')
+            local field = nil
+            if mask and Graph.WireInto(node.id, 'a') then
+                field = Fields.Op('affine', { a = mask, mul = 200 * amount, add = 128 - 100 * amount })
+            end
+            local entry, err = MT.GenerateRoughness({ amount = amount, field = field })
+            if field then Fields.Free(field) end
+            if not entry and err and not string.find(err, 'already like that', 1, true) then return 'roughness mask: ' .. tostring(err) end
+            if entry then result.maptextures = (result.maptextures or 0) + 1 end
+        end
+    end
+    return nil
+end
+
 --- Writes the map-wide textures of the output nodes Output: map normal map and Output: map lighting (maptextures.lua; each is an undo entry that Build merges with the rest). Adds
 --- result.maptextures (how many were made or written), result.mapNote (a sentence for the status line) and result.warnings ({ { text, code } }).
 --- A texture the map's shader does not read is SKIPPED with a warning (code 'shader') while its node's Use it on the map is on: the other outputs are built normally. With Use it on the map off
@@ -860,10 +930,12 @@ function Build()
     end
     -- an output into a layer the map's shader does not paint (strata.lua WhyNotPaintable) refuses the whole build before anything is written
     for _, node in OutputNodes(graph, 'layer') do
-        local why = import('/lua/editor/strata.lua').WhyNotPaintable(math.floor(V(run, node, 'layer') + 0.5))
-        if why then
-            DropBuild(run)
-            return nil, 'output node ' .. node.id .. ': ' .. why
+        if not Nodes.Defs[node.type].role then
+            local why = import('/lua/editor/strata.lua').WhyNotPaintable(math.floor(V(run, node, 'layer') + 0.5))
+            if why then
+                DropBuild(run)
+                return nil, 'output node ' .. node.id .. ': ' .. why
+            end
         end
     end
     local result = { changed = 0, layers = 0, types = 0, props = 0 }
@@ -884,14 +956,22 @@ function Build()
         local c = MaskGen.NewContext(S, { step = 1 })
         for _, node in OutputNodes(graph, 'layer') do
             local m = run:Value(node.id, 'view')
-            if m then
+            local layer, whyNot, needsTexture = NodeLayer(run, node)
+            if m and not layer then
+                result.warnings = result.warnings or {}
+                table.insert(result.warnings, { text = 'Output: ground kind not written: ' .. tostring(whyNot) .. '.', code = 'role', node = node.id })
+            elseif m then
                 local mode = ({ replace = 1, add = 2, subtract = 3 })[V(run, node, 'mode')] or 1
-                local layer = math.floor(V(run, node, 'layer') + 0.5)
                 local entry, n = MaskGen.WriteLayer(c, m, layer, { mode = mode, strength = V(run, node, 'strength'), takeAway = V(run, node, 'takeAway') }, false)
                 if entry then result.layers = result.layers + 1 end
                 -- the layer's texture by kind (grass, rock, sand ...) from the map's texture set, so the mask shows as something
-                local role = V(run, node, 'texture')
-                if role and role ~= 'keep' then pcall(function() import('/lua/editor/texsets.lua').ApplyRole(layer, role) end) end
+                local role = Nodes.Defs[node.type].role and V(run, node, 'role') or V(run, node, 'texture')
+                if Nodes.Defs[node.type].role then
+                    -- a ground kind node gives an empty layer the texture of its kind and leaves a layer that has a texture alone
+                    if needsTexture and V(run, node, 'texture') then pcall(function() import('/lua/editor/texsets.lua').ApplyRole(layer, role) end) end
+                elseif role and role ~= 'keep' then
+                    pcall(function() import('/lua/editor/texsets.lua').ApplyRole(layer, role) end)
+                end
             end
         end
         -- terrain types
@@ -914,6 +994,8 @@ function Build()
         end
         -- map-wide shader textures: the normal map and the lighting texture (maptextures.lua)
         local mapFail = BuildMapTextures(run, graph, result)
+        if mapFail then failure = mapFail return end
+        mapFail = BuildPaintTextures(run, graph, result)
         if mapFail then failure = mapFail return end
         -- props
         local Scatter = import('/lua/editor/scatter.lua')

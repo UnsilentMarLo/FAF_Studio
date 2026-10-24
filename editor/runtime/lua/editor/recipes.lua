@@ -61,8 +61,8 @@ local function Rule(type, values, op, invert)
 end
 
 
-Knobs = { cliff = 45, rock = 28, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
-KnobDefaults = { cliff = 45, rock = 28, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, seed = 1 }
+Knobs = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, seed = 1 }
+KnobDefaults = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, seed = 1 }
 
 KnobInfo = {
     { key = 'cliff', label = 'Cliff slope from (degrees)', min = 20, max = 85, step = 1, fmt = '%d' },
@@ -75,22 +75,24 @@ KnobInfo = {
     { key = 'dark', label = 'Dark rock in cavities (amount)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
     { key = 'breakup', label = 'Edge breakup (noise)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
     { key = 'patch', label = 'Patch size (units)', min = 8, max = 300, step = 2, fmt = '%d' },
+    { key = 'crisp', label = 'Edge crispness (0 soft, 1 sharp)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
+    { key = 'fine', label = 'Fine grain (variation at texture size)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
     { key = 'seed', label = 'Seed', min = 0, max = 9999, step = 1, fmt = '%d' },
 }
 
-ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', 'breakup', 'patch', 'seed' }
+ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', 'breakup', 'patch', 'crisp', 'fine', 'seed' }
 
 --- The styles. `knobs` replaces the settings when the style is chosen (SelectPreset); `off` lists roles the style does not paint.
 Presets = {
     { id = 'temperate', name = 'Natural (all eight kinds of ground)', uses = ALL_KNOBS, knobs = {}, off = {} },
-    { id = 'alpine', name = 'Alpine (more rock, high rock and snow)', uses = ALL_KNOBS, knobs = { snow = 0.18, high = 0.4, cliff = 42, rock = 24, dark = 0.6 }, off = {} },
-    { id = 'desert', name = 'Desert (dust and sand, no snow)', uses = ALL_KNOBS, knobs = { snow = 0, beach = 4, dirt = 0.42, dark = 0.4, wet = 1 }, off = { snow = true }, drySand = true },
-    { id = 'arctic', name = 'Arctic (snow and ice, rock)', uses = ALL_KNOBS, knobs = { snow = 0.4, high = 0.35, beach = 2, dirt = 0.15 }, off = {} },
-    { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 36, rock = 20, dirt = 0.5, dark = 0.8, high = 0.4, snow = 0.05 }, off = {} },
-    { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.36, snow = 0, rock = 34, cliff = 50 }, off = { snow = true } },
+    { id = 'alpine', name = 'Alpine (more rock, high rock and snow)', uses = ALL_KNOBS, knobs = { snow = 0.18, high = 0.4, cliff = 46, rock = 28, dark = 0.6 }, off = {}, altForce = true },
+    { id = 'desert', name = 'Desert (dust and sand, no snow)', uses = ALL_KNOBS, knobs = { snow = 0, beach = 4, dirt = 0.42, dark = 0.4, wet = 1, crisp = 0.3 }, off = { snow = true }, drySand = true },
+    { id = 'arctic', name = 'Arctic (snow and ice, rock)', uses = ALL_KNOBS, knobs = { snow = 0.4, high = 0.35, beach = 2, dirt = 0.15, cliff = 48, rock = 30 }, off = {}, altForce = true },
+    { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 44, rock = 26, dirt = 0.5, dark = 0.8, high = 0.4, snow = 0.05, crisp = 0.55 }, off = {} },
+    { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.36, snow = 0, rock = 38, cliff = 56, crisp = 0.3 }, off = { snow = true } },
 }
 
-State = { preset = 1, types = true, selected = 0 }          -- State.layers (nil): detect the roles from the textures; a list: the roles are on those layers
+State = { preset = 1, types = true, roughness = true, selected = 0 }          -- State.layers (nil): detect the roles from the textures; a list: the roles are on those layers
 
 --- Chooses a style: the settings go back to the defaults, then the style's own values are put on top.
 function SelectPreset(i)
@@ -261,6 +263,15 @@ end
 --- A size for the wobble noise and the breakup strength (0..2, 1 = the knob's middle) of the settings.
 local function Wob(k) return math.max(40, math.min(160, k.patch * 1.6)), k.breakup * 2 end
 
+--- How much altitude counts on this map: 0 for flat country (a relief under 18 units: no snow line, no high rock), 1 from a relief of 60 units. The alpine and arctic styles ignore it.
+function AltFactor(st)
+    local R = HeightAt(st, 0.99) - HeightAt(st, 0.03)
+    local f = math.max(0, math.min(1, (R - 18) / 42))
+    local p = Presets[State.preset]
+    if p and p.altForce then f = 1 end
+    return f
+end
+
 --- Slope ramp: 0 below a0 degrees, 1 from a1 on.
 local function SteepFrom(a0, a1, wob, size, seed, op)
     return Rule('slope', { lo = a1, hi = 90, soft = math.max(1, a1 - a0), wobble = wob or 0, wsize = size or 80, wseed = seed or 1 }, op)
@@ -279,6 +290,10 @@ local function FallTo(st, h0, h1, wob, size, seed, op)
 end
 local function Blur(r) return Rule('blur', { radius = r }) end
 local function AtMost(f) return Rule('amount', { factor = f }) end              -- the opacity a role reaches at most
+--- Edges that follow a noise (the knob "Edge crispness"): ragged and fairly sharp instead of a smooth ramp.
+local function Crisp(k, seed, size) return Rule('crisp', { crisp = k.crisp, noise = 0.25 + 0.4 * k.breakup, size = size or math.max(10, k.patch * 0.4), seed = seed }) end
+--- Variation at the size of the texture detail (the knob "Fine grain"): where a role is only partly there, the paint is patchy at that size instead of an even tint.
+local function Grain(k, seed, scale) return Rule('grain', { amount = math.min(0.8, (scale or 1) * (0.1 + 0.6 * k.fine)), size = 7, seed = seed }) end
 
 --- The height of the snow line (50 percent snow): the top share of the land heights, never lower than a floor that keeps a flat map from being white (the lower the share the higher the floor).
 function SnowLine(k, st)
@@ -304,12 +319,13 @@ Builders.grass = function(k, st, cx)
     table.insert(rules, Rule('const', { value = 0.75 }, 'or'))                           -- the mix only takes a quarter away: grass is what is left
     table.insert(rules, FlatTo(k.rock - 4, k.rock + 12, 3 * bk, size, k.seed + 6, 'mul'))
     if st.hasWater then table.insert(rules, Rule('water', { mode = 1, offset = cx.has.sand and (k.beach + 0.5) or 0.5, soft = math.max(2, k.beach) }, 'mul')) end
-    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then
+    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 and AltFactor(st) > 0.04 then
         local _, R = Zone(st)
         local sl = SnowLine(k, st)
         table.insert(rules, FallTo(st, sl - 0.12 * R, sl + 0.04 * R, 0.1 * R * bk, size, k.seed + 7, 'mul'))
     end
     table.insert(rules, Blur(3))
+    table.insert(rules, Grain(k, k.seed + 301, 0.7))
     return rules
 end
 
@@ -317,23 +333,29 @@ Builders.dirt = function(k, st, cx)
     if cx.base == 'dirt' then return {} end
     if k.dirt <= 0.005 then return false end
     local size, bk = Wob(k)
-    local rules = { Mix(k.seed, k.patch * 2.4, 1 - k.dirt - 0.22, 1 - k.dirt + 0.22), AtMost(0.9), FlatTo(k.rock - 6, k.rock + 10, 3 * bk, size, k.seed + 3, 'mul') }
-    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 then
+    local rules = { Mix(k.seed, k.patch * 2.4, 1 - k.dirt - 0.22, 1 - k.dirt + 0.22), Crisp(k, k.seed + 4), FlatTo(k.rock - 6, k.rock + 10, 3 * bk, size, k.seed + 3, 'mul') }
+    if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 and AltFactor(st) > 0.04 then
         local _, R = Zone(st)
         local sl = SnowLine(k, st)
         table.insert(rules, FallTo(st, sl - 0.12 * R, sl + 0.04 * R, 0.1 * R * bk, size, k.seed + 7, 'mul'))
     end
-    table.insert(rules, Blur(3))
+    table.insert(rules, Blur(1.5))
+    table.insert(rules, Grain(k, k.seed + 302, 1))
+    table.insert(rules, AtMost(0.88))
     return rules
 end
 
+--- Wet ground: the bed of the drainage lines (a strong drainage area in a concave channel on flat ground) and a narrow strip along the waterline. Not whole plains: it needs a channel.
 Builders.wet = function(k, st, cx)
     if cx.base == 'wet' then return {} end
     local size, bk = Wob(k)
-    local rules = { Rule('flow', { range = 1000, from = 0.5, to = 0.8 }), Rule('curvature', { radius = 5, gain = 20, lo = 0, hi = 0.46, soft = 0.1 }), FlatTo(8, 24, 0, size, 1, 'mul'), Blur(5), AtMost(0.7) }
+    local rules = { Rule('flow', { range = 600, from = 0.62, to = 0.86 }), Rule('curvature', { radius = 4, gain = 20, lo = 0, hi = 0.45, soft = 0.08 }), FlatTo(7, 20, 0, size, 1, 'mul') }
     if st.hasWater and k.wet > 0 then
-        table.insert(rules, Rule('water', { mode = 3, offset = 0, width = k.wet, soft = 2 + k.wet }, 'or'))
+        table.insert(rules, Rule('shoredist', { width = k.wet * 2, depth = 2, soft = 1.5 + k.wet }, 'or'))
     end
+    table.insert(rules, Blur(2))
+    table.insert(rules, Crisp(k, k.seed + 51, 12))
+    table.insert(rules, AtMost(0.72))
     return rules
 end
 
@@ -342,43 +364,49 @@ Builders.sand = function(k, st, cx)
     local size, bk = Wob(k)
     if st.hasWater then
         if k.beach <= 0 then return false end
-        return { Rule('water', { mode = 3, offset = 0.3, width = k.beach, soft = 1 + k.beach }), FlatTo(10, 26, 2 * bk, size, k.seed + 8, 'mul'), Blur(3), AtMost(0.9) }
+        return { Rule('shoredist', { width = k.beach * 2.5, depth = 3, soft = 1 + k.beach }), FlatTo(10, 28, 2 * bk, size, k.seed + 8, 'mul'), Crisp(k, k.seed + 81, 14), Blur(1.5), Grain(k, k.seed + 303, 0.5), AtMost(0.92) }
     end
     local p = Presets[State.preset]
     if not (p and p.drySand) then return false end                            -- sand lies along water; a dry map only has it when the style asks (desert: dry basins)
     local h0, h1 = HeightAt(st, 0.04), HeightAt(st, 0.3)                     -- the lowest third of the land: dry basins
-    return { FallTo(st, h0, h1, 0.4 * (h1 - h0) * bk, size * 1.5, k.seed + 9), FlatTo(6, 18, 0, size, 1, 'mul'), Blur(4), AtMost(0.6) }
+    return { FallTo(st, h0, h1, 0.4 * (h1 - h0) * bk, size * 1.5, k.seed + 9), FlatTo(6, 18, 0, size, 1, 'mul'), Crisp(k, k.seed + 82, 20), Blur(2.5), Grain(k, k.seed + 304, 0.7), AtMost(0.65) }
 end
 
 Builders.rock = function(k, st, cx)
     if cx.base == 'rock' then return {} end
     local size, bk = Wob(k)
-    return { SteepFrom(k.rock, math.max(k.rock + 4, k.cliff), 4 * bk, size, k.seed + 11), Blur(3) }
+    return { SteepFrom(k.rock, math.max(k.rock + 4, k.cliff), 4 * bk, size, k.seed + 11), Crisp(k, k.seed + 12, 18), Blur(1.2) }
 end
 
 Builders.darkrock = function(k, st, cx)
     if cx.base == 'darkrock' then return {} end
     if k.dark <= 0.01 then return false end
     local size, bk = Wob(k)
-    return { Rule('curvature', { radius = 6, gain = 18, lo = 0, hi = 0.42, soft = 0.1 }), SteepFrom(k.rock * 0.45, k.rock + 6, 3 * bk, size, k.seed + 31, 'mul'), Blur(6), AtMost(0.15 + 0.4 * k.dark) }
+    return { Rule('curvature', { radius = 6, gain = 18, lo = 0, hi = 0.42, soft = 0.1 }), SteepFrom(k.rock * 0.45, k.rock + 6, 3 * bk, size, k.seed + 31, 'mul'), Blur(5), Grain(k, k.seed + 305, 1), AtMost(0.15 + 0.45 * k.dark) }
 end
 
 Builders.highrock = function(k, st, cx)
     if cx.base == 'highrock' then return {} end
+    local alt = AltFactor(st)
+    if alt < 0.05 then return false end
     local z0, R = Zone(st)
     local size, bk = Wob(k)
     local h = z0 + R * k.high
-    return { SteepFrom(k.rock * 0.4, k.rock + 8), Rule('curvature', { radius = 6, gain = 25, lo = 0.56, hi = 1, soft = 0.1 }, 'or'), Rule('const', { value = 0.3 }, 'or'),
-             RiseFrom(st, h - 0.12 * R, h + 0.14 * R, 0.1 * R * bk, size, k.seed + 41, 'mul'), Blur(3) }
+    local rules = { SteepFrom(k.rock * 0.4, k.rock + 8), Rule('curvature', { radius = 6, gain = 25, lo = 0.56, hi = 1, soft = 0.1 }, 'or') }
+    if not cx.biplanar then table.insert(rules, Rule('const', { value = 0.3 }, 'or')) end                -- some rock on flat high ground (a side-mapped layer would be stretched there)
+    for _, r in { RiseFrom(st, h - 0.12 * R, h + 0.14 * R, 0.1 * R * bk, size, k.seed + 41, 'mul'), Crisp(k, k.seed + 42, 22), Blur(2), AtMost(alt) } do table.insert(rules, r) end
+    return rules
 end
 
 Builders.snow = function(k, st, cx)
     if cx.base == 'snow' then return {} end
     if k.snow <= 0.004 then return false end
+    local alt = AltFactor(st)
+    if alt < 0.05 then return false end
     local _, R = Zone(st)
     local size, bk = Wob(k)
     local sl = SnowLine(k, st)
-    return { RiseFrom(st, sl - 0.14 * R, sl + 0.06 * R, 0.08 * R * bk, size, k.seed + 21, nil, 0.05 * R), FlatTo(k.cliff, k.cliff + 22, 4 * bk, size, k.seed + 22, 'mul'), Blur(4) }
+    return { RiseFrom(st, sl - 0.14 * R, sl + 0.06 * R, 0.08 * R * bk, size, k.seed + 21, nil, 0.05 * R), FlatTo(k.cliff, k.cliff + 22, 4 * bk, size, k.seed + 22, 'mul'), Crisp(k, k.seed + 23, 16), Blur(2), AtMost(alt) }
 end
 
 -- ---- the layers of the map and their roles ---------------------------------------------------------------------------------------------------------------------
@@ -416,6 +444,8 @@ end
 function Plan()
     local cap = Cap()
     local plan = { cap = cap, base = nil, has = {}, byRole = {}, missing = {}, unknown = {}, beyond = {}, moved = {}, info = Detect.Layers(8), manual = false }
+    local okProfile, profile = pcall(function() return Strata.Profile() end)
+    plan.biplanar = (okProfile and profile and profile.biplanar) and true or false       -- layers 3 and 4 are drawn from the side only (the B shaders): nothing but steep ground goes there
     local taken = {}
     local function Add(layer, role)
         if taken[layer] then return end
@@ -454,7 +484,7 @@ end
 
 --- What the role rules need to know about the layers: the role of the base layer and the roles present.
 function Context(plan)
-    return { base = plan.base, has = plan.has }
+    return { base = plan.base, has = plan.has, biplanar = plan.biplanar }
 end
 
 --- The roles of the current style with the current settings, for the plan of the map (or the context cx): { id, label, keywords, rules, base, off }.
@@ -622,6 +652,18 @@ local function Weights(S, c, plan, roles, k, st)
             if not role.base then
                 local m, err = MaskGen.Evaluate(c, { rules = role.rules })
                 if not m then error(role.label .. ': ' .. tostring(err)) end
+                -- a role on a side-mapped layer (3 or 4 of the B shaders) only gets steep ground: on flat ground that texture is stretched
+                local onCliff = false
+                if plan.biplanar then
+                    for _, l in list do
+                        if l == 3 or l == 4 then onCliff = true end
+                    end
+                end
+                if onCliff then
+                    local gate, gerr = MaskGen.Evaluate(c, { rules = { Rule('slope', { lo = 24, hi = 90, soft = 12 }) } })
+                    if not gate then error(role.label .. ': ' .. tostring(gerr)) end
+                    m = S:Op('mul', { a = m, b = gate })
+                end
                 sel[id] = m
             end
         end
@@ -653,7 +695,7 @@ end
 
 --- Writes all roles: the paint masks of their layers and (State.types) the terrain-type grid. ONE undo step. Returns a summary { { label, share, layer }, ... } (the shares add up to 1)
 --- and the number of cells changed, or nil, message.
-function Apply()
+local function ApplyPaint()
     if not Fields.IsAvailable() or not ed_stratum_info() then return nil, 'the map has no paint masks' end
     local plan = Plan()
     local anyRole = false
@@ -666,6 +708,15 @@ function Apply()
         local c = MaskGen.NewContext(S, { step = 1 })
         local ok, target, groups = pcall(Weights, S, c, plan, roles, Knobs, Stats())
         if not ok then return nil, tostring(target) end
+        -- a kind of ground the style or the map does not have (snow on a flat map, in the desert style) is cleared from its layer: the recipe replaces what an earlier run painted
+        for _, r in roles do
+            local list = plan.byRole[r.id]
+            if r.off and list then
+                for _, l in list do
+                    if l >= 1 and l <= cap and not target[l] then target[l] = S:Op('const', { like = c.H, value = 0 }) end
+                end
+            end
+        end
         local parts, cells = {}, 0
         local free = S:Op('const', { like = c.H, value = 1 })
         local vis = {}
@@ -740,6 +791,22 @@ function Apply()
         if other > 0.0005 then table.insert(summary, { label = 'Layers outside the recipe', share = other, layer = -1 }) end
         return summary, cells
     end)
+end
+
+--- Paints the kinds of ground (see ApplyPaint above) and, for the shaders that read layer 8 as a roughness multiplier (Terrain1xx / 2xx: shaders.lua Profile l8 = 'rough'), also sets that mask from the
+--- paint (wet ground, ice and snow shiny, dry rock and sand rough): State.roughness. One undo step. Returns the summary and the number of cells changed, or nil and a message.
+function Apply()
+    local depthBefore = History.Depth()
+    local summary, cells = ApplyPaint()
+    if not summary then return summary, cells end
+    local okProfile, p = pcall(function() return Strata.Profile() end)
+    if State.roughness and okProfile and p and p.l8 == 'rough' then
+        local MT = import('/lua/editor/maptextures.lua')
+        local entry, n = MT.GenerateRoughness({ amount = 0.6 })
+        if entry then cells = cells + (n or 0) end
+        if History.Depth() - depthBefore >= 2 then History.Merge(History.Depth() - depthBefore, 'stratum recipe ' .. Presets[State.preset].name) end
+    end
+    return summary, cells
 end
 
 --- How much of the map each layer covers, from the masks now on the map: { mask = { [layer] = mean opacity }, seen = { [layer] = share that shows after the layers above took theirs, [0] = base } }.

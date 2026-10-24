@@ -29,6 +29,7 @@ local History = import('/lua/editor/history.lua')
 local Shaders = import('/lua/editor/shaders.lua')
 local Strata = import('/lua/editor/strata.lua')
 local TexConv = import('/lua/editor/texconv.lua')
+local Detect = import('/lua/editor/roledetect.lua')
 
 ATLAS = '/textures/editor/layers/pbr_atlas_neutral.dds'
 CLIFF_SLOPE = 20
@@ -99,10 +100,14 @@ end
 local function Cliffs(plan, perm)
     local K = plan.toP.painted
     local cand = {}
+    local rockKind = { rock = true, highrock = true, darkrock = true }
     for j = 1, K do
         local info = plan.layers[perm[j]]
-        if info.painted and info.slope and info.slope >= CLIFF_SLOPE then
-            table.insert(cand, { layer = perm[j], slope = info.slope, slot = j })
+        -- a layer is a cliff layer when it is painted on steep ground, or when its texture is a rock and it is painted on anything but flat ground
+        local steep = info.slope and info.slope >= CLIFF_SLOPE
+        local rocky = info.ground and rockKind[info.ground] and info.slope and info.slope >= 0.5 * CLIFF_SLOPE
+        if info.painted and (steep or rocky) then
+            table.insert(cand, { layer = perm[j], slope = info.slope + ((info.ground and rockKind[info.ground]) and 15 or 0), slot = j })
         end
     end
     table.sort(cand, function(a, b)
@@ -227,6 +232,8 @@ function Plan(targetId)
     -- what the masks hold
     local K = to.painted
     local wantSlope = to.biplanar and not from.biplanar
+    local okGround, ground = pcall(function() return Detect.Layers(8) end)
+    if not okGround then ground = nil end
     local okScan, scanErr = pcall(function()
         Fields.Run(function(S)
             local slope
@@ -239,6 +246,8 @@ function Plan(targetId)
                 local mn, mx = Fields.Stats(f)
                 local role = RoleOf(from, l)
                 plan.layers[l] = { min = mn, max = mx, role = role, textured = Textured(l) }
+                local det = ground and ground[l]
+                plan.layers[l].ground = det and det.role or nil          -- the kind of ground of its texture (roledetect.lua)
                 plan.layers[l].painted = (role == 'paint') and HasPaint(mx, from.range)
                 -- paint in a mask the source shader does not draw (it shows when the target paints that layer)
                 plan.layers[l].hidden = (role == 'none' or role == 'data') and HasPaint(mx, from.range)
@@ -327,7 +336,7 @@ function Plan(targetId)
     local texOn = t.available
     if plan.upperAction == 'atlas' then
         Line('The Upper layer (' .. (UpperClear() and 'empty' or Basename(upperNow)) .. ') is replaced by a roughness / height atlas' ..
-             (texOn and ' made from the layer textures (roughness from their alpha, heights from their detail; a new file).' or ' (neutral: every layer alike).'))
+             (texOn and ' made from the layer textures (roughness from their alpha, heights from their detail and the kind of ground: rock above grass above wet ground; a new file).' or ' (neutral: every layer alike).'))
     elseif plan.upperAction == 'clear' then
         Line('The Upper layer (' .. Basename(upperNow) .. ') is replaced by a transparent texture: ' .. targetId .. ' would draw it as ' .. (to.upper == 'specular' and 'a specular texture' or 'an overlay') .. '.')
     end
@@ -381,7 +390,7 @@ function Plan(targetId)
         WarnOff('Not done: the roughness and heights of the layers come from the Upper atlas, one tile per layer. The neutral atlas gives every layer the same roughness' ..
                 (string.find(targetId, '^Terrain2') and ' and no height variation, so the 2xx splatting switches at a mask value of about one half (hard edges); make an atlas for a finished map' or '') .. '.')
         if texOn and string.find(targetId, '^Terrain2') then
-            WarnOn('The heights of the atlas are the detail of each texture (a rough guess): rock does not win over grass by itself. Make an atlas by hand (roughness R / B, height G / A) for a finished map.')
+            WarnOn('The heights of the atlas are the detail of each texture plus a bias by its kind of ground (rock above grass above wet ground): a good start, but make an atlas by hand (roughness R / B, height G / A) for a finished map.')
         end
     end
     if t.light or t.normal then
@@ -403,7 +412,7 @@ function Plan(targetId)
     if from.biplanar and not to.biplanar then
         Warn('The cliff textures of layers 3 and 4 were mapped from the side by ' .. fromId .. '; ' .. targetId .. ' maps them from above, so they stretch on steep ground. Use a B shader (Terrain...B) for cliffs.')
     end
-    Line('Normal maps stay as they are: every terrain shader reads them the same way (RGB = x, y, z)' .. (to.class == 'splat' and ', but the Terrain2xx shaders sample them at the albedo tile size of the layer (the normal tile size is the far scale of the heights)' or '') .. '.')
+    Line('Normal maps stay as they are: every terrain shader reads them the same way (RGB = x, y, z)' .. ((to.class == 'splat' and from.class ~= 'splat') and (texOn and ', but the Terrain2xx shaders sample them at the albedo tile size of the layer: the normal tile sizes are set to it.' or ', but the Terrain2xx shaders sample them at the albedo tile size of the layer (the normal tile size is the far scale of the heights).') or '.'))
     if not texOn and t.any then
         -- without the natives the warnings are the ones of a conversion that leaves the textures alone
         local w = {}
@@ -483,14 +492,19 @@ local function StepAtlas(ctx)
         local paths = {}
         for slot = 0, 7 do paths[slot] = ed_stratum_layer(slot) end
         local kind = (plan.fromP.alpha == 'spec' or plan.fromP.alpha == 'matte') and plan.fromP.alpha or nil
-        local vfs, report = TexConv.Atlas(paths, kind, 1024)
+        local roles = {}
+        local okDet, det = pcall(function() return Detect.Layers(7) end)
+        if okDet and det then
+            for slot = 0, 7 do roles[slot] = det[slot] and det[slot].role or nil end
+        end
+        local vfs, report = TexConv.Atlas(paths, kind, 1024, roles)
         if vfs then
             local bad = {}
             for k = 1, 8 do
                 if type(report) == 'table' and report[k] and string.sub(report[k], 1, 6) == 'cannot' then table.insert(bad, k) end
             end
             ctx.files = ctx.files + 1
-            ctx.Add('file', Basename(vfs) .. ': roughness / height atlas of the Upper layer (' .. (kind and 'roughness from the albedo alpha, ' or 'neutral roughness, ') .. 'heights from the detail of the textures)')
+            ctx.Add('file', Basename(vfs) .. ': roughness / height atlas of the Upper layer (' .. (kind and 'roughness from the albedo alpha, ' or 'neutral roughness, ') .. 'heights from the detail of the textures, rock above grass above wet ground)')
             if table.getn(bad) > 0 then
                 ctx.Add('warn', 'The atlas has neutral tiles for ' .. LayerList(bad) .. ' (tile numbers; their texture could not be read).')
             end
@@ -500,6 +514,22 @@ local function StepAtlas(ctx)
     end
     if DiskGetFileInfo(ATLAS) then return ATLAS end
     return nil
+end
+
+--- The Terrain2xx shaders sample the normal map of a layer at the tile size of its albedo (the normal tile size is the far scale of their heights): a layer whose normal tile differs gets the
+--- albedo tile, so the normals do not drift against the colours. The base layer keeps its own.
+local function StepNormalTiles(ctx)
+    local fixed = {}
+    for slot = 1, 7 do
+        local s = Strata.Snapshot(slot)
+        if s.albedo ~= '' and s.normal ~= '' and s.nsize and s.size and math.abs(s.nsize - s.size) > 0.01 then
+            Strata.SetTexture(slot, s.albedo, s.normal, s.size, s.size)
+            table.insert(fixed, slot)
+        end
+    end
+    if table.getn(fixed) > 0 then
+        ctx.Add('done', 'Normal map tile sizes of ' .. LayerList(fixed) .. ' set to the albedo tile size (the Terrain2xx shaders sample them alike).')
+    end
 end
 
 --- Layer 8 of the shaders that read it as map-wide data: the map normal map and / or the water depth / light texture (maptextures.lua), unless the layer holds one already.
@@ -627,6 +657,7 @@ function Run(plan, opts)
         if texOn then
             StepAlpha(ctx)
             StepMapData(ctx)
+            if plan.toP.class == 'splat' and plan.fromP.class ~= 'splat' then StepNormalTiles(ctx) end
         end
         -- the splat settings of the lighting
         local mode = plan.tex.lighting

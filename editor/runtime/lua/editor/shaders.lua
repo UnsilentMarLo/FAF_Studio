@@ -97,13 +97,15 @@ local NOTE_ROUGH = 'Layer 8 has no paint: its mask is a roughness multiplier (12
 -- (`pack`), whether the layer's tile size has to exceed the map for the shader to use it (`tile`: terrain.fx ShaderUsesTerrainInfoTexture / UseMapNormalFromTexture), and the texts of the panel.
 local N7 = { layer = 18, pack = 'normal7', tile = true, where = 'normal map of layer 8', layout = 'A = normal x, R = G = B = normal z' }
 local L7 = { layer = 8, pack = 'info7', tile = true, where = 'albedo of layer 8', layout = 'R = water depth, G = B = ambient occlusion, A = sun (1) or shadow (0)' }
+-- the Upper layer of the PBR shaders: a roughness / height atlas, tiled once over the map (the editor gives it twice the map size: the shader reads it with the tile size of the layers' own uv)
+local ATLAS_SLOT = { layer = 9, pack = 'atlas', where = 'albedo of the Upper layer', layout = 'R = roughness, G = height (base layer and layers 1-3); B = roughness, A = height (layers 4-7)' }
 local MAPS = {
     ext = { normal = N7, light = L7, macro = { layer = 9, pack = 'raw', where = 'albedo of the Upper layer', layout = 'RGB = colour, A = opacity' } },
     spec = { normal = N7, light = L7, specular = { layer = 9, pack = 'raw', where = 'albedo of the Upper layer', layout = 'RGB = specular colour, A = sharpness' } },
-    pbr = { normal = N7, light = L7 },
-    splat = { normal = N7, light = L7 },
+    pbr = { normal = N7, light = L7, atlas = ATLAS_SLOT },
+    splat = { normal = N7, light = L7, atlas = ATLAS_SLOT },
     old301 = { light = { layer = 9, pack = 'light301', tile = true, where = 'albedo of the Upper layer', layout = 'R = normal x, G = normal z, B = water depth, A = sun (1) or shadow (0)' } },
-    legacy = {},
+    legacy = { macro = { layer = 9, pack = 'raw', where = 'albedo of the Upper layer', layout = 'RGB = colour, A = how much (laid over the ground)' } },
     other = {},
 }
 MAPS.old301.normal = { layer = 9, pack = 'light301', tile = true, shared = 'light', where = 'albedo of the Upper layer (with the lighting)', layout = MAPS.old301.light.layout }
@@ -170,7 +172,7 @@ local Info = {
         layout = 'Layers: Base, painted layers 1-7. The atlas for roughness and height is in the normal map of layer 8; layer 8\'s albedo is a map-wide colour with its opacity in alpha; the Upper layer holds the water depth in its blue channel.',
         rows = ROWS_301, notes = { 'Layer 8 has no paint: its mask is a roughness multiplier (128 = neutral).', 'Masks use the half range.' },
         profile = { supported = false, range = 'half', painted = 7, l8 = 'rough', upper = 'atlas', alpha = 'unused', class = 'old301', maps = MapSlots('old301'),
-                    reason = 'Terrain301 uses an older texture layout (the atlas is in the normal map of layer 8)' } },
+                    reason = 'Terrain301 is the retired first version of the height splatting (its atlas is in the normal map of layer 8, its lighting in the Upper layer): the layers of such a map are converted by choosing Terrain200 or Terrain250 in the shader browser and fixing the layers there' } },
 }
 
 local function PbrInfo(name)

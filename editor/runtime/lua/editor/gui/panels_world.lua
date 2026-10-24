@@ -113,6 +113,19 @@ Build('lighting', 'Lighting', {
     Single(Num('Lighting multiplier', 'light_mult', 0, 4, 0.05)),
     Single(Num('Bloom', 'bloom', 0, 1, 0.01)),
     Group(Num('Sun R', 'sun_r', 0, 2), Num('Sun G', 'sun_g', 0, 2), Num('Sun B', 'sun_b', 0, 2)),
+    -- the splat settings of the Terrain2xx shaders live in the map's SpecularColor (shaders.lua SplatLighting): softness, contrast and the rotation of every second layer
+    Single(Num('Splat softness (Terrain2xx)', 'spec_r', 0.02, 1, 0.01)),
+    Single(Num('Splat height contrast (Terrain2xx)', 'spec_g', 0, 2, 0.05)),
+    { 'single', 'Splat rotation (degrees, Terrain2xx)', 0, 360, 5, '%d',
+        function()
+            local deg = math.deg(math.atan2(World.Value('spec_a'), World.Value('spec_b')))
+            if deg < 0 then deg = deg + 360 end
+            return deg
+        end,
+        function(v)
+            local r = math.rad(v)
+            World.Change({ spec_b = math.cos(r), spec_a = math.sin(r) }, { label = 'splat rotation', merge = 'spec_rot' })
+        end },
 })
 
 -- ---- Ambient and fog ------------------------------------------------------------------------------------------------------------------------

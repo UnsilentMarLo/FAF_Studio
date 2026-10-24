@@ -105,6 +105,33 @@ function Install(Kit, Covers)
         params = { C('size', 'Texture size (pixels)', SIZE_IDS, SIZE_LABELS, 'auto'), B('assign', 'Use it on the map', true) },
         eval = function(E, v, ins) return { view = ins.normal } end })
 
+    -- ---- the textures made from the paint, for the shaders that need them ------------------------------------------------------------------------
+
+    Def('out_macro', { label = 'Output: macrotexture', cat = 'outputs', kw = 'output macrotexture macro upper layer colour variation tiling repetition overlay shader write dds texture',
+        desc = 'Build makes a macrotexture from the paint of the map and gives it to the Upper layer: the colour the ground has, a little lighter and darker in broad patches (and darker in cavities), laid over the whole map to break up the repetition of the layer textures. Put it after the Output: texture layer nodes. TTerrain, TTerrainXP, TTerrainXPExt and Terrain000 / 050 read it.',
+        outputs = { Out('view', 'mask', true) }, output = 'mapmacro', mapTexture = 'macro',
+        params = { C('size', 'Texture size (pixels)', SIZE_IDS, SIZE_LABELS, 'auto'), N('scale', 'Patch size (units)', 40, 600, 10, '%d', 180),
+                   N('contrast', 'Lighter and darker patches', 0, 0.6, 0.05, '%.2f', 0.25), N('cavity', 'Darker cavities', 0, 1, 0.05, '%.2f', 0.3), N('opacity', 'How much it covers the ground', 0.05, 0.9, 0.05, '%.2f', 0.35) },
+        eval = function(E, v, ins) return { view = E:Const(0) } end })
+
+    Def('out_specular', { label = 'Output: specular texture', cat = 'outputs', kw = 'output specular shine highlight upper layer terrain001 terrain051 wet snow shader write dds texture',
+        desc = 'Build makes the specular picture of the map from the paint: wet ground, snow and the waterline shine, rock and sand do not. Terrain001 and Terrain051 read it from the Upper layer.',
+        outputs = { Out('view', 'mask', true) }, output = 'mapspecular', mapTexture = 'specular',
+        params = { C('size', 'Texture size (pixels)', SIZE_IDS, SIZE_LABELS, 'auto'), N('strength', 'How much wet ground and snow shine', 0, 1, 0.05, '%.2f', 0.8), N('sharpness', 'Sharpness of the highlights', 0, 1.5, 0.05, '%.2f', 1) },
+        eval = function(E, v, ins) return { view = E:Const(0) } end })
+
+    Def('out_atlas', { label = 'Output: roughness / height atlas', cat = 'outputs', kw = 'output atlas roughness height pbr upper layer splat terrain1xx terrain2xx shader write dds texture',
+        desc = 'Build makes the roughness / height atlas of the Upper layer from the layer textures and the kind of ground of each (rock stands above grass above wet ground, so the 2xx splatting lets the right layer win). The Terrain1xx and Terrain2xx shaders read it.',
+        outputs = { Out('view', 'mask', true) }, output = 'mapatlas', mapTexture = 'atlas',
+        params = { C('size', 'Texture size (pixels)', { '512', '1024' }, { '512', '1024' }, '1024') },
+        eval = function(E, v, ins) return { view = E:Const(0) } end })
+
+    Def('out_roughness', { label = 'Output: roughness mask', cat = 'outputs', kw = 'output roughness multiplier layer 8 mask pbr terrain1xx terrain2xx shiny rough wet shader write',
+        desc = 'Build writes the roughness multiplier of layer 8 for the Terrain1xx and Terrain2xx shaders (128 = neutral, lower = shinier, higher = rougher). Without a wire it is made from the paint: dry rock and sand rougher, wet ground, ice and snow shinier. With a mask: rougher where it is above one half, shinier below.',
+        inputs = { In('a', 'mask', true) }, outputs = { Out('view', 'mask', true) }, output = 'roughness',
+        params = { N('amount', 'How much the roughness varies', 0, 1, 0.05, '%.2f', 0.6) },
+        eval = function(E, v, ins) return { view = ins.a or E:Const(0.5) } end })
+
     Def('out_maplight', { label = 'Output: map lighting', cat = 'outputs', kw = 'output map wide lighting shadow baked ambient occlusion shader terrain write dds texture info',
         desc = 'Build gives the whole map this baked lighting: shadow (1 = sun, 0 = shadow), optional ambient occlusion and the water depth are written as a DDS and put where the shader reads it (layer 8 albedo; Terrain000 and later shaders). Wire the shadow of Lighting texture here, not its light output: the shader applies the surface angle itself. One undo step with the rest of the build. With Use it on the map off, only the file is written.',
         inputs = { In('shadow', 'mask'), In('ao', 'mask', true) }, outputs = { Out('view', 'mask', true), Out('occlusion', 'mask', true) }, output = 'maplight', mapTexture = 'light',

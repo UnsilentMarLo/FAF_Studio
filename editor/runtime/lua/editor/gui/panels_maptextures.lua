@@ -1,5 +1,5 @@
 -- The Map textures panel: the pictures that cover the whole map and that the terrain shader reads instead of the usual per-tile ones: the normal map, the lighting (baked shadow) texture,
--- the specular texture and the macrotexture. Which of them the map's shader uses, and in which layer slot, is maptextures.lua (docs: its header, effects/terrain.fx).
+-- the specular texture, the macrotexture and the roughness / height atlas of the PBR shaders. Which of them the map's shader uses, and in which layer slot, is maptextures.lua (docs: its header, effects/terrain.fx).
 --
 --   picture            click to import another picture for it
 --   Generate           make the normal map / lighting texture from the terrain (the same generators as the graph's Height to normal map and Lighting texture nodes); one undo step
@@ -20,7 +20,7 @@ local MT = import('/lua/editor/maptextures.lua')
 live = {}
 
 --- Module level (the controls come and go).
-state = { size = 'auto', strength = 1, soft = 1, reach = 400, ao = 0, status = '' }
+state = { size = 'auto', strength = 1, soft = 1, reach = 400, ao = 0, status = '', macroContrast = 0.25, macroOpacity = 0.35, macroScale = 180, macroCavity = 0.3, specStrength = 0.8 }
 
 SIZES = { 'auto', 256, 512, 1024, 2048 }
 
@@ -43,7 +43,13 @@ end
 -- ---- actions (module level: used by the buttons and the picture) ------------------------------------------------------------------------------------
 
 function Generate(kind)
-    local entry, err = MT.Generate(kind, { size = state.size, strength = state.strength, soft = state.soft, reach = state.reach, ao = state.ao })
+    local opts = { size = state.size, strength = state.strength, soft = state.soft, reach = state.reach, ao = state.ao }
+    if kind == 'macro' then
+        opts.contrast, opts.opacity, opts.scale, opts.cavity = state.macroContrast, state.macroOpacity, state.macroScale, state.macroCavity
+    elseif kind == 'specular' then
+        opts.strength = state.specStrength
+    end
+    local entry, err = MT.Generate(kind, opts)
     if entry then
         Say(MT.Kinds[kind].label .. ' made from the terrain and given to the shader (one undo step)')
     else
@@ -154,6 +160,19 @@ Panels.Register{
                     get = function() return state.reach end, set = function(v) state.reach = v end }))
                 table.insert(card.sliders, W.Slider(group, { label = 'Ambient occlusion', min = 0, max = 1, step = 0.05, fmt = '%.2f',
                     get = function() return state.ao end, set = function(v) state.ao = v end }))
+            end
+            if k == 'macro' then
+                table.insert(card.sliders, W.Slider(group, { label = 'Macro patch size (units)', min = 40, max = 600, step = 10, fmt = '%d',
+                    get = function() return state.macroScale end, set = function(v) state.macroScale = v end }))
+                table.insert(card.sliders, W.Slider(group, { label = 'Macro lighter and darker patches', min = 0, max = 0.6, step = 0.05, fmt = '%.2f',
+                    get = function() return state.macroContrast end, set = function(v) state.macroContrast = v end }))
+                table.insert(card.sliders, W.Slider(group, { label = 'Macro darker cavities', min = 0, max = 1, step = 0.05, fmt = '%.2f',
+                    get = function() return state.macroCavity end, set = function(v) state.macroCavity = v end }))
+                table.insert(card.sliders, W.Slider(group, { label = 'Macro coverage', min = 0.05, max = 0.9, step = 0.05, fmt = '%.2f',
+                    get = function() return state.macroOpacity end, set = function(v) state.macroOpacity = v end }))
+            elseif k == 'specular' then
+                table.insert(card.sliders, W.Slider(group, { label = 'Specular shine of wet ground and snow', min = 0, max = 1, step = 0.05, fmt = '%.2f',
+                    get = function() return state.specStrength end, set = function(v) state.specStrength = v end }))
             end
             if info.generate then
                 card.generate = W.Button(group, 'Generate', 0, 0, Skin.S(78), Skin.S(24), function() Generate(k) end)

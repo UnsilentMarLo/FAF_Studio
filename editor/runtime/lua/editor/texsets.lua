@@ -13,7 +13,10 @@
 --   ApplyRole(layer, role)  gives one painted layer the texture of a role (keeps its mask) at its Optimal tile size; -> true | nil, message
 --   ApplyIfNew()            the first thing a new map gets: the default set, when its painted layers have no texture (called by Map.Load)
 --   RoleChoices()           ids and labels for a choice parameter: 'keep' (leave the layer's texture) and every role
---   RoleLayer(role)         the painted layer a role has in the layout above (1 grass ... 8 snow), nil for an unknown role (recipes.lua AutoLayers)
+--   Layout(profile)        the painted layer of every role for a shader (shaders.lua Profile; the map's shader when nil): { role = layer }. The standard layout above for the eight painted layers of
+--                          TTerrainXP; the seven layers of the numbered shaders have no dark rock and put snow on layer 7; TTerrain / TTerrainGlow paint four layers (rock, sand, dirt, snow; grass is the base);
+--                          the biplanar shaders draw layers 3 and 4 from the side only, so rock and high rock go there and sand and dirt move out of them
+--   RoleLayer(role[, profile])  the painted layer a role has in that layout, nil when the shader has no layer for it (recipes.lua AutoLayers)
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
@@ -133,8 +136,10 @@ function Apply(themeId)
     end
     Set(0, theme.base, 2)
     baseTile = baseTile or TileOf(nil, theme, 2)
-    for i, role in Roles do
-        if i < 8 or not Layer8Unavailable() then Set(i, theme[role], 1) end
+    local layout = Layout()
+    for _, role in Roles do
+        local layer = layout[role]
+        if layer then Set(layer, theme[role], 1) end
     end
     if UpperIsOverlay() then Set(9, theme.upper, 1, true) end
     Theme = themeId
@@ -181,11 +186,69 @@ function ApplyIfNew()
     return 0
 end
 
---- The painted layer a role has in the standard layout (the order of Roles): grass 1, rock 2, sand 3, dirt 4, wet 5, high rock 6, dark rock 7, snow 8.
-function RoleLayer(role)
-    for i, r in Roles do
-        if r == role then return i end
+local STANDARD = { grass = 1, rock = 2, sand = 3, dirt = 4, wet = 5, highrock = 6, darkrock = 7, snow = 8 }
+
+--- The painted layer of every role for a shader profile (the map's shader when nil): { role = layer }; a role the shader has no layer for is missing from the table (see the header).
+function Layout(profile)
+    if profile == nil then
+        local ok, p = pcall(function() return Strata_().Profile() end)
+        profile = ok and p or nil
     end
+    local cap = (profile and profile.painted) or 8
+    if cap >= 8 then return { grass = 1, rock = 2, sand = 3, dirt = 4, wet = 5, highrock = 6, darkrock = 7, snow = 8 } end
+    if cap <= 4 then return { rock = 1, sand = 2, dirt = 3, snow = 4 } end
+    if profile and profile.biplanar then
+        return { grass = 1, sand = 2, rock = 3, highrock = 4, wet = 5, dirt = 6, snow = 7 }
+    end
+    return { grass = 1, rock = 2, sand = 3, dirt = 4, wet = 5, highrock = 6, snow = 7 }
+end
+
+--- The painted layer a role has for a shader (the standard 8 layer layout when `profile` is false): grass 1, rock 2, sand 3, dirt 4, wet 5, high rock 6, dark rock 7, snow 8.
+function RoleLayer(role, profile)
+    if profile == false then return STANDARD[role] end
+    return Layout(profile)[role]
+end
+
+--- The kind of ground a texture file is, when it is one of the textures of the sets above (any theme): the role of the layer it sits on when that layer's role has the file in some theme (the
+--- layout of Apply: layer 1 grass ... 8 snow, the base layer is grass), else the one role of the sets that lists it. nil for a file that is in no set (the name and colour of the texture
+--- decide then: roledetect.lua). `layer` may be nil.
+function RoleOfTexture(path, layer)
+    if not path or path == '' then return nil end
+    local key = string.lower((string.gsub(path, '\\', '/')))
+    local function Lists(role, theme)
+        local list = theme[role]
+        if role == 'grass' and theme.base then
+            for _, c in theme.base do if string.lower(c) == key then return true end end
+        end
+        for _, c in list or {} do
+            if string.lower(c) == key then return true end
+        end
+        return false
+    end
+    if layer ~= nil then
+        local role = (layer == 0) and 'grass' or nil
+        if layer ~= 0 then
+            for r, l in Layout() do
+                if l == layer then role = r end
+            end
+        end
+        if role then
+            for _, theme in Themes do
+                if Lists(role, theme) then return role end
+            end
+        end
+    end
+    local found, count = nil, 0
+    for _, role in Roles do
+        for _, theme in Themes do
+            if Lists(role, theme) then
+                if found ~= role then count = count + 1 end
+                found = role
+                break
+            end
+        end
+    end
+    if count == 1 then return found end
     return nil
 end
 
