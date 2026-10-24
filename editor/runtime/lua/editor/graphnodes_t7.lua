@@ -44,10 +44,13 @@ function Install(Kit, Covers)
     NoiseNode('fractal', 'Terrain noise', 'terrain noise fractal natural fbm ridged billow warp slope detail gradient hills mountains', 'Gradient noise built to look like land: every octave in its own turned frame (no grid lines), an optional domain warp, rolling, rounded or sharp ridged shapes, and finer detail on steep or flat ground. 0..1.',
         { SEED, N('scale', 'Feature size (units)', 8, 1000, 2, '%d', 160, { wire = true }), N('octaves', 'Octaves', 1, 12, 1, '%d', 8), N('finest', 'Smallest detail (units)', 2, 200, 1, '%d', 12),
           N('persistence', 'Persistence', 0.2, 0.9, 0.05, '%.2f', 0.5), C('kind', 'Shape', { 'fbm', 'billow', 'ridged' }, { 'Rolling (fBm)', 'Rounded hills (billow)', 'Sharp crests (ridged)' }, 'fbm'),
-          N('sharpness', 'Ridge sharpness', 1, 5, 0.1, '%.1f', 2), N('warp', 'Warp (units)', 0, 300, 1, '%d', 20), N('slope_detail', 'Detail on slopes (- flat, + steep)', -1, 1, 0.05, '%.2f', 0) },
+          N('sharpness', 'Ridge sharpness', 1, 5, 0.1, '%.1f', 2), N('warp', 'Warp (units)', 0, 300, 1, '%d', 20), N('slope_detail', 'Detail on slopes (- flat, + steep)', -1, 1, 0.05, '%.2f', 0),
+          N('warp_levels', 'Warp passes', 1, 2, 1, '%d', 1, { tip = '1: the warp noise bends the ground once. 2: the warp is read at a place that was already bent (a warp of a warp): more twisted, folded shapes.' }),
+          C('style', 'Style', { 'classic', 'erosive' }, { 'Classic', 'Eroded (smooth slopes)' }, 'classic', 'Classic: every octave adds the same detail. Eroded: finer octaves are damped where the terrain so far is steep, so slopes stay smooth and crests and flats keep their detail (the look of water worn land).'),
+          N('erosion', 'Erosion strength', 0, 6, 0.1, '%.1f', 1, { tip = 'Eroded style only: how strongly steep ground damps the finer detail. 0 = like classic. Ridged shapes already have steep crests, so use less there.' }) },
         function(E, v, ins)
             return One(E:Op('fractal', { like = E.like, seed = E:Seed(v.seed), scale = v.scale, octaves = v.octaves, finest = v.finest, persistence = v.persistence, kind = v.kind,
-                                         sharpness = v.sharpness, warp = v.warp, slope_detail = v.slope_detail }))
+                                         sharpness = v.sharpness, warp = v.warp, slope_detail = v.slope_detail, style = v.style, erosion = v.erosion, warp_levels = v.warp_levels }))
         end)
 
     NoiseNode('musgrave', 'Multifractal (Musgrave)', 'musgrave multifractal ridged hybrid heterogeneous mountains terrain noise', 'Musgrave multifractals: ridged (sharp crests), hybrid (rough peaks over smooth valleys) and heterogeneous terrain.',

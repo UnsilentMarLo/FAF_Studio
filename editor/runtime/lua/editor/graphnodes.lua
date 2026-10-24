@@ -41,8 +41,8 @@ local function N(key, label, min, max, step, fmt, default, flags)
     return p
 end
 
-local function C(key, label, ids, labels, default)
-    return { kind = 'choice', key = key, label = label, ids = ids, labels = labels or ids, default = default or ids[1] }
+local function C(key, label, ids, labels, default, tip)
+    return { kind = 'choice', key = key, label = label, ids = ids, labels = labels or ids, default = default or ids[1], tip = tip }
 end
 
 local function B(key, label, default) return { kind = 'bool', key = key, label = label, default = default and true or false } end
@@ -416,8 +416,8 @@ local function ErodeNode(solver, label, kw, desc, presetsOf)
         end })
 end
 
-ErodeNode('hydraulic', 'Hydraulic erosion', 'hydraulic water rain erosion pipe river grid weathering', 'Water flows over the ground, dissolves and drops sediment (grid solver). Outputs the eroded height and the wear, deposit, flow and drainage masks.')
-ErodeNode('droplet', 'Droplet erosion', 'droplet particle erosion mountain gullies ridges', 'Particle erosion: droplets run downhill and carve gullies and sharp ridges. The first choice for mountains.')
+ErodeNode('hydraulic', 'Hydraulic erosion', 'hydraulic water rain erosion pipe river grid weathering', 'Water flows over the ground, dissolves and drops sediment (grid solver). Outputs the eroded height and the wear, deposit, flow and drainage masks. Runs on the graphics card when there is one, with an improved solver (CPU only = 1 forces the CPU solver).')
+ErodeNode('droplet', 'Droplet erosion', 'droplet particle erosion mountain gullies ridges', 'Particle erosion: droplets run downhill and carve gullies and sharp ridges. The first choice for mountains. Runs on the graphics card when there is one (CPU only = 1 forces the CPU solver).')
 ErodeNode('stream', 'Stream power (rivers)', 'stream power river valley incision canyon drainage', 'Cuts a drainage network of river valleys (stream power law). Drains all closed basins.')
 
 -- ---- analysis and masks -----------------------------------------------------------------------------------------------------------------------------

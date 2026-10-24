@@ -88,7 +88,7 @@ Panels.Register{
         -- structures: which rule the game checks the ground with (see Slope.Rule)
         P.ruleLabel = Lbl('Rule')
         P.ruleRing = Btn('Buildings (ring)', Skin.S(120), Skin.S(24), function() Slope.SetRule('ring') P:Refresh() end, { toggle = true })
-        P.ruleArea = Btn('Area (extractors, walls)', Skin.S(168), Skin.S(24), function() Slope.SetRule('area') P:Refresh() end, { toggle = true })
+        P.ruleArea = Btn('Not levelled (radar, defence)', Skin.S(190), Skin.S(24), function() Slope.SetRule('area') P:Refresh() end, { toggle = true })
 
         -- the sizes and limits are discrete sliders over the values real blueprints have (Slope.FOOTPRINT_STOPS / SKIRT_STOPS / BUILD_LIMITS)
         P.foot = W.Slider(group, { label = 'Footprint (cells)', stops = Slope.FOOTPRINT_STOPS, fmt = '%d',
@@ -139,7 +139,7 @@ Panels.Register{
             y = W.Flow(group, { { P.path, Skin.S(92) }, { P.build, Skin.S(92) } }, pad, y + Skin.S(24), iw, Skin.S(24), Skin.S(8)) + Skin.S(12)
             if Slope.Kind == 'build' then
                 W.Place(P.ruleLabel, group, pad, y + Skin.S(4))
-                y = W.Flow(group, { { P.ruleRing, Skin.S(120) }, { P.ruleArea, Skin.S(168) } }, pad, y + Skin.S(24), iw, Skin.S(24), Skin.S(6)) + Skin.S(8)
+                y = W.Flow(group, { { P.ruleRing, Skin.S(120) }, { P.ruleArea, Skin.S(190) } }, pad, y + Skin.S(24), iw, Skin.S(24), Skin.S(6)) + Skin.S(8)
                 P.skirt:Place(pad, y, iw)
                 y = y + Skin.S(50)
                 P.limitSlider:Place(pad, y, iw)
@@ -148,7 +148,7 @@ Panels.Register{
             else
                 W.Place(P.ruleLabel, group, -4000, y)
                 W.Place(P.ruleRing, group, -4000, y, Skin.S(120), Skin.S(24))
-                W.Place(P.ruleArea, group, -4000, y, Skin.S(168), Skin.S(24))
+                W.Place(P.ruleArea, group, -4000, y, Skin.S(190), Skin.S(24))
                 P.foot:Place(pad, y, iw)
                 y = y + Skin.S(50)
                 P.skirt:Place(-4000, y, iw)
@@ -200,7 +200,7 @@ Panels.Register{
                     text = 'This editor build has no ring rule yet, so the area rule is shown. ' .. text
                 end
             else
-                text = 'Structures that are not levelled (extractors, walls, point defence, radar, naval factories): the game takes the highest minus the lowest ground over the whole skirt and compares it with the structure\'s MaxGroundVariation. The colours show that range for a skirt of the size above, whose top-left corner is the cell.'
+                text = 'Structures that are not levelled flat (point defence, radar, naval factories and similar): the game takes the highest minus the lowest ground over the whole skirt and compares it with the structure\'s MaxGroundVariation. The colours show that range for a skirt of the size above, whose top-left corner is the cell.'
             end
             if Slope.Kind == 'build' then
                 hint = string.format('Skirt %d x %d cells: %s', Slope.Skirt, Slope.Skirt, Slope.SKIRT_HINTS[Slope.Skirt] or '')

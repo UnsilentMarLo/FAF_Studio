@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 13:03:13 +0000
+Subject: [PATCH] editor GPU field ops: thermal (the core op, uniform talus and
+ rate mask) on the GPU through the slide kernels; test bit equal to the CPU op
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01F37er45a7etRuMgEW1q3kY
+
+diff --git a/src/sdk/moho/editor/EdGpuFieldIter.cpp b/src/sdk/moho/editor/EdGpuFieldIter.cpp
+index d9a4a34..f206bb6 100644
+--- a/src/sdk/moho/editor/EdGpuFieldIter.cpp
++++ b/src/sdk/moho/editor/EdGpuFieldIter.cpp
+@@ -193,6 +193,42 @@ namespace moho::editor::gpu
+       return OpResult::Done;
+     }
+ 
++    // ---- thermal (EdFieldCore.cpp OpThermal: the same slides with one talus for the whole field) ------------------------------------------------------
++
++    OpResult OpThermalGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
++    {
++      const Grid* src = Source(a);
++      const Grid* mask = In(a, "mask");
++      Shape shape;
++      if (src == nullptr || (mask != nullptr && !mask->SameShape(*src)) || !ShapeOf(a, shape)) return OpResult::Unsupported;
++      const int iterations = std::max(0, std::min(100000, static_cast<int>(a.p.N("iterations", 20))));
++      if (iterations == 0 || !Fits(ex, src->Count(), 6)) return OpResult::Unsupported;
++      const int w = src->w, h = src->h;
++      Slider sl;
++      if (!sl.Init(ex, w, h, err)) return OpResult::Failed;
++      sl.p.cell = src->cell;
++      sl.p.rate = std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("rate", 0.5))));
++      sl.p.talus = std::max(0.0f, static_cast<float>(a.p.N("talus", 0.6)));
++      PingPong pp;
++      Field rm;
++      if (!UploadGrid(ex, *src, pp.f[0], err) || !MakeField(ex, w, h, pp.f[1], err)) return OpResult::Failed;
++      if (mask != nullptr) {
++        if (!UploadGrid(ex, *mask, rm, err)) return OpResult::Failed;
++        sl.rmask = &rm.R();
++        sl.p.hasMask = 1;
++      }
++      const bool ok = RunIterations(ex, static_cast<u32>(iterations), 60.0, [&](const u32, std::string& e) {
++        if (!sl.Step(ex, pp.Src().R(), pp.Dst().R(), e)) return false;
++        pp.Flip();
++        return true;
++      }, err);
++      if (!ok) return OpResult::Failed;
++      Grid g = NewGrid(shape);
++      if (!DownloadGrid(ex, pp.Src(), g, err)) return OpResult::Failed;
++      out = std::move(g);
++      return OpResult::Done;
++    }
++
+     // ---- erode_rocksoil -----------------------------------------------------------------------------------------------------------------------------
+ 
+     OpResult OpRockSoilGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+@@ -508,6 +544,7 @@ namespace moho::editor::gpu
+     {
+       Registrar()
+       {
++        RegisterGpuOp("thermal", &OpThermalGpu, 16384.0f);
+         RegisterGpuOp("erode_glacier", &OpGlacierGpu, 16384.0f);
+         RegisterGpuOp("erode_wind", &OpWindGpu, 16384.0f);
+         RegisterGpuOp("erode_snow", &OpSnowGpu, 16384.0f);
+diff --git a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+index fd91849..063277c 100644
+--- a/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
++++ b/src/sdk/moho/editor/tests/EdGpuFieldTest.cpp
+@@ -701,6 +701,32 @@ static void TestGlacier()
+   CheckDeclines("glacier_no_input", "erode_glacier", Args({}, {}, {}));
+ }
+ 
++// ---- thermal ---------------------------------------------------------------------------------------------------------------------------------------
++
++static void TestThermal()
++{
++  const GridPtr t = TestTerrain(77, 51, 2.0f, 111, 100.0);
++  const GridPtr mask = TestMask(77, 51, 15);
++  CheckSame("thermal_op_default", "thermal", Args({}, {}, {{"a", t}}), 1e-5);
++  {
++    Grid g;
++    RunGpu("thermal", Args({}, {}, {{"a", t}}), g);
++    CHECK(Compare(g, *t).maxAbs > 1e-2, "thermal changes the terrain (the comparison is not vacuous)");
++  }
++  CheckSame("thermal_op_params", "thermal", Args({{"iterations", 33}, {"talus", 0.25}, {"rate", 0.9}}, {}, {{"a", t}}), 1e-5);
++  CheckSame("thermal_op_mask", "thermal", Args({{"iterations", 11}, {"talus", 0.3}}, {}, {{"a", t}, {"mask", mask}}), 1e-5);
++  auto like = std::make_shared<Grid>(*t);
++  like->ox = 5.0f;
++  CheckSame("thermal_op_like", "thermal", Args({{"iterations", 4}}, {}, {{"a", t}, {"like", like}}), 1e-5);
++  for (const auto& sz : kOddSizes) {
++    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 70.0);
++    CheckSame(("thermal_op_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "thermal", Args({{"iterations", 6}, {"talus", 0.2}}, {}, {{"a", s}}), 1e-5);
++  }
++  CheckDeclines("thermal_op_zero_iterations", "thermal", Args({{"iterations", 0}}, {}, {{"a", t}}));
++  CheckDeclines("thermal_op_bad_mask", "thermal", Args({}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
++  CheckDeclines("thermal_op_no_input", "thermal", Args({}, {}, {}));
++}
++
+ int main(int argc, char** argv)
+ {
+   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
+@@ -713,6 +739,7 @@ int main(int argc, char** argv)
+   field::SetThreads(4);
+   TestSettle();
+   TestThermalMap();
++  TestThermal();
+   TestMorph();
+   TestConvolve();
+   TestBlurBased();

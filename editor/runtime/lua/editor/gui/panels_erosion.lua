@@ -208,7 +208,7 @@ Panels.Register{
             self.sliders = {}
             for _, p in Erosion.Solvers[st.solver].params do
                 local param = p
-                local s = W.Slider(group, { label = param.label, compact = true, min = param.min, max = param.max, step = param.step, fmt = param.fmt,
+                local s = W.Slider(group, { label = param.label, tip = param.tip, compact = true, min = param.min, max = param.max, step = param.step, fmt = param.fmt,
                     get = function() return Erosion.ValuesOf(st.solver)[param.key] end,
                     set = function(v)
                         Erosion.ValuesOf(st.solver)[param.key] = v
