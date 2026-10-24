@@ -12,6 +12,10 @@
 --   Apply(solver, values, opts)     full resolution run + commit: heights and, when chosen, masks to texture layers as ONE history entry
 --   Masks(result)                   -> { wear = f, deposit = f, flow = f } normalised to 0..1
 --
+-- Graphics card: erode_hydraulic and erode_droplet run on the GPU when one is available and the field has about 4000 samples or more (docs/projects/editor/GPU_COMPUTE.md, "Erosion kernels"); the
+-- stream solver always runs on the CPU. The GPU hydraulic solver is a different, improved solver (eight pipes, friction, channels that deepen, grooves 2 - 3 cells wide, steep faces limited), so
+-- its result differs from the CPU one with the same settings; the "(GPU)" sliders tune it and "CPU only" forces the CPU solver for a comparison. The droplet solver is the same algorithm run in parallel.
+--
 -- Settings every solver shares (see Shared() below): Hardness variation + feature size (hard and soft ground), Rain variation, Protect ridges, Keep height range, Largest change,
 -- Keep volume, and per solver Downhill acceleration + Droplet variation + Feedback rounds (droplets), Flow jitter + Valley width growth (stream), Seed (all). A key a node or a saved graph does not
 -- have simply takes the `default` below (there is no separate value for old graphs: the editor is not in production, graphs saved with older defaults change their result). The defaults were
@@ -75,6 +79,13 @@ Solvers = {
             P('smooth', 'Cell noise filter', 0, 1, 0.05, '%.2f', 1),
             P('smooth_passes', 'Filter passes', 0, 4, 1, '%d', 1),
             P('seed', 'Seed', 0, 9999, 1, '%d', 1, 'The random seed of the hardness and rain variation.'),
+            -- graphics card only (the CPU solver ignores these): the improved solver of gpu/erosion_hydro_*.hlsl, see GPU_COMPUTE.md "Erosion kernels"
+            P('flux_damp', 'Water friction (GPU)', 0, 0.9, 0.05, '%.2f', 0.3, 'Graphics card only. Friction on the water flow: the water runs at a speed that follows the slope instead of racing off at full speed everywhere, so only concentrated flow erodes. 0 = frictionless pipes (the CPU solver).'),
+            P('depth_gain', 'Channel deepening (GPU)', 1, 16, 0.5, '%.1f', 4, 'Graphics card only. Deeper water digs harder, up to this many times the depth limit above: channels that collect water cut faster and branching gullies form on smooth slopes. 1 = the CPU solver (capacity stops growing at the full capacity depth).'),
+            P('erode_spread', 'Groove width (GPU)', 0, 1, 0.05, '%.2f', 0.7, 'Graphics card only. Share of the dug and settled ground that is spread over the 3 x 3 cells around: gullies 2 to 3 cells wide instead of one cell wide combs. 0 = every cell digs for itself.'),
+            P('slope_cap', 'Steep slope limit (GPU)', 0.05, 1, 0.05, '%.2f', 0.4, 'Graphics card only. The sine of the slope above which the capacity stops growing and then falls off again: steep faces and cliffs do not dominate the erosion, gentle slopes get their share. Low = cliffs keep their edge, high = gullies cut into steep faces too.'),
+            P('rain_noise', 'Rain noise (GPU)', 0, 1, 0.05, '%.2f', 0.2, 'Graphics card only. Cell to cell randomness of the rain (a hash of the cell and the seed): breaks the symmetry so flow does not run in perfect straight lines.'),
+            P('cpu_only', 'CPU only (0 / 1)', 0, 1, 1, '%d', 0, 'Erosion runs on the graphics card when there is one (about 4000 samples and more), with the improved solver. 1 = always the CPU solver, to compare the two.'),
         },
     },
     droplet = {
@@ -101,6 +112,7 @@ Solvers = {
             P('drop_vary', 'Droplet variation', 0, 1, 0.05, '%.2f', 0.5, 'Every drop gets its own size, lifetime, inertia and load, so the gullies are no longer evenly spaced copies of each other. 0 = identical drops.'),
             P('creep', 'Hillslope creep', 0, 8, 0.1, '%.1f', 2, 'After every round the ground slumps a little: what the droplets dug so far is smoothed, so steep walls slide into the grooves and the ridges between grooves round off. Without creep the droplets leave razor thin grooves with the old ridge standing between them (a comb that gets deeper with every run); with it grooves widen into rounded valleys, spurs round off and the erosion spreads over the whole slope. 0 = off. It grows with the droplet count (more erosion creeps more), the ground you started with is not smoothed.'),
             P('rounds', 'Feedback rounds', 1, 64, 1, '%d', 32, 'The droplets are released in this many rounds; between rounds the water surface is recomputed, so later drops follow the valleys earlier ones dug (gullies join and branch). Few rounds = every drop digs a lone groove; more rounds cost time.'),
+            P('cpu_only', 'CPU only (0 / 1)', 0, 1, 1, '%d', 0, 'Droplets run on the graphics card when there is one (about 4000 samples and more); the result looks the same but is not identical (the drops run at the same time). 1 = always the CPU solver, to compare the two.'),
         },
     },
     stream = {

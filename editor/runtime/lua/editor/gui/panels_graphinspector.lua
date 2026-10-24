@@ -255,7 +255,7 @@ Panels.Register{
                             Graph.SetParam(node.id, param.key, param.ids[at])
                             b:SetText(Text())
                             Changed()
-                        end)
+                        end, { tip = param.tip })
                         W.Place(b, group, pad, y, w - 2 * pad, Skin.S(22))
                         y = y + Skin.S(26)
                     elseif param.kind == 'bool' then

@@ -22,7 +22,11 @@ TESTS = {"MapDocumentTest": ["moho/editor/MapDocument.cpp"], "EdFieldTest": ["mo
          "EdBrushTest": ["moho/editor/MapDocument.cpp"], "MeshLodDepthTest": [], "EdTerrainTypeTest": [], "EdOverlayGeomTest": [], "EdOverlaySlopeTest": [], "EdOverlayNodesTest": [], "EdOverlayDrapeTest": [], "EdOverlayLodTest": [], "EdOverlayFieldTest": [], "EdDdsDecodeTest": [], "EdTexConvTest": [], "EdDirtyRectTest": [], "EdPerfPolicyTest": [], "EdRenderOptTest": [],
          "EdNormalMapParTest": ["moho/editor/EdFieldCore.cpp", "moho/render/textures/DXTCodec.cpp"],
          # GPU compute foundation: the kernels run as C++ through gpu/hlsl_cpp_shim.h on a CPU emulator; on Windows the test also tries the real Direct3D 11 device (docs/projects/editor/GPU_COMPUTE.md)
-         "EdGpuTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp"]}
+         "EdGpuTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp"],
+         # GPU erosion ops (hydraulic, droplet) on the emulator: properties, not sample values (docs/projects/editor/GPU_COMPUTE.md, "Erosion kernels")
+         "EdGpuErosionTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdErosion.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp", "moho/editor/EdGpuErosion.cpp"],
+         # GPU generator and filter kernels (gpu/gen_*, gpu/filt_*) on the CPU emulator, against the CPU ops (docs/projects/editor/GPU_COMPUTE.md, "Generator and filter kernels")
+         "EdGpuGenTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldLand.cpp", "moho/editor/EdFieldGen.cpp", "moho/editor/EdFieldFilt.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp", "moho/editor/EdGpuGen.cpp", "moho/editor/EdGpuGenFilt.cpp"]}
 # command line arguments per test (paths under the repository root, or under $ED_EDITOR_ROOT: the git worktree of a feature branch); extra arguments of this script are passed on to every test
 ARGS = {"EdFieldTest": ["editor/runtime/lua/editor/selftest_fields_cases.lua"],
         "EdErosionTest": ["editor/runtime/lua/editor/selftest_erosion_cases.lua"]}

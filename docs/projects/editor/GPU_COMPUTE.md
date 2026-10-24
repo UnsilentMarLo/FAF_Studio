@@ -199,20 +199,165 @@ Test hooks: `SetBackendForTest(&EmuBackend)`; `EmuExecutor::failAtDispatch = n` 
 * **Shutdown**: the backend is a function-local static destroyed at exit; a failed backend leaks its objects on purpose. The D3D11 device is independent of the D3D9 device (nothing is shared), so the renderer's device reset (resize, alt-tab) does not affect it.
 * **Shim limits**: the emulation is single threaded (no race detection for group shared memory), scalars are float32, `pow` and friends use the C library (the GPU uses its own).
 
+## Generator and filter kernels (GP3)
+
+Agent GP3, 2026-10. GPU versions of the generator and filter ops of the field engine, registered under the SAME op names (the interceptor picks them up). **Verified on the CPU emulator only: no GPU was available** (see "What nobody could verify" below). Files: `EdGpuGen.h` (helpers), `EdGpuGen.cpp` (generators), `EdGpuGenFilt.cpp` (filters), `EdFieldFractal.h` (the option reader of `fractal`, shared by the CPU op and the GPU op), `gpu/gen_*.hlsl` / `gpu/filt_*.hlsl`, `tests/EdGpuGenTest.cpp` (`scripts/ed_native_tests.py`: `EdGpuGenTest`; ~950 checks).
+
+### Ops
+
+CPU times: 4 threads, 2049 x 2049, one machine (a measure of the ranking, not of your machine). Speed-up class: **A** = compute bound, no or one upload (expect 10x to 100x on a discrete card), **B** = iterated or window ops (10x to 50x), **C** = a few operations per sample, transfer bound (1x to 4x, only worth it on big fields: they stay on the CPU below 16 x `ed_gpu_min_cells` = 1048576 samples).
+
+| Op | CPU ms | Class | Not on the GPU (CPU runs) |
+|---|---|---|---|
+| `fractal` (fbm / billow / ridged, rotate, finest, warp, warp_levels, slope_detail, style, erosion, antialias) | 550 (1010 with warp) | A | bad option values only |
+| `perlin` `simplex` `ridged` `billow` | 340 to 400 | A | none |
+| `musgrave` (ridged / hybrid / hetero), `fbm_damped` | 490 / 510 | A | none |
+| `voronoi`, `cells` (4 metrics, 10 modes, warp), `cracks` (1 to 3 levels) | 180 / 800 / 2200 | A | none |
+| `craters`, `dunes`, `island` | 205 / 430 / 340 | A | none |
+| `occlusion` | 7260 | A | none |
+| `dwarp` (fbm, curl, swirl, ripple, pinch, mask, 3 edge modes) | 510 | A | none |
+| `bilateral`, `blur_dir` (mask) | 690 / 345 | B | `blur_dir` with length 0 (a copy) |
+| `diffuse` (iterated, mask) | 460 | B | 0 iterations |
+| `blur`, `box` (foundation) | 100 / 32 | B | a mask is now handled (one more kernel, `filt_lerpmask`); a mask of another size is ignored like on the CPU |
+| `slope` (degrees, gradient), `curvature`, `aspect`, `hillshade` (shade, lit, shadow), `normal_map` (three outputs) | 34 / 12 / 20 / 20 / 74 | C | slope `rating` / `variation`; fields below the size above |
+| `amplitude`, `terrain_mix`, `terrace`, `levels`, `remap`, `symmetrize`, `warp`, `unsharp`, `edge`, `morph`, `convolve`, `blur_slope`, `stratify`, `distance`, `wetness`, `flow`, `rockiness` | 0 to 250, `wetness` 2360 and `flow` 1080 | not ported | see below |
+
+Why some ops are not ported: `amplitude` and `terrain_mix` spend their time in a statistics pass over host memory (the host already has the data; the GPU would only do the cheap apply pass); `terrace`, `levels`, `remap`, `warp` are one to three operations per sample and the upload and download cost more than they save at any size this editor uses; `symmetrize` is a gather over the same field (no heavy maths). They would pay off the day fields stay resident on the GPU between the ops of a graph (a graph runner change, not a kernel change). `wetness` / `flow` / `distance` need a global sort or a sequential sweep (`distance` is 134 ms at 2049 x 2049: a jump flood version is possible but not worth the risk yet). Thermal and hydraulic erosion (`thermal`, `thermal_map`, `erode_*`, `settle`) belong to GP2.
+
+### How the kernels are built
+
+* **One noise library** (`gpu/gen_noise.hlsli`): the CPU's lattice hash (`Hash2i` = `Hash2`), its 8 and 64 gradient directions (the 64 directions are computed with `sincos`, angle `(k + 0.5) * pi / 32`), the quintic fade, value + analytic derivative (`PerlinD`), simplex, and `Fbm01`. Same arithmetic order as the CPU, so GPU and CPU agree to about 1e-6 (emulator): the GPU result looks exactly like the CPU result. There is no "statistically equal" case: nothing uses a different hash or algorithm.
+* **Positions are computed in double on the host.** A float cannot hold `ox + x * cell` for a 4096 sample field. The host (`PutMap`, `PutOctaveMap`) turns, per octave, "sample index -> world position -> octave frame (turn, shift, frequency)" into an affine map `u = u0 + a x + b z` with `u0` split into an exact integer and a fraction. The kernel (`LatticePoint`) adds in float only numbers of the size of the field in lattice units. A field that starts at world (20000, 18000) agrees with the CPU to 1e-6 (test `fractal_far`). Simplex noise gets the skewed map, so the simplex cell and fraction are exact too.
+* **Octave tables.** Per op a float table (16 floats per octave: map, amplitude, per kernel extras) and a uint table of seeds are uploaded once (`UploadVec`), no per sample table lookups beyond that.
+* **Banded dispatch.** `DispatchBands` splits a big field into row bands of about 2.5e7 octave evaluations and runs them through `RunIterations` (time limited submissions), so a 16384 x 16384 field with 12 octaves cannot trigger the 2 second driver reset even on an integrated GPU.
+* **Cheap ops are size gated** (`BigEnough`: `CellsOf(args) >= 16 x ed_gpu_min_cells`), so the knob still controls everything and the tests (`minCells = 0`) see all ops.
+* The octave count of generators is at most 16 (the CPU's limit); the CPU `fractal` allowed up to 16 octaves before and still does.
+
+### Quality improvements (both on the CPU op and on the GPU op: same options, same look)
+
+New options of `fractal`, all off by default (saved graphs and golden checksums are bit identical: `EdLandTest` and a checksum comparison before / after the refactor):
+
+* **`style = erosive`, `erosion`** (0 to 16, default 1; ridged noise uses half of it internally): derivative damped fbm. Every octave is divided by `1 + erosion * s^2` where `s` is the slope of the signal of the octaves summed so far (analytic derivatives of the noise, in units of amplitude per feature size). Steep ground keeps its smooth shape, flat ground and crests keep the fine detail: the look of eroded land, without simulating erosion. Rolling (`fbm`) looks right; **ridged + erosive is strong** (large smooth slabs between the sharp crest lines): use `erosion` 0.3 to 0.6 there. Render: `r_styles.png`.
+* **`warp_levels = 2`**: the domain warp is read at a place that the first warp already moved (warp of a warp, independent noise channels, 3 octaves each): twisted, folded forms. Render: `r_warp.png`.
+* **`antialias = 1`**: octaves with a wavelength between 2 and 4 samples fade out, shorter ones are dropped. A coarse preview is then the low pass of the full resolution result (test: the mean slope of a 65 x 65 preview of a rough terrain is within 2.5 percent of the low pass of the 513 x 513 result; point sampled it is 23 percent too steep). Without it the preview shows fine octaves aliased into extra roughness.
+* Already there and now verified on the GPU path: 64 gradient directions and a turn and shift per octave (`rotate`, no lattice seams, no preferred axis), world position invariance (a 33 x 33 grid with cell 4 agrees with a 129 x 129 grid at the same places to 1e-3 in float, bit exact on the CPU), `finest` (smallest wavelength), derivative based `slope_detail`, ridged multifractal weight feedback.
+* Lua: the `Terrain noise` graph node has `Style`, `Erosion strength` and `Warp passes` (with tips); `C()` and the inspector's choice buttons take a tip now. The Fields panel presets (`fieldgen.lua`) were NOT switched to the erosive style (that changes the look of every saved Generate setup): it is a one line change per preset once you have compared them on your machine.
+
+### Testing
+
+`tests/EdGpuGenTest.cpp` runs every kernel on the emulator through the real interceptor (`RunOp` -> `TryRun` -> op -> kernel) and compares with `RunOpCpu`:
+
+* every op, every mode / kind / style, with and without masks, rotate, warp; odd sizes (1 x N, N x 1, 1 x 1, 17 x 13, not a multiple of 16); fields far from the origin; the `Unsupported` branches (bad option, 0 iterations, window slope modes, small fields on the default policy);
+* agreement: noise ~1e-6, cellular ~1e-5 (a distance tie may pick the neighbour feature point: at most 0.5 percent of the samples for `cells` / `cracks`, measured 0), stencils bit equal;
+* no out of range buffer access (`emu::gOob`), no NaN, range 0 to 1;
+* quality: lattice ratio, slope isotropy (variance ratio < 1.2), world position invariance, antialiased preview, erosive damping (steep / flat roughness ratio 1.73 classic against 0.98 erosive);
+* `EdGpuGenTest --png DIR` writes the fields of the renders; `-v` prints the differences. `EdGpuTest`'s kernel table check skips kernels another test owns (`gen_`, `filt_`, `erosion_`).
+
+### What nobody could verify without a GPU
+
+* That FXC compiles the kernels (the generator lints the language subset; the C++ twin compiles; nothing has seen the HLSL compiler). Likely suspects: the function-defining macros in `filt_common.hlsli` (`DEFINE_BILINEAR_C`), `LOOP while`, `int % int` in `filt_dwarp.hlsl`, loops with a non constant bound containing `break`.
+* Real hardware float behaviour: `sin`/`cos`/`exp`/`pow` approximations (the 64 gradient table is computed with `sincos`: a device with a rough `sincos` makes the noise slightly different from the CPU's but still smooth), fused multiply-add (expect 1e-5 level differences), `atan2`.
+* Speed: all the speed-up classes above are estimates from operation counts. Register pressure of `gen_fractal` (up to 16 octaves with derivatives) is the one place where a surprise is likely.
+
+### Checklist for the first real GPU A/B
+
+1. `dev.gpu` (Ctrl+Shift+P) passes the self test; the log shows `EDITOR GPU compute:` lines. Then the first big generator compiles its kernel (log line with the compile time): send the compile errors if any.
+2. Open the Terrain graph, add `Terrain noise` at 1025 or 2049 samples: `/perf` shows `field ops: gpu: ...`. Switch `ed_gpu_compute 0` and compare the picture (expect the same to the eye; hillshade of the difference should be noise at the 1e-5 level) and the `cpu:` time.
+3. Same for: `Eroded noise`, `Multifractal`, `Cells` (plate / border), `Cracks`, `Domain warp`, `Ambient occlusion` (the big one), `Bilateral`, `Diffuse`, `Blur` with a mask, and `Slope` / `Normal map` at 4096.
+4. Compare `Terrain noise` with Style `Eroded` on both backends, then try Warp passes 2 and Erosion strength.
+5. A 4096 x 4096 `fractal` with 12 octaves and warp 2: the first run must finish without a driver reset (time, no black screen); try an integrated GPU too if the machine has one.
+6. Check the statistics line: no op should show `K fell back to the cpu` other than the documented `Unsupported` cases (those are not counted as fall-backs).
+
+## Erosion kernels (GP2)
+
+Ops `erode_hydraulic` and `erode_droplet` have GPU versions (`EdGpuErosion.cpp`, kernels `gpu/erosion_*.hlsl`, test `tests/EdGpuErosionTest.cpp`, the kernels' emulation blocks in `tests/EdGpuErosionKernels.inc`, shared with `EdGpuTest`). They run for fields of at least **4096 samples** (own threshold: `RegisterGpuOp(name, fn, minCells)`; the effective minimum is `min(op minimum, ed_gpu_min_cells)`, so `ed_gpu_min_cells 0` still means "everything"). `erode_stream` stays on the CPU (a priority flood and a sorted drainage network do not parallelise cheaply). The setting around the solve (hardness / rain / protect factors, cell noise filter, conserve, keep_range, max_change, the outputs wear / deposit / flow / water / sediment / accum) is the CPU op's own code, exported from `EdErosion.cpp` (`BuildOpFactors`, `FinishHydroOp`, `FinishDropletOp`, `DropletParamsOf`, `HydroParamsOf`, `FillSteeringSurface`), so a setting means the same on both paths and only the solve differs.
+
+**The GPU hydraulic solver is not the CPU solver on other hardware.** It is the improved solver the user asked for ("better erosion math"): the same settings give a similar but not the same, and on long runs a clearly better, result. The droplet solver is the same algorithm run in parallel (same look, not the same samples).
+
+### Hydraulic solver (`erosion_hydro_{flux,water,apply,transport,settle}`, `erosion_thermal_{a,b}`)
+
+One iteration = flux, water, apply, transport (4 dispatches) + a thermal step (2 dispatches) every `thermal_every` iterations; all passes read and write global memory (ping-pong ground; no group shared memory), `RunIterations` slices them (60 ms submissions).
+
+| Pass | What |
+|---|---|
+| flux | Eight pipes per cell (4 axis, 4 diagonal; the diagonal gain is a quarter of the axis gain, which is the weight ratio of an isotropic 3 x 3 Laplacian). `F = F * (1 - flux_damp) + gain * (water surface difference)`, never negative, scaled so a cell gives away at most its water (rain included). Open edge: a dry ghost cell continuing the edge cell's slope (as the CPU op); closed: no pipe; pinned ring: no pipes. Persistent flux (momentum) as the CPU solver, but with friction: the CPU solver's flux grows until the "no more water than I have" rule limits it, so every wet cell runs at nearly the same speed whatever its slope (about 0.6 cells per step measured) and erosion becomes a pure slope law = diffusion: gentle terrain melts into a plain. |
+| water | `d' = d + rain + inflow - outflow`; speed = vector sum of the unit directions of in- and outflux over the mean depth (floor 0.002), at most `max_speed`; slope = sin of the central difference gradient, limited above `slope_cap` (`s / sqrt(1 + (s / cap)^4)`: grows like `s` up to the cap, a plateau, falling off again on cliffs: **steep faces no longer dominate**), floored at `min_slope`; capacity `capacity * speed^speed_pow * max(0, min(depth_gain, depth / depth_max) * slope - shear_floor)`; dissolve `erosion * rock * (cap - s)` limited to `cut_limit` of the drop to the lowest of the eight neighbours, or settle `deposition * (s - cap)`. Writes the ground change `dT`, not the ground. |
+| apply | `T -= (1 - erode_spread) * dT + erode_spread * binomial3x3(dT)` with symmetric weights (an edge or pinned neighbour gives its weight to the centre): mass is conserved exactly, and a groove is 2 - 3 cells wide instead of one (**no cell wide combs**, the lab's `1 cell Laplacian share` drops from 0.080 to 0.060 on mounds and the grid aligned combs of the first version are gone). |
+| transport | Sediment moves through the same eight pipes, upwind and conservative: `s' = sn (1 - out / dOld) + sum sn_j flux(j -> i) / dOld_j`; what leaves over an open edge is gone, then evaporation. (Semi-Lagrangian backtracing was considered: with a speed of at most one cell per step it is the same first order upwind scheme but not conservative.) |
+| settle | At the end the suspended sediment settles where it is (`settle=1`, as the CPU op). |
+| thermal a / b | The CPU `ThermalImpl` ported 1:1 (8 neighbours, talus per axis / diagonal step, share = rate * 0.5 * largest excess / sum of excesses, rate mask from `protect`, pinned sides). The emulator test compares it with the CPU result: largest difference below 2e-4 on 75 x 49 (pinned / open / closed, with and without protect). |
+
+The noise the user asked for: `rain_noise` (default 0.2) multiplies the rain of a cell by `1 + noise * (2 * hash(cell, seed, iteration / 4) - 1)` (`Hash32` of `common.hlsli`), which breaks the symmetry of the flow. **Why the defaults are what they are** (`flux_damp 0.3`, `depth_gain 4`, `erode_spread 0.7`, `slope_cap 0.4`): measured on the lab terrains (scratchpad `gp2/final/`): without friction, 2000 iterations flatten the rough plateau of `mount.raw` into an inclined plane with gullies only on the steepest rim (the CPU result and the first GPU version look the same); `depth_gain` (the capacity keeps growing with the water depth: deeper concentrated flow digs harder, the real positive feedback of channels) makes branching gullies appear on the smooth massif `mtn100.raw`; `erode_spread` removes the grid aligned one cell combs the first version had in its lower slopes; `slope_cap` below about 0.3 keeps the cliffs of `hills.raw` sharp, above 0.5 they get a scalloped lip.
+
+Parameter mapping (CPU parameter -> GPU):
+
+| CPU parameter | GPU behaviour |
+|---|---|
+| `iterations`, `rain`, `evaporation`, `capacity`, `erosion`, `deposition`, `depth_max`, `min_slope`, `max_speed`, `cut_limit`, `talus`, `thermal`, `thermal_every`, `settle`, `masks` | supported, same meaning (`cut_limit` looks at 8 neighbours, `rain` is multiplied by the noise above) |
+| `gain` | supported; clamped to 0.2 (eight pipes: the weights add up to 5 gain; the CPU limit for four pipes is 0.25) |
+| `edge` open / closed / pinned | supported (same ghost cell rule; the ring of `pinned` is the CPU op's) |
+| `vary`, `vary_scale`, `rain_vary`, `protect`, `seed`, mask input | supported (computed on the CPU by the same code, uploaded as per cell factors) |
+| `smooth`, `smooth_passes`, `conserve`, `keep_range`, `max_change`, `output`, extra outputs | supported (CPU code after the download) |
+| `cpu_only = 1` | Unsupported: the CPU op runs (the node's / panel's "CPU only (0 / 1)": the A / B switch) |
+| bad input (mask of another size, unknown `output`), `iterations <= 0`, field smaller than 4 x 4, `4 * cells > 2^27` elements or more memory than the device budget (about 25 floats per sample) | Unsupported: the CPU op runs and reports its own error |
+| GPU only: `flux_damp 0.3`, `depth_gain 4`, `shear_floor 0`, `erode_spread 0.7`, `slope_cap 0.4`, `rain_noise 0.2`, `speed_pow 1`, `speed_floor 0` | the improvements above; sliders "(GPU)" in the Hydraulic panel / node (`speed_pow`, `speed_floor`, `shear_floor` are only reachable from a graph's op parameters) |
+
+### Droplet solver (`erosion_drop`, `erosion_drop_resolve`, `erosion_steer`, `erosion_copy`, `erosion_delta`, `erosion_blend` + `blur_pass`)
+
+One thread per droplet (batches of at most 524288 per dispatch), a hash of (seed, round, droplet number) for everything random (start, release test, `drop_vary` draws, the random turn on flat ground). The droplet is the CPU `RunDroplet` line by line: bilinear gradient of the steering surface, inertia, capacity, `accel`, evaporation, lifetime, dissolving with the cone brush of radius `radius` (weights `R + 0.5 - distance`, mirrored at the map edge, times the rock factor, at most `round_cut` below the steering surface), bilinear deposit never above the spill surface, the rest settles at the end. **The ground is changed by atomics**: `dq`, `wq` (wear), `pq` (deposit) are `RWStructuredBuffer<int>` in 1/65536 world units (`InterlockedAdd`), `fq` (flow) in 1/1024; a droplet sees `start height + dq / 65536`, which other droplets change at the same time, so there is no order and no determinism (the editor does not need it). Every amount goes through the integer first, so the droplet's sediment and the ground always agree (the test: `sum(deposit) - sum(wear) = net change` to 1e-3). `erosion_drop_resolve` adds the integers to the floats at the end of every round.
+
+Between rounds (`rounds` of them): creep = the CPU `Creep` (`d = t - t0`, `whole` binomial 3 x 3 passes with the foundation's `blur_pass` kernel, one more pass blended in for the fraction, `t += rock * (smoothed - d)`), and the steering surface follows the ground (`erosion_steer`: `hs = max(hs + min(now - before, 0), now)`). After the last round: the cell noise filter (`smooth`, `smooth_passes`: the same filter kernels), `thermal` / `thermal_steps` (the thermal kernels), then the CPU `PostProcess` and outputs.
+
+**The one thing that is still on the CPU is the pit filling** of the steering surface (`drain_pits`, a priority flood, Barnes 2014). The GPU op downloads the ground, fills it on the CPU and uploads the result every `steer_every` rounds (default 8; round 0 always) and follows the ground with the incremental `erosion_steer` update in between (so a valley dug through a filled basin's rim stays a valley, but a pit that deposits create is only filled at the next refresh). Cost: 2 transfers and one fill (about as much as the CPU needs per round) per refresh, 4 refreshes at 32 rounds. A parallel flood was not found that is cheap enough (relaxation needs as many iterations as the longest drainage path); if the first real run shows the refresh dominating, raise `steer_every`.
+
+| CPU parameter | GPU behaviour |
+|---|---|
+| `density`, `lifetime`, `inertia`, `capacity`, `min_slope`, `erode`, `deposit`, `evaporate`, `gravity`, `radius`, `speed`, `water`, `round_cut`, `rounds`, `seed`, `accel`, `drop_vary`, `creep`, `smooth`, `smooth_passes`, `thermal`, `thermal_steps`, `talus` | supported, same meaning |
+| `drain_pits` | supported (0: steer on the ground, 1: filled surface, refreshed every `steer_every` rounds, see above) |
+| `vary`, `rain_vary` (release probability thinning), `protect`, mask input, `max_change`, `keep_range`, `conserve`, `output`, extra outputs | supported (same code as the CPU op) |
+| `cpu_only = 1`, bad input, `density <= 0`, field smaller than 4 x 4, more memory than the device budget (about 26 floats per sample) | Unsupported: the CPU op runs |
+| GPU only: `steer_every 8` | see above |
+
+### What the emulator verified
+
+`tests/EdGpuErosionTest.cpp` (243 checks, about 35 s; also `EdGpuTest` compiles the same kernels): the thermal kernels equal the CPU's (max difference < 2e-4, three edge modes, protect factor, 75 x 49); no rain and no slides = no change; mass: closed edges conserve the ground (hydraulic) and `deposit - wear = net change` (droplets); `conserve`, `max_change`, `keep_range`, pinned ring, open edge row consistency; peaks are lowered relative to the low ground; the relief (std) stays (hydraulic 300: 0.90 of the input against 0.63 on the CPU); masks (zeros = nothing changes, half protected = about 0.2 % of the change on the protected half); isotropy (a tilted plane in four directions: largest / smallest mean change 1.13, the CPU op 1.11); fine structure (1 cell Laplacian share of the change: 0.060 against the CPU's 0.116 hydraulic, 0.014 against 0.015 droplets; no grid direction: axes / diagonals 0.79 / 1.27, the CPU op 1.02 / 1.29; creep widens the grooves 5 times); small and non square fields (4 x 4 to 64 x 3, 1 x 50), parameter extremes (every parameter at both ends, every `output`), a 1100 x 1000 field (several droplet batches, 2D dispatches); zero out of range buffer accesses in every run; `Unsupported` and fall-back paths (cpu_only, wrong mask, unknown output, a failing dispatch at three places, a lost device, a too small memory budget).
+
+The lab measures of the earlier erosion work (scratchpad `gp2/`, `drvgpu` runs the same ops on the emulator against the CPU): on the six lab terrains the droplet solver's change has the same size and the same fine structure as the CPU op's (rms of the change within 5 %, participation ratio and cut share equal, 1 cell Laplacian share equal) and the pictures are indistinguishable at the eye (`final/droplet_default*.png`, `final/presets_*.png`: hills, mountain, alpine, desert presets); the hydraulic solver gives gullies where the CPU solver gives none (`final/hydraulic_300*.png`).
+
+### What nobody could verify without a GPU
+
+HLSL compilation of the new kernels (first suspects: `static const int kDirX[8]` tables in `erosion_common.hlsli`, `InterlockedAdd` on `RWStructuredBuffer<int>` elements, 8 UAVs in `erosion_drop_resolve`), speed (the estimates: a hydraulic iteration of a 4096 x 4096 field reads about 2 GB, so 5 - 15 ms; 300 iterations a few seconds), atomic contention in droplets that all run down the same valley, the time of one droplet dispatch with `lifetime 200` (TDR: batches are 524288 droplets), float behaviour of `sqrt` / `cos` / `sin` (random turn) on the card, the memory budget (about 25 floats per sample: 4096 x 4096 is about 1.7 GB, so cards below 4 GB of video memory give `Unsupported` and the CPU runs it), the real cost of the CPU pit filling per refresh at 4k x 4k.
+
+### Known weaknesses of the GPU hydraulic solver (seen on the lab pictures)
+
+* Long runs lay a wide apron of sediment around an isolated mountain (`island.raw`, 300 iterations: a scalloped ring, alluvial fans that reach far over the flat plain) and creases along the divides between mounds (`mound.raw`). The CPU op leaves these places untouched because its water hardly leaves the steep ground. Fewer iterations, `deposition` up, or `slope_cap` down reduce them.
+* The coarse preview of the erosion panel (`Erosion.OpParams` with `step > 1`) scales the CPU solver's rates; the GPU solver is not tuned for that scaling (the preview shows the same kind of result, not the same one).
+* At the default `slope_cap` a rim that is a one cell step still gets a faint scalloped lip in the 100 step `hills` preset (visible in `final/presets_*.png`).
+
+### Checklist for the first real GPU A/B
+
+1. `python scripts/studio.py engine build`; `python scripts/ed_native_tests.py` must print `EdGpuTest` and `EdGpuErosionTest` without a failure (on Windows both also run the self test on the device); `dev.gpu` in the editor must show `ops with a GPU version: ... erode_droplet, erode_hydraulic ...`. Send the `EDITOR GPU compute:` lines of the log if an erosion kernel does not compile (the first compile happens in the first erosion run: expect 1 - 3 s once per kernel).
+2. Load a map of at least 512 x 512, open the Erosion panel, preset Hills, Run. `/perf` must show `gpu: N ops` for `erode_hydraulic` and the time against `CPU only = 1` (the slider at the bottom of the solver's sliders): the same run twice, the second with CPU only.
+3. Compare the pictures (hillshade with the light from two sides): the GPU hydraulic result has more gullies on steep and mid slopes, wider grooves, no one cell combs; the cliffs keep their edge; if it looks wrong try `Steep slope limit` 0.25 / 0.6 and `Water friction` 0 (which reproduces the CPU solver's flow). The droplet result must look like the CPU one (not identical).
+4. Mass: run with `Keep volume` 0 and look at the Console / mean height before and after (Fields statistics): closed to a few percent of the moved volume on closed edges, a little more with open edges.
+5. Stress: 2048 x 2048 and 4096 x 4096 hydraulic with 300 iterations and droplets with density 2 / 32 rounds: no black screen (TDR), the time per iteration, `ed_gpu_info().lastOpError` empty. Watch the droplet's refresh stalls (a pause every 8th round while the CPU fills the surface: raise `steer_every` if it dominates).
+6. Memory: a 4096 x 4096 hydraulic run on a card with 4 GB must fall back to the CPU quietly (no error), on 8 GB it runs.
+7. Droplets with the mask input and with `vary` / `protect`: the same checks as in the CPU version (protected ground stays).
+
 ## Roadmap
 
 **Done (GP1)**: backend, lease/threading/failure rules, kernel language + generator + lint + emulator, test driver, template op (`blur`, `box`), self test, natives, perf report line, Settings toggle, `dev.gpu`.
 
-**GP2: erosion kernels** (`EdErosion.cpp`: `RunHydro`, `RunDroplet`, `RunStream`; `EdFieldEro2.cpp`)
+**GP2: erosion kernels: DONE for `erode_hydraulic` and `erode_droplet`, see "Erosion kernels"; NOT done: `erode_stream`, `thermal_map`, `erode_rocksoil`, `erode_snow`, `erode_wind`, `erode_glacier`, `settle` (`EdFieldEro2.cpp`), a GPU pit filling** (original plan: `EdErosion.cpp`: `RunHydro`, `RunDroplet`, `RunStream`; `EdFieldEro2.cpp`)
 * Hydraulic/thermal grid methods are stencils: one kernel per sub-step, ping-pong fields (`PingPong`), `RunIterations` for the step loop, download the final fields once. Multiple outputs of an op (`args.extra`: wear, deposit, flow ...) are extra fields downloaded at the end.
 * Flow accumulation / stream power: a sort-free approach per iteration (multi-pass pointer jumping or iterated relaxation) with `uint` buffers; use `FillBuffer` for counters. Droplets: one thread per droplet, atomics (`InterlockedCompareExchange` on `asuint` for float adds), hash from `common.hlsli` (`Hash32`), accept non-determinism.
 * Register the GPU versions under the same op names (`hydro`, `droplet`, `stream` ... see `RegisterOp` calls); refuse parameter sets the kernels do not cover with `Unsupported`; compare against the CPU ops on the emulator with a statistical tolerance for droplets (mean/sd of the difference field) and exact tolerance for grid methods.
 * Check the TDR budget: iterations x cost; the batch sizing is automatic, but a single iteration on 8k x 8k must stay far below 2 s.
 
-**GP3: generator kernels** (`EdFieldGen.cpp`, `EdFieldLand.cpp`: fractal, perlin, ridged, billow, musgrave, voronoi ...)
+**GP3: generator kernels: DONE, see "Generator and filter kernels"** (original plan: `EdFieldGen.cpp`, `EdFieldLand.cpp`: fractal, perlin, ridged, billow, musgrave, voronoi ...)
 * Lattice noise is a function of (cell, seed) only: port the hash (`Hash32` / `HashToUnit` in `common.hlsli` are bit exact in the emulator) and the octave frames (`OctaveFrameOf` table: put it in a `.hlsli` as a `static const float` array, or in a structured buffer uploaded once).
 * Generators have no input field: the op output shape comes from `like`/`width`/`height`/`cell`/`ox`/`oz` (copy `MakeOut` logic); only the download is needed, no upload: a generator is the best case for the GPU.
 * Warp ops sample a field at displaced positions: `MakeTextureFromField` + `tex.SampleLevel` (linear clamp) gives hardware bilinear; the CPU `SampleWorld` uses double precision positions, so compare with a loose tolerance.
 * Keep `Unsupported` for modes not ported; the graph runner keeps working because every failure is a CPU fall-back.
 
-**Later (nobody assigned)**: on-disk shader cache; `Executor::Clear` as a kernel; texture formats other than R32_FLOAT; a shared D3D9/D3D11 resource path to draw GPU fields in the viewport without readback; per-op `minCells`.
+**Later (nobody assigned)**: on-disk shader cache; `Executor::Clear` as a kernel; texture formats other than R32_FLOAT; a shared D3D9/D3D11 resource path to draw GPU fields in the viewport without readback; 
