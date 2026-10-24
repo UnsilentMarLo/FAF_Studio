@@ -304,6 +304,9 @@ def patch_subject(path):
     return ' '.join(subject.split())
 
 
+ENGINE_GENERATED = ('src/sdk/moho/editor/EdGpuShaders.generated.h',)      # tracked in the engine repo, rewritten by scripts/gen_gpu_shaders.py
+
+
 def engine_sync(a=None):
     """Applies the patches of engine/patches that the engine checkout does not have yet. `git pull` of this repository adds patch files but never touches engine/faf-re, so a
     build after a pull compiled the OLD engine: that is why the exe did not change. Matching is by commit subject. Returns the number of patches applied."""
@@ -320,6 +323,13 @@ def engine_sync(a=None):
     if not missing:
         print('engine sources: all %d patches of engine/patches are applied' % len(patches))
         return 0
+    # generated files are tracked in the engine repo (the patches change them) but a local `gen_gpu_shaders.py` run rewrites them: .gitignore does not apply to tracked files, so they show up as
+    # uncommitted changes and used to stop the patches. Put the committed version back (the build regenerates them) before looking for real changes.
+    for rel in ENGINE_GENERATED:
+        code, out = git('status', '--porcelain', '--untracked-files=no', '--', rel, cwd=dst)
+        if out.strip():
+            print('engine sources: %s was regenerated locally; restoring the committed version before applying patches' % rel)
+            git('checkout', '--', rel, cwd=dst)
     code, out = git('status', '--porcelain', '--untracked-files=no', cwd=dst)
     if out.strip():
         raise SystemExit('%d new engine patches (%s ...) but the engine checkout has uncommitted changes, so they cannot be applied:\n%s\n'
