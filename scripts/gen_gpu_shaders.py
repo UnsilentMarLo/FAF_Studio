@@ -278,8 +278,18 @@ def main(argv):
             return 1
         print("gpu shaders up to date (%d kernels)" % len(kernels))
         return 0
+    # keep the line endings the file already has (a Windows checkout with core.autocrlf may hold CRLF) and do not touch an up to date file, so a run changes nothing git can see
+    data = text.encode("utf-8")
+    if os.path.exists(g.out):
+        with open(g.out, "rb") as f:
+            old = f.read()
+        if old.decode("utf-8", "replace").replace("\r\n", "\n") == text:
+            print("gpu shaders already up to date (%d kernels)" % len(kernels))
+            return 0
+        if b"\r\n" in old:
+            data = text.replace("\n", "\r\n").encode("utf-8")
     with open(g.out, "wb") as f:
-        f.write(text.encode("utf-8"))
+        f.write(data)
     print("wrote %s (%d kernels, %d bytes)" % (g.out, len(kernels), len(text)))
     return 0
 
