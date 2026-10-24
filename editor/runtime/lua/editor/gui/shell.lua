@@ -270,15 +270,18 @@ local function BuildBar(frame)
     local y2 = mh + Skin.S(3)
     local x, bh = Skin.S(6), Skin.S(Skin.size.topBar) - Skin.S(6)
     S.tabButtons = {}
-    for i, name in Workspace.Presets() do
+    -- the tabs share the room the rest of the row leaves (Grid, Slope, the UI scale buttons): 88 units each as long as they fit, narrower with more workspaces or a bigger interface
+    local presets = Workspace.Presets()
+    local pitch = math.min(Skin.S(88), math.floor((fw - Skin.S(6) - Skin.S(206)) / math.max(1, table.getn(presets))))
+    for i, name in presets do
         local n, slot = name, i       -- (closures share the loop variable)
-        local b = W.Button(bar, n, x, y2, Skin.S(84), bh, function() ShowWorkspace(n) end, { tip = function()
+        local b = W.Button(bar, n, x, y2, pitch - Skin.S(4), bh, function() ShowWorkspace(n) end, { tip = function()
             local t = import('/lua/editor/tooltips.lua').ForWorkspace(n)
             return t and (t .. '  (Alt+' .. tostring(slot) .. ')') or nil
         end })
         b:SetOn(n == S.current)
         S.tabButtons[n] = b
-        x = x + Skin.S(88)
+        x = x + pitch
     end
     x = x + Skin.S(12)
     local grid = import('/lua/editor/grid.lua')

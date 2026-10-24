@@ -53,6 +53,7 @@ function Load()
     pcall(function() import('/lua/editor/mission.lua').LoadSidecar(session.file) end)           -- stages, objectives and actions of a mission map
     pcall(function() import('/lua/editor/mission.lua').ImportScript(Doc) end)                   -- a hand-written mission script (MissionNumber stages) is shown read-only, never rewritten
     pcall(function() import('/lua/editor/graph.lua').LoadSidecar(session.file) end)             -- the terrain graph (nodes, wires, parameters)
+    pcall(function() import('/lua/editor/layout.lua').LoadSidecar(session.file) end)            -- the map layout drawing (layers, generator settings)
     pcall(function() import('/lua/editor/paths.lua').LoadSidecar(session.file) end)             -- spline paths of the terrain tool
     pcall(function() import('/lua/editor/interop.lua').LoadSidecar(session.file) end)           -- import / export settings for external terrain tools
     pcall(function() import('/lua/editor/shaders.lua').LoadSidecar(session.file) end)           -- the mask range the paint was made for (after a plain shader switch)

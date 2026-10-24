@@ -45,3 +45,4 @@ selftest_overlayfield
 selftest_graphbase
 selftest_slope
 selftest_shaders
+selftest_layout

@@ -993,6 +993,8 @@ for _, op in { 'crop', 'resize', 'path_paste', 'amplitude', 'keep_side', 'terrai
 import('/lua/editor/graphnodes_t7.lua').Install({ Def = Def, N = N, C = C, B = B, T = T, In = In, Out = Out, One = One, Fit = Fit, SEED = SEED, Fields = Fields }, Covers)
 -- the nodes of the map-wide shader textures (graphnodes_map.lua, maptextures.lua): normal map, environment lighting, lighting texture and their two outputs
 import('/lua/editor/graphnodes_map.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
+-- the map layout drawn in the Layout workspace: its heights, the mask of a layer, the bases (graphnodes_layout.lua)
+import('/lua/editor/graphnodes_layout.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
 
 --- Parses `key=value,key=value` (a number, a word, or a list x:y;x:y) into op parameters: the text format of the golden cases.
 function ParseArgs(text)

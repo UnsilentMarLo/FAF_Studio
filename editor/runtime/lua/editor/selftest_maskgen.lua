@@ -231,8 +231,8 @@ function Run(verbose)
             for _, idx in { 5, 6, 7 } do
                 local layer = Recipes.State.layers[idx]
                 if layer and layer >= 1 then
-                    rockish = math.max(rockish, Value(layer, w - 20, 60))
-                    flatRock = math.max(flatRock, Value(layer, 20, 60))
+                    rockish = math.max(rockish, Value(layer, w - 20, 60) or 0)
+                    flatRock = math.max(flatRock, Value(layer, 20, 60) or 0)
                 end
             end
             check('rock kinds lie on the ramp, not on the flat', rockish > 0.5 and flatRock < 0.1, rockish .. ' / ' .. flatRock)

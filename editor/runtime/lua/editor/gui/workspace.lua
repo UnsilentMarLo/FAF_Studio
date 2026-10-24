@@ -69,6 +69,16 @@ local presets = {
                     Split('col', 0.6, Stack({ 'graphinspector' }), Stack({ 'graphgallery', 'validation', 'view', 'properties' })))),
             popouts = {} }
     end,
+    -- Map layout: draw the map in layers on a canvas, turn it into terrain, and place the starts and resources around the bases; the viewport shows the result.
+    Layout = function()
+        return { tree =
+            Split('row', 0.26,
+                Split('col', 0.55, Stack({ 'layoutlayers' }), Stack({ 'layoutmarkers', 'tools' })),
+                Split('row', 0.58,
+                    Split('col', 0.74, Stack({ 'layoutcanvas' }), Stack({ 'console', 'validation' })),
+                    Split('col', 0.6, Stack({ 'viewport' }), Stack({ 'view', 'properties', 'toolsettings' })))),
+            popouts = {} }
+    end,
     -- Review is read-only: the viewport and ONE tab stack with what looking at a map needs (View overlays, checks, statistics, the map's images, the objects, the log). No editing
     -- panels (Properties edits, Mods, Hotkeys); Tools stays last for the Select / Ruler / Camera tools, Save and Play test.
     Review = function()
@@ -79,7 +89,7 @@ local presets = {
             popouts = {} }
     end,
 }
-local presetOrder = { 'Terrain', 'Objects', 'Environment', 'Generate', 'Mission', 'Mod', 'Review' }
+local presetOrder = { 'Terrain', 'Objects', 'Environment', 'Layout', 'Generate', 'Mission', 'Mod', 'Review' }
 
 -- A workspace whose preset changed for good gets a revision here: the arrangement the editor kept for it (layouts/<name>.lua, written without a `rev` by older editors) is dropped
 -- once, so an old layout does not bring a removed panel arrangement back. Raise the number when a preset is redesigned again.
