@@ -62,9 +62,13 @@ function Report()
         table.insert(out, 'frame rate: not measured yet (the editor is not drawing)')
     end
     local Graphics = import('/lua/editor/graphics.lua')
-    local parts = {}
-    for _, d in Graphics.Defs do table.insert(parts, d.key .. ' ' .. Graphics.StateText(d.key)) end
-    table.insert(out, 'saved graphics settings: ' .. table.concat(parts, ', '))
+    local parts, line = {}, {}
+    for _, d in Graphics.Defs do
+        table.insert(line, d.key .. ' ' .. Graphics.StateText(d.key))
+        if table.getn(line) == 4 then table.insert(parts, table.concat(line, ', ')) line = {} end
+    end
+    if table.getn(line) > 0 then table.insert(parts, table.concat(line, ', ')) end
+    for i, text in parts do table.insert(out, (i == 1 and 'saved settings: ' or '    ') .. text) end
     local okCam, cam = pcall(function() return GetCamera('WorldCamera') end)
     if okCam and cam then
         local okZ, zoom = pcall(function() return cam:GetZoom() end)
@@ -81,6 +85,6 @@ function Report()
     for _, name in { 'sc_FrameTimeClamp', 'SC_VerticalSync', 'SC_CameraScaleLOD', 'ren_MeshDissolve', 'ren_MeshDissolveCutoff', 'ren_ShadowLOD', 'ui_AlwaysRenderStrategicIcons', 'SC_PrimaryAdapter' } do
         pcall(ConExecute, name)
     end
-    table.insert(out, 'the live values of sc_FrameTimeClamp, SC_VerticalSync, SC_CameraScaleLOD, ren_MeshDissolve, ren_MeshDissolveCutoff, ren_ShadowLOD, ui_AlwaysRenderStrategicIcons and SC_PrimaryAdapter are printed just above')
+    table.insert(out, 'live console values (frame limit, vertical sync, level of detail ...): in the log')
     return out
 end

@@ -31,6 +31,15 @@ Panels.Register{
             self.items, self.rows, self.presetButtons = {}, {}, {}
         end
 
+        --- The lines of the display report under its button (cut to the panel width).
+        function P:ShowDisplay()
+            if not self.displayLabels then return end
+            for i, l in self.displayLabels do
+                local text = self.displayText and self.displayText[i] or ''
+                W.Fit(l, text, (self.textW or Skin.S(300)))
+            end
+        end
+
         function P:Refresh()
             if not self.built then return end
             local preset = Graphics.PresetName()
@@ -125,6 +134,23 @@ Panels.Register{
             self.scaleValue = Keep(W.Label(group, '100%', sx + Skin.S(40), y + Skin.S(4), { color = c.text }))
             Btn('+', sx + Skin.S(40) + Skin.S(56), y, Skin.S(32), function() Commands.Run('ui.scale.up') end, { tip = 'Make the interface larger.' })
             y = y + rowH + pad
+
+            -- Display: the window size, the measured frame rate, the saved graphics settings and the camera, as one report (also in the Console panel and the log): what to send when the picture misbehaves
+            Keep(W.Label(group, 'Display', pad, y, { color = c.text }))
+            y = y + Skin.S(28)
+            Btn('Display report', pad, y, math.min(w - 2 * pad, Skin.S(180)), function()
+                local lines = import('/lua/editor/display.lua').Report()
+                for _, l in lines do LOG('EDITOR display: ' .. l) end
+                P.displayText = lines
+                P:ShowDisplay()
+            end, { tip = 'Measures the frame rate and lists the window size, the graphics settings and the camera. Take a screenshot of it, or find the same lines in the Console panel.' })
+            y = y + rowH + Skin.S(8)
+            self.displayLabels = {}
+            for i = 1, 9 do
+                self.displayLabels[i] = Keep(W.Label(group, '', pad, y, { color = c.textDim, size = 'small' }))
+                y = y + Skin.S(16)
+            end
+            self:ShowDisplay()
 
             W.EndLayout(group)
             self.built, self.w = true, w
