@@ -23,7 +23,7 @@
 Roles = { 'grass', 'rock', 'sand', 'dirt', 'wet', 'highrock', 'darkrock', 'snow' }
 RoleLabels = { grass = 'Grass', rock = 'Rock (cliffs)', sand = 'Sand (shore)', dirt = 'Dirt', wet = 'Wet ground', highrock = 'High rock', darkrock = 'Dark rock', snow = 'Snow' }
 
-DEFAULT = 'temperate'
+DEFAULT = 'valley'          -- the set a new map gets: green hills against tan plains read well; Temperate (olive grass, brown dirt) is still in the list
 Theme = DEFAULT
 
 Themes = {
@@ -34,6 +34,17 @@ Themes = {
         dirt = { '/env/Evergreen/layers/Dirt001_albedo.dds' }, wet = { '/env/Evergreen/layers/Sandwet_albedo.dds' },
         highrock = { '/env/Evergreen/layers/RockLight_albedo.dds' }, darkrock = { '/env/Evergreen/layers/SandRock_albedo.dds' },
         snow = { '/env/Evergreen/layers/snow001_albedo.dds' } },
+    -- the textures of a map that looks right (Adaptive Archsimkats Valley, docs/projects/editor/GRAPH_TEXTURING.md): deep green grass against light tan gravel is the contrast, the rock is grey
+    valley = { label = 'Open valley (Evergreen 2: green hills, tan plains)', size = 12,
+        base = { '/env/Evergreen2/Layers/EvGrass005a_albedo.dds', '/env/Evergreen2/Layers/EG_Grass001_albedo.dds', '/env/Evergreen/layers/grass001_albedo.dds' }, upper = { '/env/Evergreen/layers/macrotexture000_albedo.dds' },
+        grass = { '/env/Evergreen2/Layers/EvGrass005a_albedo.dds', '/env/Evergreen2/Layers/EG_Grass001_albedo.dds', '/env/Evergreen/layers/grass000_albedo.dds' },
+        rock = { '/env/Evergreen2/Layers/EvRock006c_albedo.dds', '/env/Evergreen2/Layers/EG_Rock_albedo.dds', '/env/Evergreen/layers/RockMed_albedo.dds' },
+        sand = { '/env/Evergreen2/Layers/EV_Reef_sand_albedo.dds', '/env/Evergreen/layers/SandLight_albedo.dds' },
+        dirt = { '/env/Desert/Layers/Des_Gravel01_albedo.dds', '/env/Evergreen2/Layers/Eg_Gravel01_albedo.dds', '/env/Evergreen/layers/Dirt001_albedo.dds' },
+        wet = { '/env/Evergreen2/Layers/Eg_Dirt003_albedo.dds', '/env/Evergreen2/Layers/Eg_Dirt001_albedo.dds', '/env/Evergreen/layers/Sandwet_albedo.dds' },
+        highrock = { '/env/Evergreen2/Layers/EvRock002_albedo.dds', '/env/Evergreen2/Layers/EG_Rock_albedo.dds', '/env/Evergreen/layers/RockLight_albedo.dds' },
+        darkrock = { '/env/Evergreen2/Layers/EvRock008_albedo.dds', '/env/Evergreen2/Layers/EvRock004_albedo.dds', '/env/Evergreen/layers/SandRock_albedo.dds' },
+        snow = { '/env/Evergreen2/Layers/EG_Snow_albedo.dds', '/env/Evergreen/layers/snow001_albedo.dds' } },
     desert = { label = 'Desert', size = 14,
         base = { '/env/Desert/Layers/Des_SandMed_albedo.dds' }, upper = { '/env/Evergreen/layers/macrotexture000_albedo.dds' },
         grass = { '/env/Desert/Layers/Des_SandMed02_albedo.dds', '/env/Desert/Layers/Des_SandMed_albedo.dds' },
@@ -73,7 +84,7 @@ Themes = {
         wet = { '/env/Geothermal/layers/Geo_LavaDk_01_albedo.dds' }, highrock = { '/env/Geothermal/layers/Geo_Rock002_albedo.dds' },
         darkrock = { '/env/Geothermal/layers/Geo_LavaMd_01_albedo.dds' }, snow = { '/env/Geothermal/layers/Geo_LavaLt_01_albedo.dds' } },
 }
-ThemeOrder = { 'temperate', 'desert', 'tropical', 'tundra', 'lava', 'swamp', 'geothermal' }
+ThemeOrder = { 'temperate', 'valley', 'desert', 'tropical', 'tundra', 'lava', 'swamp', 'geothermal' }
 
 local function Exists(path)
     local ok, info = pcall(DiskGetFileInfo, path)

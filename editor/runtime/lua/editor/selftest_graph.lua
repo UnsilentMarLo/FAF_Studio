@@ -744,6 +744,39 @@ function Run(verbose)
         end
     end
 
+    -- ---- another graph starts from the ground the first one made (the texture pass after the terrain graph) ---------------------------------------------------
+    do
+        GRun.Release()
+        Terrain.ClearHistory()
+        History.Clear()
+        ed_terrain_set_rect(0, 0, w - 1, h - 1, 25)
+        Graph.New('first')
+        local k1 = Graph.Add('const', 0, 0, { value = 77 })
+        local o1 = Graph.Add('out_height', 200, 0)
+        Graph.Connect(k1.id, 'out', o1.id, 'a')
+        GRun.Refresh(true)
+        local rb1 = GRun.Build()
+        check('the first graph builds a terrain of 77', rb1 ~= nil and math.abs(ed_terrain_get(40, 40) - 77) < 0.5, tostring(ed_terrain_get(40, 40)))
+        Graph.New('second')
+        local t2 = Graph.Add('terrain', 0, 0)
+        GRun.Refresh(true)
+        local v2 = GRun.Main and GRun.Main:Value(t2.id, 'out')
+        local seen = v2 and Fields.Sample(v2, 40, 40) or -1
+        check('another graph reads the ground the first graph made, not the ground from before it', math.abs(seen - 77) < 0.5, tostring(seen))
+        local o2 = Graph.Add('out_height', 200, 0)
+        Graph.Connect(t2.id, 'out', o2.id, 'a')
+        Graph.New('first')
+        local k3 = Graph.Add('const', 0, 0, { value = 55 })
+        local o3 = Graph.Add('out_height', 200, 0)
+        Graph.Connect(k3.id, 'out', o3.id, 'a')
+        GRun.Refresh(true)
+        GRun.Build()
+        GRun.Build()
+        check('a second build of the same graph still starts from the same ground', math.abs(ed_terrain_get(40, 40) - 55) < 0.5)
+        History.Undo()
+        History.Undo()
+    end
+
     -- ---- clean up -------------------------------------------------------------------------------------------------------------------------------
     GRun.Release()
     Graph.New('untitled')

@@ -22,6 +22,21 @@ if L.terrain then
     if not r then return 'terrain failed ' .. tostring(why) end
     Gen.Commit(r) Gen.Free(r)
 end
+if L.graph and L.theme then TS.Apply(L.theme) end          -- the texture set first: applying it clears the paint, and a graph paints
+if L.graph then
+    -- a premade terrain graph of the Generate workspace, built at full resolution (L.graph = preset id; L.graphs = more ids built one after the other)
+    local Graph = import('/lua/editor/graph.lua')
+    local GRun = import('/lua/editor/graphrun.lua')
+    for _, id in (L.graphs or { L.graph }) do
+        local ok, why = Graph.LoadPreset(id)
+        if not ok then return 'graph ' .. id .. ' failed: ' .. tostring(why) end
+        if L.seed then Graph.Current.seed = L.seed end
+        GRun.Refresh(true)
+        local r, why2 = GRun.Build()
+        if not r then return 'graph ' .. id .. ' did not build: ' .. tostring(why2) end
+        table.insert(o, string.format('graph %s: %s samples, %s layers, %.0f ms', id, tostring(r.changed), tostring(r.layers), r.ms or 0))
+    end
+end
 if L.shader then import('/lua/editor/shaders.lua').Set(L.shader) end
 Stage('terrain done')
 if L.theme then TS.Apply(L.theme) end

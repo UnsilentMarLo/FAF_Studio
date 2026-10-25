@@ -42,6 +42,10 @@
 --   AutoLayers(roles)  MatchTextures(roles)    explicit layer lists (-1 = skip): the texture set layout / what the detection found
 --   AssignMissing() -> count, text   gives empty layers the textures of the roles the map lacks (texsets.lua)
 --   PreviewRole(i)  Apply() -> summary | nil, message   Coverage() -> { mask = {[layer]=share}, seen = {...} } from the committed masks
+--   For the terrain graph (graphnodes_kinds.lua), on the heights of any field instead of the map's own:
+--   StatsOf(S, H, water)                          the numbers of a height field (like Stats)
+--   Selections(S, c, o) -> sel, plan, roles       the SELECTION of every kind of ground (role -> field; the base kind has none) for the shader of the map: o = { preset = style id, knobs = overrides }
+--   WriteKinds(S, c, sel, o) -> summary, cells    resolves selections (priority cascade, variants, shader layers) and writes the paint masks, terrain types and (PBR shaders) the roughness: one undo step
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
@@ -89,6 +93,8 @@ Presets = {
     { id = 'desert', name = 'Desert (dust and sand, no snow)', uses = ALL_KNOBS, knobs = { snow = 0, beach = 4, dirt = 0.42, dark = 0.4, wet = 1, crisp = 0.3 }, off = { snow = true }, drySand = true },
     { id = 'arctic', name = 'Arctic (snow and ice, rock)', uses = ALL_KNOBS, knobs = { snow = 0.4, high = 0.35, beach = 2, dirt = 0.15, cliff = 48, rock = 30 }, off = {}, altForce = true },
     { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 44, rock = 26, dirt = 0.5, dark = 0.8, high = 0.4, snow = 0.05, crisp = 0.55 }, off = {} },
+    { id = 'valley', name = 'Open valley (bare plains, green ridges, rock on the steep)', uses = ALL_KNOBS, knobs = { dirt = 0.5, snow = 0, high = 0.7, beach = 3, wet = 1.5, dark = 0.5, crisp = 0.7, fine = 0.5, breakup = 0.7, patch = 70, rock = 30, cliff = 48 },
+      off = { snow = true }, relief = true },
     { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.36, snow = 0, rock = 38, cliff = 56, crisp = 0.3 }, off = { snow = true } },
 }
 
@@ -161,6 +167,39 @@ end
 
 local statsCache = { key = false, st = false }
 
+--- { hmin, hmax, water, hasWater, pct } from a list of heights (the range lo .. hi), the water level and whether the map has water on. Second result: true when the percentiles were made.
+function StatsFromValues(vals, lo, hi, wl, on)
+    local st = { hmin = lo, hmax = hi, water = wl, hasWater = false, pct = {} }
+    st.hasWater = on and wl > lo + 0.5 and wl < hi - 0.5
+    local pct, cnt
+    if st.hasWater then
+        pct, cnt = Percentiles(vals, wl)
+        if cnt and cnt < table.getn(vals) * 0.03 then pct = nil end
+    end
+    pct = pct or Percentiles(vals, nil)
+    if pct then
+        st.pct = pct
+        return st, true
+    end
+    for p = 0, 100 do st.pct[p + 1] = lo + (hi - lo) * p / 100 end
+    return st, false
+end
+
+--- The numbers of a height field of the graph (any size: it is cut down to about 250 samples a side for the percentiles) with the map's water level.
+function StatsOf(S, H, water)
+    local world = World.Get()
+    local wl = water or world.water_elev or 0
+    local on = (world.water_on or 0) ~= 0
+    local w, h = Fields.Info(H)
+    local f = H
+    local m = math.max(w, h)
+    if m > 250 then f = S:Op('resize', { a = H, width = math.max(2, math.floor(w * 250 / m)), height = math.max(2, math.floor(h * 250 / m)) }) end
+    local w2, h2 = Fields.Info(f)
+    local lo, hi = Fields.Stats(f)
+    local st = StatsFromValues(Fields.Read(f, 0, 0, w2 - 1, h2 - 1), lo, hi, wl, on)
+    return st
+end
+
 --- Drops the remembered numbers of the map (the next call reads them again).
 function Invalidate()
     statsCache = { key = false, st = false }
@@ -185,15 +224,7 @@ function Stats()
             return { vals = Fields.Read(H, 0, 0, w - 1, h - 1), lo = mn, hi = mx }
         end)
         if ok and r and r.vals then
-            st.hmin, st.hmax = r.lo, r.hi
-            st.hasWater = on and wl > r.lo + 0.5 and wl < r.hi - 0.5
-            local pct, cnt
-            if st.hasWater then
-                pct, cnt = Percentiles(r.vals, wl)
-                if cnt and cnt < table.getn(r.vals) * 0.03 then pct = nil end
-            end
-            pct = pct or Percentiles(r.vals, nil)
-            if pct then st.pct, got = pct, true end
+            st, got = StatsFromValues(r.vals, r.lo, r.hi, wl, on)
         end
     end
     if not got then
@@ -267,7 +298,7 @@ local function Wob(k) return math.max(40, math.min(160, k.patch * 1.6)), k.break
 function AltFactor(st)
     local R = HeightAt(st, 0.99) - HeightAt(st, 0.03)
     local f = math.max(0, math.min(1, (R - 18) / 42))
-    local p = Presets[State.preset]
+    local p = st.style or Presets[State.preset]
     if p and p.altForce then f = 1 end
     return f
 end
@@ -333,7 +364,16 @@ Builders.dirt = function(k, st, cx)
     if cx.base == 'dirt' then return {} end
     if k.dirt <= 0.005 then return false end
     local size, bk = Wob(k)
-    local rules = { Mix(k.seed, k.patch * 2.4, 1 - k.dirt - 0.22, 1 - k.dirt + 0.22), Crisp(k, k.seed + 4), FlatTo(k.rock - 6, k.rock + 10, 3 * bk, size, k.seed + 3, 'mul') }
+    local rules
+    if cx.style and cx.style.relief then
+        -- the open ground of a valley: flat ground that does not stand above its surroundings (the floor, the basins, the foot of the hills); the hills and ridges stay green. The edge follows
+        -- the landform, a little noise only makes it ragged
+        local mix = Mix(k.seed, k.patch * 2.4, 0.3 - 0.25 * k.dirt, 0.55 - 0.25 * k.dirt)
+        rules = { Rule('relief', { radius = math.max(40, k.patch * 2), lo = -80, hi = 0.35 + 3 * (k.dirt - 0.5), soft = 1.5 + 2 * bk }), mix, Crisp(k, k.seed + 4), FlatTo(k.rock - 8, k.rock + 6, 3 * bk, size, k.seed + 3, 'mul') }
+        rules[2].op = 'mul'
+    else
+        rules = { Mix(k.seed, k.patch * 2.4, 1 - k.dirt - 0.22, 1 - k.dirt + 0.22), Crisp(k, k.seed + 4), FlatTo(k.rock - 6, k.rock + 10, 3 * bk, size, k.seed + 3, 'mul') }
+    end
     if (cx.has.snow or cx.base == 'snow') and k.snow > 0.004 and AltFactor(st) > 0.04 then
         local _, R = Zone(st)
         local sl = SnowLine(k, st)
@@ -366,7 +406,7 @@ Builders.sand = function(k, st, cx)
         if k.beach <= 0 then return false end
         return { Rule('shoredist', { width = k.beach * 2.5, depth = 3, soft = 1 + k.beach }), FlatTo(10, 28, 2 * bk, size, k.seed + 8, 'mul'), Crisp(k, k.seed + 81, 14), Blur(1.5), Grain(k, k.seed + 303, 0.5), AtMost(0.92) }
     end
-    local p = Presets[State.preset]
+    local p = cx.style or Presets[State.preset]
     if not (p and p.drySand) then return false end                            -- sand lies along water; a dry map only has it when the style asks (desert: dry basins)
     local h0, h1 = HeightAt(st, 0.04), HeightAt(st, 0.3)                     -- the lowest third of the land: dry basins
     return { FallTo(st, h0, h1, 0.4 * (h1 - h0) * bk, size * 1.5, k.seed + 9), FlatTo(6, 18, 0, size, 1, 'mul'), Crisp(k, k.seed + 82, 20), Blur(2.5), Grain(k, k.seed + 304, 0.7), AtMost(0.65) }
@@ -488,14 +528,17 @@ function Context(plan)
 end
 
 --- The roles of the current style with the current settings, for the plan of the map (or the context cx): { id, label, keywords, rules, base, off }.
-function Roles(cx)
+function Roles(cx, st, k, preset)
     cx = cx or Context(Plan())
-    local p = Presets[State.preset]
-    local st = Stats()
+    local p = Presets[preset or State.preset]
+    st = st or Stats()
+    k = k or Knobs
+    cx.style = p                -- the builders read the style from here (a graph node asks for a style that is not the panel's)
+    st.style = p
     local list = {}
     for i, id in Order do
         local info = RoleInfo[id]
-        local rules = Builders[id](Knobs, st, cx)
+        local rules = Builders[id](k, st, cx)
         local isBase = cx.base == id
         list[i] = { id = id, label = info.label, keywords = info.keywords, rules = rules or {}, base = isBase,
                     off = (not isBase) and (rules == false or (p.off and p.off[id]) or false) or false }
@@ -640,8 +683,9 @@ local function PatchField(c, k, st, id, n)
     return m
 end
 
---- The visible weight of every layer of the plan, as fields: { [layer] = field }. See the header (priority cascade, then variants split a role's region).
-local function Weights(S, c, plan, roles, k, st)
+--- The selection of every kind of ground that has a layer (or is the base): sel[role] = field (none for the base kind: it is what the others leave), groups[role] = its layers. A kind on a layer
+--- the B shaders draw from the side only (3, 4) gets steep ground only. Nothing is resolved yet (Resolve does that).
+local function Selections_(S, c, plan, roles, k, st)
     local byId = {}
     for _, r in roles do byId[r.id] = r end
     local groups, sel = {}, {}
@@ -668,6 +712,12 @@ local function Weights(S, c, plan, roles, k, st)
             end
         end
     end
+    return sel, groups
+end
+
+--- Resolves selections into the VISIBLE weight of every layer of the plan: { [layer] = field } and the weight of every kind { [role] = field }. See the header (priority cascade, then variants split a
+--- role's region).
+local function Resolve(S, c, plan, sel, groups, k, st)
     local rem = S:Op('const', { like = c.H, value = 1 })
     local region = {}
     for _, id in Priority do
@@ -690,7 +740,13 @@ local function Weights(S, c, plan, roles, k, st)
             target[g[1]] = left
         end
     end
-    return target, groups
+    return target, groups, region
+end
+
+--- The visible weight of every layer of the plan, as fields: { [layer] = field }. See the header (priority cascade, then variants split a role's region).
+local function Weights(S, c, plan, roles, k, st)
+    local sel, groups = Selections_(S, c, plan, roles, k, st)
+    return Resolve(S, c, plan, sel, groups, k, st)
 end
 
 --- Writes all roles: the paint masks of their layers and (State.types) the terrain-type grid. ONE undo step. Returns a summary { { label, share, layer }, ... } (the shares add up to 1)
@@ -702,12 +758,23 @@ local function ApplyPaint()
     for _ in plan.has do anyRole = true end
     if not anyRole then return nil, 'no layer has a texture the recipe can use (press Assign textures, or choose the kind of ground of each layer)' end
     local roles = Roles(Context(plan))
-    local cap = Cap()
-    local TT = import('/lua/editor/terraintype.lua')
     return Fields.Run(function(S)
         local c = MaskGen.NewContext(S, { step = 1 })
         local ok, target, groups = pcall(Weights, S, c, plan, roles, Knobs, Stats())
         if not ok then return nil, tostring(target) end
+        return WriteTargets(S, c, plan, roles, target, groups, { label = Presets[State.preset].name })
+    end)
+end
+
+--- Writes the visible weights (target[layer]) of a plan as the paint masks of the layers (the opacity that shows exactly the weight, see the header), the terrain types by the layer seen most
+--- (o.types, default State.types) and returns the summary of the shares and the cells changed. One undo step. o.label names it.
+function WriteTargets(S, c, plan, roles, target, groups, o)
+    o = o or {}
+    local cap = Cap()
+    local TT = import('/lua/editor/terraintype.lua')
+    local wantTypes = o.types
+    if wantTypes == nil then wantTypes = State.types end
+    do
         -- a kind of ground the style or the map does not have (snow on a flat map, in the desert style) is cleared from its layer: the recipe replaces what an earlier run painted
         for _, r in roles do
             local list = plan.byRole[r.id]
@@ -742,7 +809,7 @@ local function ApplyPaint()
         end
         vis[0] = free
         -- terrain types by the layer seen most
-        if State.types and rawget(_G, 'ed_tt_info') and ed_tt_info() then
+        if wantTypes and rawget(_G, 'ed_tt_info') and ed_tt_info() then
             local best = vis[0]
             local codes = S:Op('const', { like = c.H, value = TT.TypeOfLayer(0) })
             for layer = 1, cap do
@@ -760,7 +827,7 @@ local function ApplyPaint()
         end
         if table.getn(parts) == 0 then return nil, 'nothing changed' end
         History.Push({
-            label = 'stratum recipe ' .. Presets[State.preset].name,
+            label = 'stratum recipe ' .. (o.label or Presets[State.preset].name),
             undo = function() for i = table.getn(parts), 1, -1 do parts[i].undo() end end,
             redo = function() for i = 1, table.getn(parts) do parts[i].redo() end end,
             release = function() for _, e in parts do e.release() end end,
@@ -790,11 +857,89 @@ local function ApplyPaint()
         if not listed[0] then table.insert(summary, { label = 'Base layer (left as it is)', share = Mean(0), layer = 0 }) end
         if other > 0.0005 then table.insert(summary, { label = 'Layers outside the recipe', share = other, layer = -1 }) end
         return summary, cells
-    end)
+    end
 end
 
 --- Paints the kinds of ground (see ApplyPaint above) and, for the shaders that read layer 8 as a roughness multiplier (Terrain1xx / 2xx: shaders.lua Profile l8 = 'rough'), also sets that mask from the
 --- paint (wet ground, ice and snow shiny, dry rock and sand rough): State.roughness. One undo step. Returns the summary and the number of cells changed, or nil and a message.
+--- The knobs of a style with some of them overridden: o.preset = a style id (or index), o.knobs = { key = value } (only keys that differ from the default of the knob count as a wish, see
+--- graphnodes_kinds.lua). Returns the knob table and the style index.
+function KnobsFor(o)
+    o = o or {}
+    local index = State.preset
+    if type(o.preset) == 'number' then index = o.preset
+    elseif o.preset then
+        for i, p in Presets do
+            if p.id == o.preset then index = i end
+        end
+    end
+    local k = {}
+    for key, v in KnobDefaults do k[key] = v end
+    for key, v in Presets[index].knobs or {} do k[key] = v end
+    for key, v in (o.knobs or {}) do k[key] = v end
+    return k, index
+end
+
+--- The selections of the kinds of ground for the heights of the context c (c.H any height field of the graph), the plan of the map's shader and layers and the roles. See the header.
+function Selections(S, c, o)
+    local plan = Plan()
+    local k, index = KnobsFor(o)
+    local st = StatsOf(S, c.H, c.water)
+    local roles = Roles(Context(plan), st, k, index)
+    local sel, groups = Selections_(S, c, plan, roles, k, st)
+    return sel, plan, roles, groups
+end
+
+--- Writes selections (role -> field, from Selections or the user's own masks) into the paint of the map: the priority cascade, the variants of a kind with several layers, the opacity per layer, the
+--- terrain types (o.types) and, on the PBR shaders, the roughness multiplier (o.roughness, amount o.amount). One undo step. Returns summary, cells | nil, message.
+function WriteKinds(S, c, sel, o)
+    o = o or {}
+    if not Fields.IsAvailable() or not ed_stratum_info() then return nil, 'the map has no paint masks' end
+    local plan = Plan()
+    local anyRole = false
+    for _ in plan.has do anyRole = true end
+    if not anyRole then return nil, 'no layer has a texture a ground kind can use (give the layers textures: the Textures panel, or a new map with a texture set)' end
+    local k, index = KnobsFor(o)
+    local st = StatsOf(S, c.H, c.water)
+    local roles = Roles(Context(plan), st, k, index)
+    local depthBefore = History.Depth()
+    -- only kinds that have a layer count; the base kind (no mask) is what the others leave
+    local use, groups = {}, {}
+    for _, id in Order do
+        local list = plan.byRole[id]
+        if list then
+            groups[id] = list
+            if sel[id] and plan.base ~= id then use[id] = sel[id] end
+        end
+    end
+    local biplanarGate
+    if plan.biplanar then
+        biplanarGate = MaskGen.Evaluate(c, { rules = { Rule('slope', { lo = 24, hi = 90, soft = 12 }) } })
+        for id, list in groups do
+            if use[id] and biplanarGate then
+                for _, l in list do
+                    if l == 3 or l == 4 then use[id] = S:Op('mul', { a = use[id], b = biplanarGate }) break end
+                end
+            end
+        end
+    end
+    -- a kind that has a layer but no selection is not painted: its layer is cleared (what an earlier run left there would cover the others)
+    for _, r in roles do
+        if plan.byRole[r.id] and plan.base ~= r.id and not use[r.id] then r.off = true end
+    end
+    local target = Resolve(S, c, plan, use, groups, k, st)
+    local summary, cells = WriteTargets(S, c, plan, roles, target, groups, { label = o.label or 'ground kinds', types = o.types })
+    if not summary then return summary, cells end
+    local okProfile, prof = pcall(function() return Strata.Profile() end)
+    if o.roughness ~= false and okProfile and prof and prof.l8 == 'rough' then
+        local MT = import('/lua/editor/maptextures.lua')
+        local entry, n = MT.GenerateRoughness({ amount = o.amount or 0.6 })
+        if entry then cells = cells + (n or 0) end
+    end
+    if History.Depth() - depthBefore >= 2 then History.Merge(History.Depth() - depthBefore, 'ground kinds') end
+    return summary, cells
+end
+
 function Apply()
     local depthBefore = History.Depth()
     local summary, cells = ApplyPaint()

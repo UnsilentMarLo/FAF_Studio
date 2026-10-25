@@ -995,6 +995,10 @@ import('/lua/editor/graphnodes_t7.lua').Install({ Def = Def, N = N, C = C, B = B
 import('/lua/editor/graphnodes_map.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
 -- the map layout drawn in the Layout workspace: its heights, the mask of a layer, the bases (graphnodes_layout.lua)
 import('/lua/editor/graphnodes_layout.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
+-- texturing by the shader of the map: the terrain shader as numbers, the ground kinds, their roughness and the one output that paints them all (graphnodes_kinds.lua)
+import('/lua/editor/graphnodes_kinds.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
+-- nodes that shape the land into open ground with crisp features (graphnodes_land.lua)
+import('/lua/editor/graphnodes_land.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
 
 --- Parses `key=value,key=value` (a number, a word, or a list x:y;x:y) into op parameters: the text format of the golden cases.
 function ParseArgs(text)

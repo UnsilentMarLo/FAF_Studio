@@ -25,7 +25,7 @@ local World = import('/lua/editor/world.lua')
 
 -- A graph that reads the terrain and writes it back must not read its own result the second time: the heights are kept as they were when the graph first looked at them, and are taken
 -- again only when the terrain is neither that nor the result of the graph (the user edited it).
-Base = { field = false, sum = false, shownSum = false, builtSum = false }
+Base = { field = false, sum = false, shownSum = false, builtSum = false, owner = false }
 
 local function Clock()
     if rawget(_G, 'ed_field_clock') then return ed_field_clock() end
@@ -43,18 +43,21 @@ end
 function EnsureBase()
     local f = Fields.Height(1)
     local sum = Fields.Checksum(f)
-    if Base.field and (sum == Base.sum or sum == Base.shownSum or sum == Base.builtSum) then
+    -- the ground a graph made (its Build, its preview) counts as "ours" only for THAT graph: a second Build of the same graph starts from the same ground, but another graph (a new one,
+    -- a preset loaded, the texture pass after the terrain graph) must see the ground as it is now, or its "Map heights" node kept showing the ground from before the first graph
+    local ours = Base.owner == Graph.Current
+    if Base.field and (sum == Base.sum or (ours and (sum == Base.shownSum or sum == Base.builtSum))) then
         Fields.Free(f)
         return Base.field
     end
     if Base.field then Fields.Free(Base.field) end
-    Base.field, Base.sum, Base.shownSum, Base.builtSum = f, sum, false, false
+    Base.field, Base.sum, Base.shownSum, Base.builtSum, Base.owner = f, sum, false, false, Graph.Current
     return f
 end
 
 function ForgetBase()
     if Base.field then Fields.Free(Base.field) end
-    Base.field, Base.sum, Base.shownSum, Base.builtSum = false, false, false, false
+    Base.field, Base.sum, Base.shownSum, Base.builtSum, Base.owner = false, false, false, false, false
 end
 
 local function WaterLevel()
@@ -659,6 +662,7 @@ function ShowOnTerrain()
             shown = { depth = Terrain.UndoDepth() }
             local now = Fields.Height(1)
             Base.shownSum = Fields.Checksum(now)
+            Base.owner = Graph.Current
             Fields.Free(now)
         end
         mainHeights = TerrainEpoch.Stamp()       -- our own write (the preview): not a reason to evaluate again, or the preview would be written again and again
@@ -974,6 +978,25 @@ function Build()
                 end
             end
         end
+        -- all ground kinds at once (Output: ground kinds): the priority cascade, the layers of the shader, terrain types and roughness (recipes.lua WriteKinds)
+        for _, node in OutputNodes(graph, 'kinds') do
+            local sel, any = {}, false
+            for _, id in import('/lua/editor/recipes.lua').Order do
+                local m = run:Value(node.id, 'seen_' .. id)
+                if m then sel[id] = m any = true end
+            end
+            if any then
+                local Recipes = import('/lua/editor/recipes.lua')
+                local summary, cellsOrWhy = Recipes.WriteKinds(S, c, sel, { label = 'terrain graph', types = V(run, node, 'types'), roughness = V(run, node, 'roughness'), amount = V(run, node, 'amount') })
+                if summary then
+                    result.layers = result.layers + 1
+                    result.kinds = summary
+                else
+                    result.warnings = result.warnings or {}
+                    table.insert(result.warnings, { text = 'Output: ground kinds not written: ' .. tostring(cellsOrWhy) .. '.', code = 'kinds', node = node.id })
+                end
+            end
+        end
         -- terrain types
         if rawget(_G, 'ed_tt_info') and ed_tt_info() then
             for _, node in OutputNodes(graph, 'types') do
@@ -1026,6 +1049,7 @@ function Build()
     if Base.field then
         local now = Fields.Height(1)
         Base.builtSum = Fields.Checksum(now)
+        Base.owner = Graph.Current
         Fields.Free(now)
     end
     result.slow = Summary(run)

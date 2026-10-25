@@ -66,17 +66,25 @@ def main():
     first = True
     for case in a.cases.split(','):
         terrain, theme, recipe = (case.split(':') + ['', '', ''])[:3]
+        graph_ids = []
+        if terrain.startswith('g='):                       # g=id[+id2...]: premade terrain graphs of the Generate workspace, built one after the other
+            graph_ids = terrain[2:].split('+')
+            terrain = '-'
         t = "nil" if terrain in ('-', '') else "'%s'" % terrain
         keepmap = terrain in ('-', '') and theme in ('-', '') and recipe in ('0', '')
         lua = "LAB = { terrain = %s, theme = %s, recipe = %s, seed = %d, water = %s, amp = %s, sel = true }\n" % (
             t, ('nil' if theme in ('-', '') else "'%s'" % theme), ('nil' if recipe in ('0', '-', '') else recipe), a.seed,
             ('nil' if keepmap else ('false' if a.no_water else 'true')), (str(a.amp) if a.amp else 'nil'))
+        if graph_ids:
+            lua += "LAB.graph = '%s'\nLAB.graphs = { %s }\n" % (graph_ids[0], ', '.join("'%s'" % i for i in graph_ids))
         if a.post:
             lua += 'LAB.post = [[%s]]\n' % a.post
         if a.shader:
             lua += "LAB.shader = '%s'\n" % a.shader
         lua += open(os.path.join(HERE, '..', 'editor', 'textlab', 'lab_scene.lua'), encoding='utf-8').read()
         name = '%s_%s_%s' % (terrain.replace('-', 'keep'), theme.replace('-', 'keep'), recipe) if not a.name else a.name
+        if graph_ids:
+            name = 'g_' + '_'.join(graph_ids) + ('' if a.name else '_%s_%s' % (theme.replace('-', 'keep'), recipe))
         report = run(a.tag, lua)
         with open(os.path.join(a.out, name + '.txt'), 'w') as f:
             f.write(report)

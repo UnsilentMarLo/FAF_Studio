@@ -61,6 +61,9 @@ Types = {
     curvature = { label = 'Curvature', kind = 'source', params = {
         P('radius', 'Radius (units)', 1, 60, 1, '%d', 6), P('gain', 'Gain', 1, 300, 1, '%d', 25), P('lo', 'From (0.5 = flat)', 0, 1, 0.01, '%.2f', 0.56),
         P('hi', 'To (1 = sharpest ridge)', 0, 1, 0.01, '%.2f', 1), P('soft', 'Soft edge', 0, 0.5, 0.01, '%.2f', 0.04) } },
+    relief = { label = 'Relief (height above the surroundings)', kind = 'source', params = {
+        P('radius', 'Surroundings: blur radius (units)', 8, 300, 2, '%d', 60), P('lo', 'From (units above the surroundings)', -60, 60, 0.25, '%.2f', 0.5),
+        P('hi', 'To (units above the surroundings)', -60, 100, 0.25, '%.2f', 100), P('soft', 'Soft edge (units)', 0, 30, 0.25, '%.2f', 1.5) } },
     aspect = { label = 'Aspect (facing)', kind = 'source', params = {
         P('azimuth', 'Facing direction (degrees, 0 = +x, 90 = +z)', 0, 360, 5, '%d', 225), P('from', 'Facing from (0.5 = across, 1 = straight at it)', 0, 1, 0.01, '%.2f', 0.6),
         P('soft', 'Soft edge', 0, 1, 0.01, '%.2f', 0.15), P('flat', 'Level below this rise per run', 0.005, 1, 0.005, '%.3f', 0.05) } },
@@ -99,7 +102,7 @@ Types = {
         P('amount', 'How much the paint varies (0..1)', 0, 1, 0.05, '%.2f', 0.3), P('size', 'Grain size (units)', 2, 60, 1, '%d', 7), P('seed', 'Seed', 0, 9999, 1, '%d', 1) } },
 }
 
-Order = { 'slope', 'unitclass', 'height', 'curvature', 'aspect', 'water', 'shoredist', 'noise', 'flow', 'position', 'layer', 'free_above', 'near_layer', 'const', 'named',
+Order = { 'slope', 'unitclass', 'height', 'curvature', 'relief', 'aspect', 'water', 'shoredist', 'noise', 'flow', 'position', 'layer', 'free_above', 'near_layer', 'const', 'named',
           'not', 'blur', 'grow', 'shrink', 'open', 'close', 'threshold', 'smoothstep', 'amount', 'crisp', 'grain' }
 
 --- A rule of `type` with the default values.
@@ -225,6 +228,13 @@ function SOURCE.curvature(c, v)
     local n = Samples(c, v.radius)
     local curv = Cached(c, 'curv' .. n .. '_' .. v.gain, function() return Op(c, 'curvature', { a = c.H, radius = n, gain = v.gain }) end)
     return Op(c, 'height_band', { a = curv, lo = v.lo, hi = v.hi, soft = v.soft })
+end
+
+--- How far the ground stands above (or below) the average of its surroundings: the ridges and hills of a valley are positive, its floor negative, flat ground is about 0 whatever its altitude.
+function SOURCE.relief(c, v)
+    local n = Samples(c, v.radius)
+    local rel = Cached(c, 'relief' .. n, function() return Op(c, 'sub', { a = c.H, b = Op(c, 'blur', { a = c.H, radius = n }) }) end)
+    return Op(c, 'height_band', { a = rel, lo = v.lo, hi = v.hi, soft = v.soft })
 end
 
 function SOURCE.aspect(c, v)
