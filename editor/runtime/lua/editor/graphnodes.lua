@@ -997,6 +997,8 @@ import('/lua/editor/graphnodes_map.lua').Install({ Def = Def, N = N, C = C, B = 
 import('/lua/editor/graphnodes_layout.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
 -- texturing by the shader of the map: the terrain shader as numbers, the ground kinds, their roughness and the one output that paints them all (graphnodes_kinds.lua)
 import('/lua/editor/graphnodes_kinds.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
+-- terrain and masks from other tools through the Interop panel (graphnodes_ext.lua)
+import('/lua/editor/graphnodes_ext.lua').Install({ Def = Def, N = N, B = B, T = T, In = In, Out = Out }, Covers)
 -- nodes that shape the land into open ground with crisp features (graphnodes_land.lua)
 import('/lua/editor/graphnodes_land.lua').Install({ Def = Def, N = N, C = C, B = B, In = In, Out = Out }, Covers)
 

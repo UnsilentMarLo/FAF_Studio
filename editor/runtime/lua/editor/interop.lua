@@ -10,7 +10,13 @@
 --   ApplyHeights(st[, opts]) -> { changed, entry, result } | nil, message       writes the heights: ONE undo step
 --   ApplyMasks(ms)           -> { cells, parts } | nil, message               writes every item of the mask set: ONE undo step
 --   Named / NamedField(S, slot, like)    imported masks kept for the mask generator (rule 'Imported mask')
---   Link                     the live link: Poll() applies a changed file with the saved settings as one undo step, Revert() takes it back
+--   Link                     the live link: Poll() applies a changed file with the saved settings as one undo step, Revert() takes it back; a new file in a watched folder is adopted by its name
+--                            (heightmap, a mask of a ground kind, flow / wear / deposit); SendAndWatch() exports and starts watching the export folder
+--   Suggest() / SuggestMax(st, which)   what the maps of the user's Maps folder look like at this map size (relief, slope): the "typical height" of an import; the preview compares the import with it
+--   GuessMask(path) / GuessItem(item)   what a mask file is for, from its name (flow, wear, deposit -> named masks for the ground kinds; grass, rock ... -> the layer of that kind of ground)
+--   MappedImage(S, st, like)            the image on the grid of `like` as heights (graph node External terrain); NamedFieldByName(S, name, like) (graph node External mask)
+--   GraphSignature([now])               what the External nodes of the graph read (settings, file stamps): the graph runner re-evaluates when it changes and stays still for a second
+--   Settings.symmetry / MaskSet.symmetry   gensym.lua setting for what the import writes ('off' by default: a Gaea terrain is not symmetric, a symmetric import copies one part over the rest)
 --   SidecarText() / LoadSidecar(file) / Reset()      settings travel with the map
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
@@ -18,6 +24,7 @@
 local Fields = import('/lua/editor/fields.lua')
 local History = import('/lua/editor/history.lua')
 local Ser = import('/lua/editor/luaser.lua')
+local GenSym = import('/lua/editor/gensym.lua')
 
 EXTS = 'png;tif;tiff;raw;r16;r32;bmp;jpg;jpeg'
 FILTER = 'Heightmaps and masks (*.png;*.tif;*.tiff;*.raw;*.r16;*.r32)|*.png;*.tif;*.tiff;*.raw;*.r16;*.r32;*.bmp;*.jpg|All files|*.*'
@@ -53,6 +60,7 @@ function DefaultSettings()
         flipX = false, flipZ = false, rot = 0, invert = false,
         region = 'map', rect = { 0, 0, 0, 0 },
         blend = 'replace', strength = 1, feather = 0, maskFile = '',
+        symmetry = 'off',             -- gensym.lua: 'off' | 'map' (the editor's symmetry) | a mode: the import is made symmetric (one part copied over the rest)
         pads = 'off', padRadius = 8,  -- 'off' | 'keep' (the terrain at start positions / mass points stays) | 'flatten' (the new terrain is levelled there)
     }
 end
@@ -65,6 +73,7 @@ function DefaultMaskSet()
         mode = 1, strength = 1, takeAway = true,
         sync = true,                  -- orientation, alignment and filter follow the heightmap settings
         flipX = false, flipZ = false, rot = 0, align = 'auto', filter = 'bilinear',
+        symmetry = 'off',
     }
 end
 
@@ -244,6 +253,8 @@ function BuildHeights(S, st)
     local cur = S:Height(1)
     local fitted = S:Op('img_resample', { a = oriented, like = cur, x0 = x0, z0 = z0, x1 = x1, z1 = z1, align = align, filter = st.filter or 'bicubic', outside = 0 })
     local mapped = S:Op('affine', { a = fitted, mul = k, add = c })
+    local spec = GenSym.Spec(st.symmetry or 'off')
+    if spec then mapped = GenSym.Field(S, mapped, spec, { seam = 12 }) end
 
     -- the blend weight: the region (feathered at the borders that are not the map's border), the strength, an optional mask image, the pads
     local m = S:Op('rect_mask', { like = cur, x0 = x0, z0 = z0, x1 = x1, z1 = z1, feather = st.feather or 0,
@@ -257,6 +268,7 @@ function BuildHeights(S, st)
         local mr = S:Op('img_resample', { a = mo, like = cur, x0 = x0, z0 = z0, x1 = x1, z1 = z1, align = AlignFor(st, mw2, mh2, x0, z0, x1, z1), filter = 'bilinear', outside = 0 })
         m = S:Op('mul', { a = m, b = S:Op('clamp', { a = mr, lo = 0, hi = 1 }) })
     end
+    if spec then m = GenSym.Field(S, m, spec, { seam = 12 }) end
     if (st.strength or 1) < 0.9999 then m = S:Op('affine', { a = m, mul = st.strength, add = 0 }) end
     local padPts, padCount = {}, 0
     if st.pads ~= 'off' then
@@ -298,6 +310,7 @@ function BuildHeights(S, st)
     if info.bits == 8 and info.float ~= 1 then
         table.insert(warnings, '8-bit image: only 256 height levels, the slopes will be terraced (export 16 bit)')
     end
+    local advice, relief, meanSlope = Advice(S, region, rLo, rHi, warnings)
     if info.nodata and info.nodata > 0 then
         table.insert(warnings, info.nodata .. ' samples without data were set to the lowest value')
     end
@@ -307,7 +320,7 @@ function BuildHeights(S, st)
         table.insert(warnings, string.format('%dx%d image fitted corner to corner onto %dx%d samples', iw, ih, x1 - x0 + 1, z1 - z0 + 1))
     end
     return { final = final, imported = mapped, region = { x0, z0, x1, z1 }, regionField = region, info = info, srcLo = srcLo, srcHi = srcHi, hLo = rLo, hHi = rHi,
-             align = align, imageW = iw, imageH = ih, warnings = warnings, pads = padCount }
+             align = align, imageW = iw, imageH = ih, warnings = warnings, pads = padCount, advice = advice, relief = relief, meanSlope = meanSlope }
 end
 
 --- The thumbnail of what the import brings (the mapped image over the region) and its numbers. Returns a table { path, lo, hi, report } or nil, message.
@@ -317,7 +330,7 @@ function PreviewHeights(st, size)
         if not r then return nil, err end
         local path, lo, hi = Fields.Preview(r.regionField, size or 128, { ramp = 'terrain' })
         return { path = path, lo = lo, hi = hi, hLo = r.hLo, hHi = r.hHi, align = r.align, info = r.info, warnings = r.warnings, imageW = r.imageW, imageH = r.imageH,
-                 region = r.region, srcLo = r.srcLo, srcHi = r.srcHi, pads = r.pads }
+                 region = r.region, srcLo = r.srcLo, srcHi = r.srcHi, pads = r.pads, advice = r.advice, relief = r.relief, meanSlope = r.meanSlope }
     end)
 end
 
@@ -384,7 +397,8 @@ function ApplyMasks(ms)
     end
     if table.getn(typeItems) > 0 and not (rawget(_G, 'ed_tt_info') and ed_tt_info()) then return nil, 'the map has no terrain type grid' end
     local out, err = Fields.Run(function(S)
-        local c = MaskGen.NewContext(S, { step = 1 })
+        -- the writers make the masks symmetric when the mask set says so (not the editor's symmetry by default: imported masks are written as they are)
+        local c = MaskGen.NewContext(S, { step = 1, symmetry = GenSym.Spec(ms.symmetry or 'off') })
         local parts, cells, nLayers, nTypes, nNamed = {}, 0, 0, 0, 0
         for _, item in layerItems do
             local m, why = MaskField(S, item, ms)
@@ -476,6 +490,185 @@ function NamedField(S, slot, like)
     return S:Op('resample', { a = e.field, like = like })
 end
 
+-- ---- what the maps of the user's folder look like ----------------------------------------------------------------------------------------------------
+
+--- The numbers of the maps of this size in the user's Maps folder (mapsets.lua Stats, made by scripts/map_texture_presets.py): { n, relief, span, slope, steep } (each a list of the
+--- 5 / 25 / 50 / 75 / 95 percentile over the maps), the size they are for (0 = all maps) and the map's own size. nil when there are none.
+function Suggest()
+    local ok, M = pcall(import, '/lua/editor/mapsets.lua')
+    if not ok or not M or not M.Stats then return nil end
+    local w = ed_terrain_info()
+    local size = w and (w - 1) or 512
+    local best, bestKey, bestDist = nil, 0, 1e9
+    for key, st in M.Stats do
+        if key > 0 and st.n >= 8 and key <= 1024 then
+            local d = math.abs(math.log(size / key))
+            if d < bestDist then best, bestKey, bestDist = st, key, d end
+        end
+    end
+    if not best or bestDist > 0.75 then best, bestKey = M.Stats[0], 0 end
+    return best, bestKey, size
+end
+
+--- The "Image 1 = height" that gives the import the relief of the median map (which = 3), the lower quartile (2) or the upper quartile (4) of the maps of this size: the image's own span of
+--- values (or the whole 0..1 with "stretch") times the height range is the relief. nil when there is no image or no numbers.
+function SuggestMax(st, which)
+    local sug = Suggest()
+    if not sug or st.file == '' then return nil end
+    local src = LoadSource(st.file, st)
+    if not src then return nil end
+    local lo, hi = Fields.Stats(src)
+    local span = st.stretch and 1 or (hi - lo)
+    if span < 0.05 then span = 1 end
+    local relief = sug.relief[which or 3]
+    return st.min + relief / span, relief
+end
+
+--- Compares what is imported with the maps of this size and adds warnings: returns a line of text, the relief and the mean slope of the import.
+function Advice(S, field, lo, hi, warnings)
+    local sug, key = Suggest()
+    local relief = hi - lo
+    local slopeField = S:Op('slope', { a = field, mode = 'degrees', radius = 1 })
+    local _, _, meanSlope = Fields.Stats(slopeField)
+    if not sug then return nil, relief, meanSlope end
+    local where = key == 0 and 'maps' or (key .. ' maps')
+    local text = string.format('relief %.0f units, mean slope %.1f deg; %d %s of yours: relief %.0f (%.0f to %.0f), slope %.1f deg (%.1f to %.1f)', relief, meanSlope, sug.n, where,
+        sug.relief[3], sug.relief[2], sug.relief[4], sug.slope[3], sug.slope[2], sug.slope[4])
+    if relief > sug.relief[5] then
+        table.insert(warnings, string.format('the relief of %.0f units is more than that of 95 percent of your maps (%.0f): lower "Image 1 = height"', relief, sug.relief[5]))
+    end
+    if meanSlope > sug.slope[5] then
+        table.insert(warnings, string.format('mean slope %.1f deg is steeper than 95 percent of your maps (%.1f deg): units struggle on ground like this, lower the height', meanSlope, sug.slope[5]))
+    elseif relief > 4 and meanSlope < sug.slope[1] * 0.5 then
+        table.insert(warnings, string.format('mean slope %.1f deg is flatter than nearly all of your maps (%.1f deg and up)', meanSlope, sug.slope[1]))
+    end
+    if relief < sug.relief[1] * 0.5 and relief < 10 then
+        table.insert(warnings, string.format('the relief of %.0f units is very low (the flattest of your maps has %.0f): raise "Image 1 = height"', relief, sug.relief[1]))
+    end
+    return text, relief, meanSlope
+end
+
+-- ---- what a file is for, from its name --------------------------------------------------------------------------------------------------------------
+
+-- the masks of an erosion (Gaea: Flow, Wear, Deposits; World Machine: flow, wear, deposition) feed the Ground kinds node; first match wins
+EROSION_WORDS = {
+    { 'deposit', { 'deposit', 'sediment', 'silt', 'alluvi' } },
+    { 'wear', { 'wear', 'erosion', 'erode', 'abrasion', 'scour' } },
+    { 'flow', { 'flow', 'flux', 'drain', 'stream', 'river' } },
+}
+
+local function Stem(path)
+    local name = string.lower(string.gsub(path or '', '^.*[/\\]', ''))
+    return (string.gsub(name, '%.[%w]+$', ''))
+end
+
+--- 'deposit' | 'wear' | 'flow' for an erosion mask, and the kind of ground (grass, rock, sand ...) a splat mask names; either may be nil.
+function GuessMask(path)
+    local stem = Stem(path)
+    for _, e in EROSION_WORDS do
+        for _, w in e[2] do
+            if string.find(stem, w, 1, true) then return e[1], nil end
+        end
+    end
+    local role = nil
+    local ok, Detect = pcall(import, '/lua/editor/roledetect.lua')
+    if ok and Detect then
+        local r, conf = Detect.ClassifyName('/x/' .. stem .. '_albedo.dds')
+        if r and (conf or 0) >= 0.5 then role = r end
+    end
+    return nil, role
+end
+
+--- Sets the target of a mask item from its file name; returns a text, or nil when the name says nothing.
+function GuessItem(item)
+    local kind, role = GuessMask(item.file)
+    if kind then
+        item.target, item.name = 'named', kind
+        return "'" .. kind .. "' mask: kept as a named mask, the External mask node feeds it to the Ground kinds"
+    end
+    if role then
+        local okT, TS = pcall(import, '/lua/editor/texsets.lua')
+        local layer = okT and TS.RoleLayer(role) or nil
+        if layer then
+            item.target, item.layer = 'layer', layer
+            return role .. ' ground: layer ' .. layer .. ' of this shader'
+        end
+    end
+    return nil
+end
+
+--- The slot of the named mask `name`.
+function NamedSlot(name)
+    for i, n in Named do
+        if n.name == name then return i end
+    end
+    return nil
+end
+
+--- The named mask called `name` on the grid of `like` (0..1, owned by S), nil when there is none.
+function NamedFieldByName(S, name, like)
+    local slot = NamedSlot(name)
+    if not slot then return nil, 'no imported mask named "' .. tostring(name) .. '" (Interop panel, Masks page: target "named mask")' end
+    return NamedField(S, slot, like)
+end
+
+-- ---- the image as heights for a graph ----------------------------------------------------------------------------------------------------------------
+
+--- The image of settings `st` as heights on the grid of `like` (any resolution: the graph preview is coarser than the build): a field owned by S, and the image info. The pixel alignment is
+--- decided on the whole map, so the preview and the build agree. Region, blend and pads are not used (the graph does that).
+function MappedImage(S, st, like)
+    if not Available() then return nil, 'the field engine or the image natives are missing' end
+    local src, info = LoadSource(st.file, st)
+    if not src then return nil, info end
+    local srcLo, srcHi = Fields.Stats(src)
+    local water = import('/lua/editor/world.lua').Get().water_elev or 0
+    local k, c = Mapping(st, info, srcLo, srcHi, water)
+    local oriented = Oriented(S, src, st)
+    local iw, ih = Fields.Info(oriented)
+    local mw, mh = ed_terrain_info()
+    local w, h = Fields.Info(like)
+    local align = AlignFor(st, iw, ih, 0, 0, mw - 1, mh - 1)
+    local fitted = S:Op('img_resample', { a = oriented, like = like, x0 = 0, z0 = 0, x1 = w - 1, z1 = h - 1, align = align, filter = st.filter or 'bilinear', outside = 0 })
+    return S:Op('affine', { a = fitted, mul = k, add = c }), info
+end
+
+-- what the External nodes of the graph read, as one string: the import settings, the files and when they were written, the named masks
+local GraphSig = { pending = '', since = 0, settled = '' }
+
+local function GraphUsesExternal()
+    local ok, G = pcall(import, '/lua/editor/graph.lua')
+    if not ok or not G or not G.Current then return false end
+    for _, n in G.Current.nodes do
+        if (n.type == 'external_terrain' or n.type == 'external_mask') and not n.off then return true end
+    end
+    return false
+end
+
+local function SettingsSignature()
+    local s = Settings
+    local parts = { s.file, Stamp(s.file or ''), s.channel, s.mode, tostring(s.min), tostring(s.max), tostring(s.stretch), tostring(s.anchor), tostring(s.sea), s.align, s.filter, tostring(s.flipX),
+                    tostring(s.flipZ), tostring(s.rot), tostring(s.invert), tostring(s.rawBits), tostring(s.rawFloat), tostring(s.rawBig), tostring(s.rawWidth), tostring(s.rawHeight) }
+    for _, n in Named do
+        table.insert(parts, n.name .. '=' .. n.file .. '@' .. Stamp(n.file) .. n.channel .. tostring(n.invert))
+    end
+    return table.concat(parts, '|')
+end
+
+--- `now` true: the signature as it is now (the cache key of a node). Otherwise the signature that has stayed the same for a second ('' when the graph has no External node): the live graph
+--- re-evaluates when it changes, not while the other tool is still writing the file.
+function GraphSignature(now)
+    if not GraphUsesExternal() then return '' end
+    local sig = SettingsSignature()
+    if now then return sig end
+    local t = ed_field_clock and ed_field_clock() or 0
+    if sig ~= GraphSig.pending then
+        GraphSig.pending, GraphSig.since = sig, t
+    elseif t - GraphSig.since >= 1.0 then
+        GraphSig.settled = sig
+    end
+    return GraphSig.settled
+end
+
 -- ---- the live link -----------------------------------------------------------------------------------------------------------------------------------
 
 Link = {
@@ -498,6 +691,19 @@ local function Basename(path)
     return string.lower(name)
 end
 
+--- Is this file one our own export wrote (<name>_height.png, _water, _slope, _flow, _wear, _deposit, _layerN, _terraintypes, _starts, _resources, _playable, _markers)? The link does not take those back in.
+function IsOwnExport(path)
+    local Export = import('/lua/editor/interopexport.lua')
+    local name = string.lower(Export.Stem())
+    local stem = Stem(path)
+    if string.sub(stem, 1, string.len(name) + 1) ~= name .. '_' then return false end
+    local rest = string.sub(stem, string.len(name) + 2)
+    for _, w in { 'height', 'water', 'slope', 'flow', 'wear', 'deposit', 'layer', 'terraintypes', 'starts', 'resources', 'playable', 'markers', 'readme' } do
+        if string.sub(rest, 1, string.len(w)) == w then return true end
+    end
+    return false
+end
+
 --- The files the link looks at and what each one means: { path = ..., kind = 'heights' | 'masks' | 'new' }.
 local function Watched()
     local list = {}
@@ -510,7 +716,9 @@ local function Watched()
             for name, stamp in stamps do
                 local kind = 'new'
                 if string.lower(name) == hb then kind = 'heights' elseif masks[string.lower(name)] then kind = 'masks' end
-                list[Link.folder .. '/' .. name] = { stamp = stamp, kind = kind }
+                if kind ~= 'new' or not IsOwnExport(name) then
+                    list[Link.folder .. '/' .. name] = { stamp = stamp, kind = kind }
+                end
             end
         end
     else
@@ -536,6 +744,20 @@ function LinkStop()
     LinkLog('stopped')
 end
 
+--- Exports the map into the export folder (Export page) and watches that folder: the other tool reads the files, and what it writes there next (a heightmap, flow / wear / deposit masks,
+--- splat masks) comes back by itself. Returns the export report, or nil and a message.
+function SendAndWatch()
+    local Export = import('/lua/editor/interopexport.lua')
+    local ex = Export.Settings
+    if ex.dir == '' then return nil, 'choose the export folder first (Export page)' end
+    local out, err = Export.Export(ex)
+    if not out then return nil, err end
+    Link.mode, Link.folder = 'folder', ex.dir
+    Link.apply.heights, Link.apply.masks = true, true
+    LinkStart()
+    return out
+end
+
 --- Takes back the last live import when it is still the latest undo step.
 function LinkRevert()
     if Link.entry and History.Top() == Link.entry then
@@ -545,6 +767,32 @@ function LinkRevert()
         return true
     end
     LinkLog('cannot revert: other edits came after the last live import (use Undo)')
+    return false
+end
+
+--- A file that is new in the watched folder: a mask by its name (flow / wear / deposit, a ground kind) joins the mask list, the first other file is the heightmap (with the typical height of the
+--- maps of this size, so it does not come in as a mountain). Returns 'heights', 'masks' or false.
+local function Adopt(path)
+    local base = Basename(path)
+    local kind, role = GuessMask(path)
+    if kind or role then
+        for _, it in MaskSet.items do
+            if Basename(it.file) == base then return false end
+        end
+        local item = NewItem(path)
+        local text = GuessItem(item) or 'a texture layer'
+        table.insert(MaskSet.items, item)
+        LinkLog('new mask ' .. base .. ' added: ' .. text)
+        return 'masks'
+    end
+    if Settings.file == '' or IsOwnExport(Settings.file) then
+        Settings.file = path
+        local typical = SuggestMax(Settings, 3)
+        if typical and Settings.mode == 'normalised' then Settings.max = math.floor(typical * 2 + 0.5) / 2 end
+        LinkLog('new heightmap ' .. base .. ' taken as the heightmap' .. (typical and string.format(' (image 1 = %.1f units: the relief of the median map of your folder)', Settings.max) or ''))
+        return 'heights'
+    end
+    LinkLog('new file ' .. base .. ' (not part of the import: add it to the mask list)')
     return false
 end
 
@@ -584,7 +832,11 @@ function LinkPoll()
                 Link.pending[path] = nil
                 if w.kind == 'heights' and Link.apply.heights then heights = true
                 elseif w.kind == 'masks' and Link.apply.masks then masks = true
-                elseif w.kind == 'new' then LinkLog('new file ' .. Basename(path) .. ' (not part of the import: add it to the mask list)') end
+                elseif w.kind == 'new' then
+                    local what = Adopt(path)
+                    if what == 'heights' and Link.apply.heights then heights = true
+                    elseif what == 'masks' and Link.apply.masks then masks = true end
+                end
             else
                 Link.pending[path] = w.stamp
             end

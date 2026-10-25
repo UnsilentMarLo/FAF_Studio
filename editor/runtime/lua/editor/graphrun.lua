@@ -541,6 +541,7 @@ end
 Main = false
 local mainRevision = -1
 local mainDoc = -1
+local mainExt = ''            -- interop.lua GraphSignature() when the live run last looked (the External nodes read files)
 local mainHeights = ''        -- TerrainEpoch.Stamp() when the live run last looked at the map heights (or when this module itself last wrote them)
 Report = false
 
@@ -575,6 +576,12 @@ function Refresh(force)
     -- records no entry (a generator commit that merged into an open stroke or hit the stack limit, a tool, an import, undo of a preview) left the "Map heights" node on the old ground.
     -- A graph without that node does not care; a stroke being dragged waits for its end.
     local heights = TerrainEpoch.Stamp()
+    -- the External terrain / External mask nodes read files: when the other tool wrote a new one (and stopped writing) or the import settings changed, evaluate again
+    local okExt, ext = pcall(function() return import('/lua/editor/interop.lua').GraphSignature() end)
+    if okExt and ext ~= mainExt then
+        mainExt = ext
+        mainRevision = -1
+    end
     if not force and mainRevision == Graph.DataRevision and mainDoc == doc then
         if mainHeights == heights or not ReadsTerrain() or Stroking() then return nil end
     end

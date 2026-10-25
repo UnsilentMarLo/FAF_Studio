@@ -420,7 +420,7 @@ function Run(verbose)
     local srcNum = Graph.Add('number', 0, 0)
     local srcColor = Graph.Add('color_ramp', 0, 0)                      -- the source of the `color` ports (stage T7)
     Graph.Connect(srcR.id, 'out', srcColor.id, 'a')
-    local expectError = { image = true, path_drawn = true, out_scatter = false }
+    local expectError = { image = true, path_drawn = true, out_scatter = false, external_terrain = true }       -- (no file chosen)
     local nodeErrors = {}
     local tested = 0
     for id, def in Nodes.Defs do
@@ -720,6 +720,18 @@ function Run(verbose)
     -- ---- the sample graphs -------------------------------------------------------------------------------------------------------------------
     local presets = Graph.Presets()
     check('there is a dozen sample graphs', table.getn(presets) >= 12, table.getn(presets))
+    -- the graph that starts from the Interop panel's heightmap needs one: a gradient image for the length of the loop
+    local Interop = import('/lua/editor/interop.lua')
+    local keep = { file = Interop.Settings.file, min = Interop.Settings.min, max = Interop.Settings.max, align = Interop.Settings.align }
+    do
+        local gf = Fields.Op('gradient', { width = w, height = h, angle = 0, lo = 0, hi = 1 })
+        local wrote = ed_img_write('../interoptmp/graph_sample.tif', gf, { bits = 32 })
+        Fields.Free(gf)
+        if wrote then
+            local st = Interop.Settings
+            st.file, st.min, st.max, st.align = '../interoptmp/graph_sample.tif', 0, 40, 'corner'
+        end
+    end
     for _, p in presets do
         local ok, err = Graph.LoadPreset(p.id)
         if not ok then
@@ -778,6 +790,8 @@ function Run(verbose)
         History.Undo()
     end
 
+    for k, v in keep do Interop.Settings[k] = v end
+    Interop.FreeCache()
     -- ---- clean up -------------------------------------------------------------------------------------------------------------------------------
     GRun.Release()
     Graph.New('untitled')

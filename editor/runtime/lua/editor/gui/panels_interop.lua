@@ -17,10 +17,10 @@ local Export = import('/lua/editor/interopexport.lua')
 
 live = {}
 
-PAGES = { { 'heightmap', 'Heightmap' }, { 'masks', 'Masks' }, { 'export', 'Export' }, { 'link', 'Live link' } }
+PAGES = { { 'setup', 'Gaea / WM' }, { 'heightmap', 'Heightmap' }, { 'masks', 'Masks' }, { 'export', 'Export' }, { 'link', 'Live link' } }
 
 --- Module level (the controls come and go).
-state = { page = 'heightmap', status = '', dirty = true, preview = false, previewAt = 0, previewText = '', linkSeen = -1, rebuild = false }
+state = { page = 'setup', status = '', dirty = true, preview = false, previewAt = 0, previewText = '', linkSeen = -1, rebuild = false }
 
 local function Say(text)
     state.status = text
@@ -43,6 +43,18 @@ local function Basename(path)
     return string.gsub(path or '', '^.*[/\\]', '')
 end
 
+local GenSym = import('/lua/editor/gensym.lua')
+local function SymIds()
+    local ids = {}
+    for _, ch in GenSym.Choices_ do table.insert(ids, ch.id) end
+    return ids
+end
+local function SymNames()
+    local names = {}
+    for _, ch in GenSym.Choices_ do names[ch.id] = ch.label end
+    return names
+end
+
 local function IsRaw(path)
     local ext = string.lower(string.gsub(path or '', '^.*%.', ''))
     return ext == 'raw' or ext == 'r16' or ext == 'r32'
@@ -57,8 +69,12 @@ end
 
 function SetFile(path)
     local st = Interop.Settings
-    st.file = path
     local ext = string.lower(string.gsub(path, '^.*%.', ''))
+    if ext == 'exr' then
+        Say('EXR cannot be read (Windows has no EXR codec): export the Height as a 16-bit PNG or TIFF, or a 32-bit float TIFF')
+        return
+    end
+    st.file = path
     if ext == 'r32' then st.rawBits, st.rawFloat = 32, true elseif ext == 'r16' or ext == 'raw' then st.rawBits, st.rawFloat = 16, false end
     local text = ''
     local json = Export.JsonFor(path) and Export.ReadJson(Export.JsonFor(path))
@@ -182,6 +198,52 @@ Panels.Register{
 
         -- ---- pages ----------------------------------------------------------------------------------------------------------------------------------------
 
+        --- Gaea / World Machine: what to set in the other tool for this map, the typical height, and the send-and-watch loop.
+        local function PageSetup()
+            local ex = Export.Settings
+            local L = Interop.Link
+            local mw, mh = ed_terrain_info()
+            local n = mw - 1
+            local sug, key = Interop.Suggest()
+            Row('label', Lbl(string.format('This map: %d x %d units (%.1f km), %d x %d samples (1 sample = 1 unit).', n, mh - 1, n / 51.2, mw, mh), { color = c.text, size = 'small' }))
+            Row('label', Lbl(string.format('Gaea: build resolution %d (or %d). Export Height as 16-bit PNG / TIFF or 32-bit float TIFF; masks as greyscale PNG. No EXR.', mw, n)))
+            Row('label', Lbl(string.format('World Machine: build size %d x %d, terrain extents %d m wide, output .r16 / 16-bit PNG / 32-bit TIFF; masks as bitmaps.', mw, mh, n)))
+            if sug then
+                Row('label', Lbl(string.format('Height: your %d maps of this size have a relief of %.0f to %.0f units (median %.0f) and a mean slope of %.1f to %.1f deg (median %.1f). Gaea\'s default heights are',
+                    sug.n, sug.relief[2], sug.relief[4], sug.relief[3], sug.slope[2], sug.slope[4], sug.slope[3])))
+                Row('label', Lbl('Both tools let you choose the height of the terrain: aim for about the median relief, or set it with the buttons of the Heightmap page.'))
+            end
+            Row('label', Lbl('Name the files so the editor knows them: flow / river / stream, wear / erosion, deposit / sediment (named masks for the Ground kinds), or the kind of ground (grass, rock ...).'))
+            local fl, fe = Fld('Export folder (the other tool reads from it and writes its results into it)', ex.dir, function(text) ex.dir = text Later() end)
+            Row('field', fl, fe)
+            Row('buttons', {
+                Btn('Folder...', 70, function()
+                    local d = ed_folder_dialog and ed_folder_dialog('Folder for the other tool')
+                    if d then ex.dir = d Later() end
+                end),
+                Btn('Send and watch', 110, function()
+                    local out, err = Interop.SendAndWatch()
+                    Say(out and ('sent ' .. table.getn(out.files) .. ' files; watching ' .. ex.dir .. ' (a new heightmap or mask written there comes in by itself)') or ('cannot send: ' .. tostring(err)))
+                    Later()
+                end),
+                Btn(L.enabled and 'Stop watching' or 'Watch only', 100, function()
+                    if L.enabled then Interop.LinkStop() else
+                        L.mode, L.folder = 'folder', ex.dir
+                        if ex.dir == '' then Say('choose the folder first') else Interop.LinkStart() end
+                    end
+                    Later()
+                end),
+                Btn('Undo', 44, function() local l = History.Undo() Say(l and ('undid ' .. tostring(l)) or 'nothing to undo') end),
+            })
+            Row('label', Lbl('Send and watch: exports the map (heightmap, json, masks, start positions, README) and watches the folder. The first other file becomes the heightmap, mask files by their names.'))
+            Pn.linkLabels = {}
+            for i = 1, 6 do
+                local l = Lbl(L.log[i] or '', { color = i == 1 and c.text or c.textDim, size = 'small' })
+                Row('label', l)
+                table.insert(Pn.linkLabels, l)
+            end
+        end
+
         local function PageHeightmap()
             local st = Interop.Settings
             local mw, mh = ed_terrain_info()
@@ -214,6 +276,27 @@ Panels.Register{
                 end
             end
             Row('sliders', sl)
+            if st.mode == 'normalised' then
+                local sug = Interop.Suggest()
+                if sug and st.file ~= '' then
+                    Row('label', Lbl(string.format('Your maps of this size (%d): relief %.0f units (%.0f to %.0f), mean slope %.1f deg. Set Image 1 so the import has the relief of:', sug.n, sug.relief[3], sug.relief[2],
+                        sug.relief[4], sug.slope[3])))
+                    local function Typical(which, name)
+                        local m, relief = Interop.SuggestMax(st, which)
+                        if m then
+                            st.max = math.floor(m * 2 + 0.5) / 2
+                            Say(string.format('Image 1 = %.1f units: a relief of %.0f units, the %s of your maps', st.max, relief, name))
+                            Changed()
+                            Later()
+                        end
+                    end
+                    Row('buttons', {
+                        Btn('A calm map', 90, function() Typical(2, 'lower quartile') end),
+                        Btn('The median map', 110, function() Typical(3, 'median') end),
+                        Btn('A tall map', 90, function() Typical(4, 'upper quartile') end),
+                    })
+                end
+            end
             Row('buttons', {
                 Cyc('Channel', 82, Interop.CHANNELS, function() return st.channel end, function(v) st.channel = v end),
                 Cyc('Align', 86, Interop.ALIGNS, function() return st.align end, function(v) st.align = v end),
@@ -237,6 +320,7 @@ Panels.Register{
                 Cyc('Region', 140, Interop.REGIONS, function() return st.region end, function(v) st.region = v end, { map = 'whole map', playable = 'playable area', rect = 'rectangle' }),
                 Cyc('Blend', 110, Interop.BLENDS, function() return st.blend end, function(v) st.blend = v end, { replace = 'replace', add = 'add', max = 'max', min = 'min', mask = 'by mask' }),
                 Cyc('Pads', 90, { 'off', 'keep', 'flatten' }, function() return st.pads end, function(v) st.pads = v end),
+                Cyc('Symmetry', 170, SymIds(), function() return st.symmetry or 'off' end, function(v) st.symmetry = v end, SymNames()),
             })
             local sl2 = {}
             if st.region == 'rect' then
@@ -262,7 +346,7 @@ Panels.Register{
                 end) })
             end
             Pn.picLines = {}
-            for i = 1, 8 do table.insert(Pn.picLines, Lbl('')) end
+            for i = 1, 11 do table.insert(Pn.picLines, Lbl('')) end
             Row('pic')
         end
 
@@ -273,12 +357,16 @@ Panels.Register{
                     local list = ed_files_dialog and ed_files_dialog('Mask images', Interop.FILTER)
                     if list then
                         local layer = table.getn(ms.items) + 1
+                        local told = {}
                         for _, f in list do
                             local item = Interop.NewItem(f)
                             item.layer = math.min(8, layer)
                             layer = layer + 1
+                            local guess = Interop.GuessItem(item)       -- flow / wear / deposit, or a kind of ground, from the file name
+                            if guess then table.insert(told, Basename(f) .. ': ' .. guess) end
                             table.insert(ms.items, item)
                         end
+                        if table.getn(told) > 0 then Say(table.concat(told, '; ')) end
                         Later()
                     end
                 end),
@@ -307,6 +395,7 @@ Panels.Register{
                 Cyc('Write', 100, { 1, 2, 3 }, function() return ms.mode end, function(v) ms.mode = v end, { 'replace', 'add to', 'subtract from' }),
                 Tog('Layers above take away', 140, function() return ms.takeAway end, function(v) ms.takeAway = v end),
                 Tog('Orientation as heightmap', 150, function() return ms.sync end, function(v) ms.sync = v end),
+                Cyc('Symmetry', 170, SymIds(), function() return ms.symmetry or 'off' end, function(v) ms.symmetry = v end, SymNames()),
             })
             Row('sliders', { Sld('Strength', 0, 1, 0.01, '%.2f', function() return ms.strength end, function(v) ms.strength = v end) })
             Row('label', Lbl('Files (a layer is written from the highest down, so each takes away from the ones above): ' .. table.getn(ms.items)))
@@ -447,7 +536,8 @@ Panels.Register{
         function Pn:Rebuild()
             self:Kill()
             local ok, err = pcall(function()
-                if state.page == 'heightmap' then PageHeightmap()
+                if state.page == 'setup' then PageSetup()
+                elseif state.page == 'heightmap' then PageHeightmap()
                 elseif state.page == 'masks' then PageMasks()
                 elseif state.page == 'export' then PageExport()
                 else PageLink() end
@@ -484,6 +574,7 @@ Panels.Register{
                             p.align, st.filter))
                         table.insert(lines, string.format('image values %.4g to %.4g', p.srcLo, p.srcHi))
                         table.insert(lines, string.format('result heights %.1f to %.1f units', p.hLo, p.hHi))
+                        if p.advice then table.insert(lines, p.advice) end
                         for _, wtext in p.warnings do table.insert(lines, 'WARNING: ' .. wtext) end
                     else
                         table.insert(lines, state.previewText ~= '' and state.previewText or 'no preview yet')
@@ -565,7 +656,7 @@ Panels.Register{
                     for i, l in self.picLines do
                         W.Place(l, group, size + 2 * pad, y + (i - 1) * Skin.S(16))
                     end
-                    y = y + size + Skin.S(6)
+                    y = y + math.max(size, table.getn(self.picLines) * Skin.S(16)) + Skin.S(6)
                 end
             end
             W.Place(self.status, group, pad, y)
@@ -598,7 +689,7 @@ function Refresh()
         RunPreview()
         P:Refresh()
     end
-    if P and state.page == 'link' and state.linkSeen ~= Interop.Revision then
+    if P and (state.page == 'link' or state.page == 'setup') and state.linkSeen ~= Interop.Revision then
         state.linkSeen = Interop.Revision
         P:Refresh()
     end

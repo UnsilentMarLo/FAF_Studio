@@ -61,3 +61,27 @@ The import and export settings, the mask list, named masks and the live link cho
 ## Tests and tooling
 
 `selftest_interop` (the editor's selftests; `python scripts/editor_inst.py selftests <tag>`), `python scripts/ed_interop_test.py` (native ops, MSVC). Native files: `EdFieldInterop.cpp`, `EdInteropLua.cpp` in the engine repo (see the design doc; they need a build of the editor engine).
+
+## Smoother loop (2026-10-25)
+
+The Interop panel got a first page, **Gaea / WM**, and the import knows more about the maps it is for.
+
+* **Setup page**: the numbers to set in the other tool for this map (grid, extents, formats), how tall your own maps are at this size, the names the editor understands, and **Send and watch**: it exports
+  into the export folder (heightmap, json, masks, start positions, README) and watches that folder. A new file written there comes in by itself: a mask by its name (below), otherwise the first file is
+  the heightmap. Our own export files (`<name>_height`, `_water`, `_slope`, `_flow`, `_wear`, `_layerN` ...) are never taken back.
+* **Typical height**: `scripts/map_texture_presets.py` also writes `Stats` (per map size: total relief, land span, mean slope, share over 30 degrees; 5 / 25 / 50 / 75 / 95 percentile over the maps of
+  the user's Maps folder) into `mapsets.lua`. The Heightmap page shows them and has **A calm map / The median map / A tall map**, which set "Image 1 = height" so the import has that relief (the image's own value
+  span is taken into account). The preview line compares the import with them (relief, mean slope) and warns when it is taller or steeper than 95 percent of your maps, or nearly flat. A free-running
+  Gaea height is easily three times the relief of the tallest map; the graph is built with the same numbers (`GRAPH_TEXTURING.md`, Heights).
+* **Symmetry** (Heightmap and Masks pages, `Settings.symmetry` / `MaskSet.symmetry`): off by default (an imported terrain is not symmetric, a symmetric import keeps one part and copies it over the rest).
+  Choose the editor's symmetry or a mode; the same `gensym.lua` as the graphs (`GEN_SYMMETRY.md`).
+* **Mask names**: `Flow`, `River`, `Stream` -> named mask `flow`; `Wear`, `Erosion` -> `wear`; `Deposit`, `Sediment` -> `deposit`; a kind of ground in the name (`grass`, `rock`, `sand`, `snow` ...) -> the
+  paint layer of that kind on this map's shader (`texsets.RoleLayer`, so no layer numbers). Adding files on the Masks page sets targets from the names (and says so); a file that appears in the live-link folder
+  is added the same way.
+* **Graph nodes** (`graphnodes_ext.lua`): **External terrain** is the Interop panel's heightmap (file, mapping, alignment, orientation, filter) as a height field at the resolution of the graph (the alignment is
+  decided on the whole map so the preview and the build agree); **External mask** is a named mask (flow / wear / deposit) as a 0..1 field, empty when there is none. The graph evaluates again when the other tool writes
+  the file (after a second without change) or the import settings move (`Interop.GraphSignature`, `graphrun.Refresh`). Sample graph **Gaea / World Machine terrain**: External terrain -> Output: height, Ground kinds
+  fed by the terrain and the three erosion masks -> Output: ground kinds; its symmetry is off.
+* EXR is still not read (no Windows codec; a reader would be an engine patch). Choosing an `.exr` now says so and what to export instead.
+* Not done: reading the tools' project files (`.tmd`, Gaea's project) to check resolution and extents; a Gaea / World Machine plugin (their extension APIs are C# / C++ / Lua and do not document a build or
+  export hook).

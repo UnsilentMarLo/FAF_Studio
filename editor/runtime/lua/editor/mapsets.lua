@@ -124,6 +124,15 @@ Order = {
     { family = 'crystalline', label = 'Crystalline', ids = { 'm_crystalline_1', 'm_crystalline_2', 'm_crystalline_3' } },
     { family = 'tundra', label = 'Tundra', ids = { 'm_tundra_1', 'm_tundra_2', 'm_tundra_3' } },
 }
+-- Stats[size] (0 = all maps of 256 and up): n maps, and relief (highest - lowest point), span (land, 5th to 95th percentile), slope (mean, degrees), steep (share over 30 degrees) as the
+-- 5 / 25 / 50 / 75 / 95 percentile over the maps of that size
+Stats = {
+    [0] = { n = 342, relief = { 14.13, 26.5, 37.25, 49.51, 86.83 }, span = { 4.95, 12.43, 19.8, 29, 62.73 }, slope = { 2.89, 6.21, 9.02, 12.1, 17.84 }, steep = { 0.01, 0.05, 0.09, 0.14, 0.23 } },
+    [256] = { n = 18, relief = { 7.48, 15.01, 19.03, 21.87, 26.83 }, span = { 3, 8.75, 11.46, 12.6, 16.15 }, slope = { 2.76, 6.21, 8.48, 10.18, 14.4 }, steep = { 0.03, 0.05, 0.1, 0.13, 0.2 } },
+    [512] = { n = 143, relief = { 15.22, 23.59, 30.8, 40, 53.64 }, span = { 5.68, 12.23, 18.06, 24.16, 33.42 }, slope = { 4.37, 7.87, 10, 12.7, 17.78 }, steep = { 0.03, 0.08, 0.11, 0.14, 0.22 } },
+    [1024] = { n = 161, relief = { 20.23, 32.92, 48.23, 64.05, 94.91 }, span = { 6.63, 15.95, 24, 39.91, 82.55 }, slope = { 2.74, 5.89, 8.53, 11.61, 18.04 }, steep = { 0.01, 0.05, 0.08, 0.14, 0.26 } },
+    [2048] = { n = 19, relief = { 0, 30.52, 49.34, 49.84, 159.96 }, span = { 0, 8.77, 22.33, 23.46, 54.26 }, slope = { 0, 3.61, 5.56, 6.1, 8.94 }, steep = { 0, 0.02, 0.02, 0.03, 0.13 } },
+}
 Styles = {
     { id = 'm_ancient_earth', name = 'Ancient earth (from 6 maps)', knobs = { beach = 12, cliff = 35, crisp = 0.37, dark = 0.37, dirt = 0.66, high = 0.7, rock = 21, snow = 0, wet = 0 }, off = { snow = true } },
     { id = 'm_crystalline', name = 'Crystalline (from 3 maps)', knobs = { beach = 1.5, cliff = 20, crisp = 0.48, dark = 1, dirt = 0.13, high = 0.52, rock = 12, snow = 0, wet = 8 }, off = { snow = true } },

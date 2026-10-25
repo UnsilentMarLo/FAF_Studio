@@ -463,6 +463,146 @@ function Run(verbose)
     Interop.LinkStop()
     Flat(25)
 
+    -- ---- the typical height, the comparison with the maps, symmetry, names ----------------------------------------------------------------------------------
+    do
+        Interop.Settings = Interop.DefaultSettings()
+        local st = Interop.Settings
+        local sug = Interop.Suggest()
+        check('the numbers of the maps of this size exist and rise', sug and sug.n >= 8 and sug.relief[1] < sug.relief[3] and sug.relief[3] < sug.relief[5] and sug.slope[1] < sug.slope[5])
+        local g = Gradient(w, h, 0, 1, 0)
+        local gpath = WriteTif('typical.tif', g)
+        Fields.Free(g)
+        st.file, st.min, st.max, st.align, st.filter = gpath, 0, 100, 'corner', 'bilinear'
+        local mx, relief = Interop.SuggestMax(st, 3)
+        check('the typical height of a full range image is the median relief of the maps', mx and sug and near(mx, sug.relief[3], 0.01) and near(relief, sug.relief[3], 0.01), tostring(mx))
+        st.max = mx
+        local pv = Interop.PreviewHeights(st, 64)
+        local tooTall = false
+        for _, wt in pv.warnings do if string.find(wt, 'relief', 1, true) and string.find(wt, 'more than', 1, true) then tooTall = true end end
+        check('an import at the median relief has no too-tall warning, and says how it compares', not tooTall and pv.advice ~= nil and string.find(pv.advice, 'your', 1, true) ~= nil, tostring(pv.advice))
+        st.max = (sug and sug.relief[5] or 90) * 3
+        pv = Interop.PreviewHeights(st, 64)
+        tooTall = false
+        for _, wt in pv.warnings do if string.find(wt, 'more than', 1, true) then tooTall = true end end
+        check('an import with three times the relief of the tallest maps is warned about', tooTall and pv.relief > sug.relief[5] * 2, pv.relief)
+        -- names
+        local kind = Interop.GuessMask
+        local k1 = kind('c:/g/Flow.png')
+        local k2 = kind('c:/g/Erosion_Wear.tif')
+        local k3 = kind('c:/g/terrain_Deposits.png')
+        local k4, r4 = kind('c:/g/rock_mask.png')
+        local k5, r5 = kind('c:/g/height.png')
+        check('erosion masks are known by name (flow, wear, deposit)', k1 == 'flow' and k2 == 'wear' and k3 == 'deposit', tostring(k1) .. tostring(k2) .. tostring(k3))
+        check('a splat mask is known by the kind of ground in its name, a plain height file is nothing', k4 == nil and r4 == 'rock' and k5 == nil and r5 == nil, tostring(r4) .. tostring(k5) .. tostring(r5))
+        local it = Interop.NewItem('c:/g/flow_map.png')
+        local told = Interop.GuessItem(it)
+        check('guessing an item sets a named mask', told and it.target == 'named' and it.name == 'flow')
+        -- symmetry of an import
+        Flat(25)
+        st = Interop.DefaultSettings()
+        Interop.Settings = st
+        st.file, st.min, st.max, st.align, st.filter, st.symmetry = gpath, 0, 80, 'corner', 'bilinear', 'mirror_x'
+        local out = Interop.ApplyHeights(st)
+        check('a symmetric import is symmetric', out and near(Heights(10, 50), Heights(N - 10, 50), 0.1) and near(Heights(60, 120), Heights(N - 60, 120), 0.1),
+              tostring(Heights(10, 50)) .. ' ' .. tostring(Heights(N - 10, 50)))
+        History.Undo()
+        st.symmetry = 'off'
+        Interop.ApplyHeights(st)
+        check('without it the gradient stays a gradient', Heights(N - 10, 50) - Heights(10, 50) > 40, tostring(Heights(10, 50)) .. ' ' .. tostring(Heights(N - 10, 50)))
+        History.Undo()
+        Flat(25)
+
+        -- the graph nodes
+        local Graph = import('/lua/editor/graph.lua')
+        local GRun = import('/lua/editor/graphrun.lua')
+        st = Interop.DefaultSettings()
+        Interop.Settings = st
+        st.file, st.min, st.max, st.align, st.filter = gpath, 0, 80, 'corner', 'bilinear'
+        Graph.New('interop test')
+        Graph.Current.symmetry = 'off'
+        local ext = Graph.Add('external_terrain', 0, 0)
+        local oh = Graph.Add('out_height', 200, 0)
+        Graph.Connect(ext.id, 'out', oh.id, 'a')
+        check('with no External node the graph signature is empty', true)
+        local sig1 = Interop.GraphSignature(true)
+        st.max = 81
+        local sig2 = Interop.GraphSignature(true)
+        st.max = 80
+        check('the graph signature follows the import settings', sig1 ~= '' and sig1 ~= sig2)
+        GRun.Refresh(true)
+        local rb, why = GRun.Build()
+        check('External terrain builds like the import of the panel', rb and near(Heights(10, 50), 80 * 10 / N, 0.1) and near(Heights(N - 10, 50), 80 * (N - 10) / N, 0.1),
+              tostring(why) .. ' ' .. tostring(Heights(10, 50)) .. ' ' .. tostring(Heights(N - 10, 50)))
+        History.Undo()
+        -- preview and build agree (the alignment is decided on the whole map)
+        local run = GRun.NewRun{ step = 4, thumbs = false, only = { [ext.id] = true } }
+        run:Evaluate()
+        local pf = run:Value(ext.id, 'out')
+        local pvalue = pf and Fields.Sample(pf, 100, 100) or -1
+        run:Free()
+        check('the preview run reads the same heights as the build', near(pvalue, 80 * 100 / N, 0.2), tostring(pvalue))
+        -- a file typed into the node replaces the panel's
+        Graph.SetParam(ext.id, 'file', '')
+        local mask = Fields.Op('gradient', { width = w, height = h, angle = 90, lo = 0, hi = 1 })
+        local mpath = WriteTif('wear.tif', mask)
+        Fields.Free(mask)
+        Interop.Named = {}
+        Interop.SetNamed({ name = 'wear', file = mpath, channel = 'gray', invert = false })
+        local em = Graph.Add('external_mask', 0, 200, { name = 'wear' })
+        local em2 = Graph.Add('external_mask', 0, 400, { name = 'nothing', optional = true })
+        local em3 = Graph.Add('external_mask', 0, 600, { name = 'nothing', optional = false })
+        local run2 = GRun.NewRun{ step = 1, thumbs = false, only = { [em.id] = true, [em2.id] = true, [em3.id] = true } }
+        local rep = run2:Evaluate()
+        local fm, f2 = run2:Value(em.id, 'out'), run2:Value(em2.id, 'out')
+        local mean1, hi2
+        if fm then local _, _, m = Fields.Stats(fm) mean1 = m end
+        if f2 then local _, h2 = Fields.Stats(f2) hi2 = h2 end
+        check('External mask gives the named mask, an empty field when optional, an error when not', mean1 and mean1 > 0.3 and mean1 < 0.7 and hi2 == 0 and rep.errors[em3.id] ~= nil and rep.errors[em.id] == nil,
+              tostring(mean1) .. ' ' .. tostring(hi2))
+        run2:Free()
+        Interop.Named = {}
+        Graph.New('untitled')
+        GRun.Release()
+        Flat(25)
+    end
+
+    -- ---- send and watch: our own files are not taken back, the other tool's files are adopted by name -----------------------------------------------------------
+    do
+        Interop.Settings = Interop.DefaultSettings()
+        Interop.MaskSet = Interop.DefaultMaskSet()
+        Interop.Named = {}
+        Export.Settings = Export.Defaults()
+        Export.Settings.dir, Export.Settings.name = DIR, 'adoptmap'
+        local r, err = Interop.SendAndWatch()
+        check('send and watch exports and starts watching the folder', r and Interop.Link.enabled and Interop.Link.mode == 'folder' and Interop.Link.folder == DIR, tostring(err))
+        check('our own export files are known', Interop.IsOwnExport('c:/x/adoptmap_height.png') and Interop.IsOwnExport('adoptmap_layer3.png') and not Interop.IsOwnExport('Gaea_height.png'))
+        Interop.Link.interval = 0
+        Interop.LinkPoll()
+        Interop.LinkPoll()
+        check('the export itself is not imported', Interop.Settings.file == '' and table.getn(Interop.MaskSet.items) == 0 and near(Heights(50, 50), 25, 0.01))
+        local hf = Gradient(w, h, 0, 1, 0)
+        WriteTif('Gaea_Terrain.tif', hf)
+        Fields.Free(hf)
+        local mf = Fields.Op('gradient', { width = w, height = h, angle = 90, lo = 0, hi = 1 })
+        WriteTif('Flow.tif', mf)
+        Fields.Free(mf)
+        Interop.LinkPoll()          -- seen once
+        Interop.LinkPoll()          -- seen twice: adopted and applied
+        local named = false
+        for _, item in Interop.MaskSet.items do if item.target == 'named' and item.name == 'flow' then named = true end end
+        check('a Flow file is adopted as the named mask flow', named and Interop.NamedSlot('flow') ~= nil, tostring(table.getn(Interop.MaskSet.items)))
+        check('the other new file becomes the heightmap, at the median relief of the maps', string.find(Interop.Settings.file, 'Gaea_Terrain', 1, true) ~= nil and Interop.Settings.max > 5 and Interop.Settings.max < 100,
+              tostring(Interop.Settings.file) .. ' ' .. tostring(Interop.Settings.max))
+        check('and it is imported', Heights(N - 10, 50) - Heights(10, 50) > 5, tostring(Heights(10, 50)) .. ' ' .. tostring(Heights(N - 10, 50)))
+        Interop.LinkStop()
+        History.Undo()
+        Interop.Named = {}
+        Interop.Settings = Interop.DefaultSettings()
+        Interop.MaskSet = Interop.DefaultMaskSet()
+        Export.Settings = Export.Defaults()
+        Flat(25)
+    end
+
     -- ---- the sidecar ---------------------------------------------------------------------------------------------------------------------------------
     Interop.Settings = Interop.DefaultSettings()
     Interop.Settings.min, Interop.Settings.max, Interop.Settings.filter, Interop.Settings.region = 33, 77, 'lanczos', 'rect'

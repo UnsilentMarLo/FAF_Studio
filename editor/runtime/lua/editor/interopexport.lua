@@ -60,6 +60,11 @@ local function MapName()
     return 'terrain'
 end
 
+--- The name the export files start with (the file name setting, else the map name): the live link knows its own files by it.
+function Stem()
+    return Settings.name ~= '' and Settings.name or MapName()
+end
+
 local function Extension(st, bits)
     if st.format == 'raw' then return bits == 32 and 'r32' or 'r16' end
     if st.format == 'tif' or bits == 32 then return 'tif' end
