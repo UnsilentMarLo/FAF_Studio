@@ -113,6 +113,7 @@ Graph = {
                 ['crisp'] = 0.45,
                 ['dark'] = 0.5,
                 ['dirt'] = 0.38,
+                ['erosion'] = 0.7,
                 ['fine'] = 0.35,
                 ['high'] = 0.5,
                 ['patch'] = 50,
@@ -255,6 +256,24 @@ Graph = {
             'out',
             10,
             'a',
+        },
+        {
+            6,
+            'wear',
+            10,
+            'wear',
+        },
+        {
+            6,
+            'deposit',
+            10,
+            'deposit',
+        },
+        {
+            6,
+            'flow',
+            10,
+            'flow',
         },
     },
 }

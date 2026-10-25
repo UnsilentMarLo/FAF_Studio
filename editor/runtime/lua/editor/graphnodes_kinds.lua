@@ -75,12 +75,12 @@ function Install(Kit, Covers)
 
     local kindOutputs = {}
     for _, id in ROLES do table.insert(kindOutputs, Out(id, 'mask')) end
-    local kindParams = { StyleParam() }
+    local kindParams = { StyleParam(), N('erosion', 'Erosion masks decide (when wired)', 0, 1, 0.05, '%.2f', 0.7) }
     for _, p in KnobParams() do table.insert(kindParams, p) end
 
     Def('ground_kinds', { label = 'Ground kinds', cat = 'analysis', kw = 'ground kinds recipe stratum grass dirt wet sand rock dark rock high rock snow cliff beach texture layers shader terrain paint',
         desc = 'Where each of the eight kinds of ground belongs on these heights: the stratum recipe (Stratum recipes panel) as masks. It follows the map: the kinds that have a layer, the base layer (the kind of layer 0 is what the others leave), and the shader (a kind on layer 3 or 4 of a B shader gets steep ground only). Kinds the map has no layer for come out empty. Wire the eight masks into Output: ground kinds, or use them for anything (scatter forest on grass, roughness). A slider left at its default takes the value of the style.',
-        inputs = { In('a', 'height') },
+        inputs = { In('a', 'height'), In('wear', 'mask', true), In('deposit', 'mask', true), In('flow', 'mask', true) },
         outputs = kindOutputs,
         liveKey = ShaderKey,
         params = kindParams,
@@ -90,6 +90,17 @@ function Install(Kit, Covers)
             local hmin, hmax = Fields.Stats(H)
             local c = { S = E, H = H, w = w, h = h, cell = E.cell, step = E.step, hmin = hmin, hmax = hmax, water = E.water, cache = {} }
             local sel, plan = Recipes.Selections(E, c, { preset = v.style, knobs = Moved(v) })
+            -- what the erosion did decides too (the way a World Machine map is painted from its erosion masks): wear bares rock, the sediment settles as dirt on the flat ground, the flow is wet
+            -- ground; `erosion` is how much of the kind's own selection they may replace (a kind that is the base layer or has no layer is left alone)
+            local function Lift(id, m)
+                if m and sel[id] and v.erosion > 0 then
+                    local up = E:Op('clamp', { a = E:Op('affine', { a = m, mul = v.erosion, add = 0 }), lo = 0, hi = 1 })
+                    sel[id] = E:Op('max', { a = sel[id], b = up })
+                end
+            end
+            Lift('rock', ins.wear)
+            Lift('dirt', ins.deposit)
+            Lift('wet', ins.flow)
             local out = {}
             for _, id in ROLES do
                 out[id] = sel[id] or E:Const((plan.base == id) and 1 or 0)

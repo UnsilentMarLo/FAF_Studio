@@ -36,7 +36,7 @@ function Run()
 
     check('the nodes exist', Nodes.Defs.terrain_shader and Nodes.Defs.ground_kinds and Nodes.Defs.surface_roughness and Nodes.Defs.out_kinds)
     local gk = Nodes.Defs.ground_kinds
-    check('Ground kinds has the eight kinds as outputs and the style and the knobs as settings', table.getn(gk.outputs) == 8 and table.getn(gk.params) == 1 + table.getn(Recipes.KnobInfo))
+    check('Ground kinds has the eight kinds as outputs and the style and the knobs as settings', table.getn(gk.outputs) == 8 and table.getn(gk.params) == 2 + table.getn(Recipes.KnobInfo))
     check('Output: ground kinds is an output node with the eight kinds as inputs', Nodes.Defs.out_kinds.output == 'kinds' and table.getn(Nodes.Defs.out_kinds.inputs) == 8)
 
     local w, h = nil, nil
@@ -162,6 +162,22 @@ function Run()
     local rmin, rmax
     if rf then rmin, rmax = Fields.Stats(rf) end
     check('Surface roughness: rock makes it rougher than neutral, snow shinier', rmin and rmin < 0.45 and rmax and rmax > 0.55, tostring(rmin) .. ' .. ' .. tostring(rmax))
+
+    -- the erosion masks decide too: a wear mask of 1 everywhere bares rock (erosion influence 0.7 -> at least 0.7)
+    Graph.New('erosion')
+    local te = Graph.Add('terrain', 0, 0)
+    local ge = Graph.Add('ground_kinds', 200, 0, { erosion = 0.7 })
+    Graph.Connect(te.id, 'out', ge.id, 'a')
+    local one = Graph.Add('const', 0, 200, { value = 1 })
+    Graph.Connect(one.id, 'out', ge.id, 'wear')
+    GRun.Refresh(true)
+    local rk = GRun.Main and GRun.Main:Value(ge.id, 'rock')
+    if rk then
+        local _, _, rm = Fields.Stats(rk)
+        check('Ground kinds: a wear mask bares rock (influence 0.7)', rm >= 0.69, rm)
+    else
+        check('Ground kinds: a wear mask bares rock (influence 0.7)', false, 'no rock output')
+    end
 
     -- the land nodes: Landforms makes plains and hills, Flatten gentle ground takes the gentle ground out of noise
     Graph.New('land')

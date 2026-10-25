@@ -98,6 +98,7 @@ Graph = {
                 ['crisp'] = 0.45,
                 ['dark'] = 0.5,
                 ['dirt'] = 0.38,
+                ['erosion'] = 0.7,
                 ['fine'] = 0.35,
                 ['high'] = 0.5,
                 ['patch'] = 50,
@@ -214,6 +215,24 @@ Graph = {
             'snow',
             10,
             'snow',
+        },
+        {
+            5,
+            'wear',
+            9,
+            'wear',
+        },
+        {
+            5,
+            'deposit',
+            9,
+            'deposit',
+        },
+        {
+            5,
+            'flow',
+            9,
+            'flow',
         },
     },
 }

@@ -80,3 +80,19 @@ itself: the step the reference maps are full of), the node **Landforms (plains a
   islands and wetlands coast, desert and badlands desert, tundra arctic, the rolling landscapes Open valley.
 * Looking at them: `python scripts/texture_lab.py --out DIR --map 512 --no-water --views top,oblique --cases "g=valley:valley:-"` (a graph id, then the texture set, `-` = no recipe on top).
   The texture set must be applied BEFORE the graph builds (applying a set clears the paint): the lab does that.
+
+## Aleasa.tmd (screenshots of the World Machine project) and what was taken from it
+
+The project is built in blocks: **First generation** (a Contrast mask, Blurs and Basic Noise into an Erosion; a *File Input* heightmap, hand made, through Blur and **Terrace**, a Combiner with a
+Select Slope times Basic Noise, an Erosion), **Combine** ("combine all that terrain, slightly blur it to take the edges off and add some constant to allow us to play with the gradient of the water"),
+more Erosion at 4097 px, Select Roughness and Normal Map Maker, **Ramps** (Shapes through Erosion, Expander and Blur: erosion builds ramps units can climb), and a **Stratum Output** block: one
+chain per layer, `Select Convexity / Slope / Wetness / Height -> Bias/Gain -> Blur -> Combiner with a Basic Noise -> output`, the wetness from the erosion. What follows from it:
+
+* The layout is a drawn heightmap (our Layout workspace), shaped by Blur and Terrace, with detail noise only where the slope is steep, then eroded three times (coarse, then fine at high resolution).
+  New graph **Layout to terrain** (`layout_terrain.lua`): Map layout heights -> Blur -> Terrace (half mixed in) -> Add a ridged noise that only lives on the slopes -> droplet erosion -> Blur ->
+  hydraulic erosion -> out; the layout has to be drawn first.
+* Every paint mask is a selector, a contrast curve, a blur and a noise: the recipes' rules (ramp, `crisp`, `blur`, `grain`) are the same chain. What was missing is the **erosion as a source of paint**:
+  Ground kinds got the inputs `wear`, `deposit` and `flow` (the masks of an erosion node): wear bares rock, deposit lays the sediment (dirt) on the flats, flow is wet ground; `Erosion masks decide`
+  is how much. The upgrade script wires the last erosion before the height output of every graph that has one; the Open valley graph now has two erosions (droplet, hydraulic) like the reference.
+* The map-wide pictures (normal map, roughness) are outputs of the project: `Texture, roughness and colour pass` has Output: map normal map and Output: map lighting now.
+* Ramps by erosion are not made; the Base pads and Slope limit nodes do the playability part.

@@ -143,6 +143,44 @@ for _, p in Index.List do
                     table.insert(notes, 'flatten ' .. want[1] .. ' / ' .. want[2])
                     changed = true
                 end
+                -- 4. the erosion that made the ground paints it too: the last erosion node on the way to the height output feeds the ground kinds (wear, deposit, flow)
+                do
+                    local cur = srcId
+                    for _, w in g.wires do
+                        if w[3] == oh.id and w[4] == 'a' then cur = w[1] end
+                    end
+                    local erode, guard = nil, 0
+                    while cur and not erode and guard < 40 do
+                        guard = guard + 1
+                        local n = Graph.NodeById(cur)
+                        if string.find(n.type, '^erode_') then
+                            erode = n
+                        else
+                            local nextId
+                            for _, w in g.wires do
+                                if w[3] == cur and w[4] == 'a' then nextId = w[1] end
+                            end
+                            cur = nextId
+                        end
+                    end
+                    if erode then
+                        for _, n in g.nodes do
+                            if n.type == 'ground_kinds' then
+                                local wired = false
+                                for _, w in g.wires do
+                                    if w[3] == n.id and w[4] == 'wear' then wired = true end
+                                end
+                                if not wired then
+                                    Graph.Connect(erode.id, 'wear', n.id, 'wear')
+                                    Graph.Connect(erode.id, 'deposit', n.id, 'deposit')
+                                    Graph.Connect(erode.id, 'flow', n.id, 'flow')
+                                    table.insert(notes, 'erosion masks from node ' .. erode.id)
+                                    changed = true
+                                end
+                            end
+                        end
+                    end
+                end
                 if changed then
                     ed_write_file('../graphs_upgraded/' .. id .. '.lua', Graph.Text())
                     table.insert(report, id .. ': ' .. table.concat(notes, ', '))

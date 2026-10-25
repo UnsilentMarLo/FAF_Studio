@@ -1,7 +1,7 @@
 -- The ground kinds on the layers of the shader, plus what the shaders need besides the paint: the roughness mask (PBR), macrotexture, specular picture, roughness / height atlas (each is skipped with a note on a shader that does not read it) and a colour map file from the heights.
 Graph = {
     ['name'] = 'Texture, roughness and colour pass (no height change)',
-    ['nextId'] = 12,
+    ['nextId'] = 16,
     ['nodes'] = {
         {
             ['id'] = 1,
@@ -20,6 +20,7 @@ Graph = {
                 ['crisp'] = 0.45,
                 ['dark'] = 0.5,
                 ['dirt'] = 0.38,
+                ['erosion'] = 0.7,
                 ['fine'] = 0.35,
                 ['high'] = 0.5,
                 ['patch'] = 50,
@@ -130,6 +131,54 @@ Graph = {
             ['type'] = 'out_colormap',
             ['x'] = 672,
             ['y'] = 456,
+        },
+        {
+            ['id'] = 12,
+            ['params'] = {
+                ['span'] = 1,
+                ['squares'] = true,
+                ['strength'] = 1,
+            },
+            ['type'] = 'normal_map',
+            ['x'] = 224,
+            ['y'] = 1064,
+        },
+        {
+            ['id'] = 13,
+            ['params'] = {
+                ['assign'] = true,
+                ['size'] = 'auto',
+            },
+            ['type'] = 'out_normalmap',
+            ['x'] = 448,
+            ['y'] = 1064,
+        },
+        {
+            ['id'] = 14,
+            ['params'] = {
+                ['altitude'] = 40,
+                ['ambient'] = 0.25,
+                ['ao'] = 0.5,
+                ['aoRadius'] = 40,
+                ['azimuth'] = 315,
+                ['quality'] = '5',
+                ['reach'] = 400,
+                ['soft'] = 1,
+                ['useMap'] = true,
+            },
+            ['type'] = 'lighting_tex',
+            ['x'] = 224,
+            ['y'] = 1216,
+        },
+        {
+            ['id'] = 15,
+            ['params'] = {
+                ['assign'] = true,
+                ['size'] = 'auto',
+            },
+            ['type'] = 'out_maplight',
+            ['x'] = 448,
+            ['y'] = 1216,
         },
     },
     ['seed'] = 40,
@@ -265,6 +314,36 @@ Graph = {
             'rgba',
             11,
             'rgba',
+        },
+        {
+            1,
+            'out',
+            12,
+            'a',
+        },
+        {
+            12,
+            'rgba',
+            13,
+            'normal',
+        },
+        {
+            1,
+            'out',
+            14,
+            'a',
+        },
+        {
+            14,
+            'shadow',
+            15,
+            'shadow',
+        },
+        {
+            14,
+            'ao',
+            15,
+            'ao',
         },
     },
 }
