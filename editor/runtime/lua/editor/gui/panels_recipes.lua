@@ -75,11 +75,18 @@ Panels.Register{
         end
 
         Pn.bPreset = Btn('', 280, function()
-            Recipes.SelectPreset(math.mod(Recipes.State.preset, table.getn(Recipes.Presets)) + 1)
-            Fresh()
-            for _, s in Pn.knobSliders do s:Refresh() end
-            Pn:Refresh()
-        end, { tip = 'The style of the recipe (natural, alpine, desert, arctic, rocky, coast). Click to step to the next one; it sets the numbers below.' })
+            local items = {}
+            for i, p in Recipes.Presets do
+                local index = i
+                table.insert(items, { title = p.name, checked = (index == Recipes.State.preset), run = function()
+                    Recipes.SelectPreset(index)
+                    Fresh()
+                    for _, s in Pn.knobSliders do s:Refresh() end
+                    Pn:Refresh()
+                end })
+            end
+            Menu.Show(GetFrame(0), Pn.bPreset.Left(), Pn.bPreset.Bottom(), items)
+        end, { tip = 'The style of the recipe: the built-in ones (natural, alpine, desert, arctic, rocky, valley, coast) and one per family of maps, measured on the maps of your Maps folder. It sets the numbers below.' })
 
         -- one row per layer 0..8: texture, kind of ground (a menu), Show, coverage
         for l = 0, 8 do

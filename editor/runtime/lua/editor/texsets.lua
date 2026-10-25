@@ -86,6 +86,19 @@ Themes = {
 }
 ThemeOrder = { 'temperate', 'valley', 'desert', 'tropical', 'tundra', 'lava', 'swamp', 'geothermal' }
 
+-- The sets measured on the maps of the user's Maps folder (scripts/map_texture_stats.py, map_texture_presets.py -> mapsets.lua): Themes of the same shape (they have a `family`), MapFamilies = { { family,
+-- label, ids } } for the menu, and the recipe style of each family (`style`, an id of recipes.lua Presets).
+MapFamilies = {}
+do
+    local ok, M = pcall(import, '/lua/editor/mapsets.lua')
+    if ok and M then
+        for id, theme in M.Themes do
+            if not Themes[id] then Themes[id] = theme end
+        end
+        MapFamilies = M.Order
+    end
+end
+
 local function Exists(path)
     local ok, info = pcall(DiskGetFileInfo, path)
     return ok and info ~= nil and info ~= false
@@ -227,6 +240,7 @@ function RoleOfTexture(path, layer)
     if not path or path == '' then return nil end
     local key = string.lower((string.gsub(path, '\\', '/')))
     local function Lists(role, theme)
+        if theme.family then return false end                      -- the sets of the maps: a texture is another kind of ground in each map
         local list = theme[role]
         if role == 'grass' and theme.base then
             for _, c in theme.base do if string.lower(c) == key then return true end end

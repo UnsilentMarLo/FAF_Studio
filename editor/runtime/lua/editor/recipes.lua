@@ -98,6 +98,17 @@ Presets = {
     { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.36, snow = 0, rock = 38, cliff = 56, crisp = 0.3 }, off = { snow = true } },
 }
 
+-- the styles measured on the maps of the user's Maps folder (mapsets.lua, made by scripts/map_texture_presets.py)
+do
+    local ok, M = pcall(import, '/lua/editor/mapsets.lua')
+    if ok and M then
+        for _, s in M.Styles do
+            s.uses = ALL_KNOBS
+            table.insert(Presets, s)
+        end
+    end
+end
+
 State = { preset = 1, types = true, roughness = true, selected = 0 }          -- State.layers (nil): detect the roles from the textures; a list: the roles are on those layers
 
 --- Chooses a style: the settings go back to the defaults, then the style's own values are put on top.

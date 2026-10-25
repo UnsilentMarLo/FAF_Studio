@@ -299,16 +299,46 @@ Panels.Register{
             local l = Selected()
             if l then Entry(Strata.FillMask(l.index)) end
         end)
+        -- a button text that may be longer than the button (the name of a texture set or shader): cut with "..." to the width of the button
+        local function ButtonText(btn, text)
+            btn:SetText(text)
+            local maxW = btn.Width() - Skin.S(12)
+            if btn.label.Width() > maxW then
+                W.Fit(btn.label, text, maxW)
+                W.Center(btn.label, btn, 0, 0, btn.Width(), btn.Height())
+            end
+        end
+        P.ButtonText = ButtonText
         P.texset = W.Button(group, 'Texture set: ...', 0, 0, Skin.S(220), Skin.S(24), function()
             local TS = import('/lua/editor/texsets.lua')
             local items = {}
-            for _, id in TS.ThemeOrder do
-                local themeId = id
-                table.insert(items, { title = TS.Themes[themeId].label, run = function()
+            local function SetItem(themeId)
+                return { title = TS.Themes[themeId].label, run = function()
                     local n = TS.Apply(themeId)
-                    Say('texture set ' .. TS.Themes[themeId].label .. ': ' .. n .. ' layers')
+                    local text = 'texture set ' .. TS.Themes[themeId].label .. ': ' .. n .. ' layers'
+                    local style = TS.Themes[themeId].style
+                    if style then
+                        local Recipes = import('/lua/editor/recipes.lua')
+                        for i, pr in Recipes.Presets do
+                            if pr.id == style then
+                                Recipes.SelectPreset(i)
+                                text = text .. '; recipe style ' .. pr.name
+                            end
+                        end
+                    end
+                    Say(text)
                     P:Refresh()
-                end })
+                end }
+            end
+            for _, id in TS.ThemeOrder do table.insert(items, SetItem(id)) end
+            if table.getn(TS.MapFamilies) > 0 then
+                table.insert(items, { separator = true })
+                table.insert(items, { header = true, title = 'Measured on your maps' })
+                for _, fam in TS.MapFamilies do
+                    local sub = {}
+                    for _, id in fam.ids do table.insert(sub, SetItem(id)) end
+                    table.insert(items, { title = fam.label, submenu = sub })
+                end
             end
             local x, y = P.texset.Left(), P.texset.Bottom()
             Menu.Show(GetFrame(0), x, y, items)
@@ -386,12 +416,12 @@ Panels.Register{
             local texsetText = 'Texture set: ' .. ((TS.Themes[TS.Theme] and TS.Themes[TS.Theme].label) or TS.Theme)
             if texsetText ~= P.texsetShown then
                 P.texsetShown = texsetText
-                P.texset:SetText(texsetText)
+                ButtonText(P.texset, texsetText)
             end
             local shaderName = import('/lua/editor/shaders.lua').Current() or '?'
             if P.shaderShown ~= shaderName then
                 P.shaderShown = shaderName
-                P.shader:SetText('Shader: ' .. shaderName)
+                ButtonText(P.shader, 'Shader: ' .. shaderName)
             end
             if P.laidOut and WarnText() ~= P.warnShown then
                 P:OnResize(P.w, P.h)          -- the warning appeared or went away: the panel lays out again (this ends in a Refresh with the same text)
@@ -509,6 +539,7 @@ Panels.Register{
                 if place then
                     W.Place(b, group, pad, y, sw, Skin.S(24))
                     W.Center(b.label, b, 0, 0, sw, Skin.S(24))
+                    P.texsetShown, P.shaderShown = nil, nil          -- the texts are cut to the new width on the next refresh
                 end
                 y = y + Skin.S(30)
             end

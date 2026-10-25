@@ -103,6 +103,46 @@ function Run(verbose)
     check('names: "sandwet" is wet, not sand', Detect.ClassifyName('/x/Sandwet_albedo.dds') == 'wet')
     check('names: camel case words (RockLight) are split', Detect.ClassifyName('/x/RockLight_albedo.dds') == 'highrock' and Detect.ClassifyName('/x/RockMed_albedo.dds') == 'rock')
 
+    -- ---- the sets and styles measured on the maps (mapsets.lua, scripts/map_texture_presets.py) -------------------------------------------------
+    do
+        local TS = import('/lua/editor/texsets.lua')
+        local nSets, badSets, noStyle, missing = 0, {}, {}, {}
+        for id, th in TS.Themes do
+            if th.family then
+                nSets = nSets + 1
+                for _, role in TS.Roles do
+                    if th[role] and table.getn(th[role]) > 0 and not TS.TextureFor(role, id) then table.insert(missing, id .. '.' .. role) end
+                end
+                local found
+                for _, p in Recipes.Presets do if p.id == th.style then found = p end end
+                if not found then table.insert(noStyle, id) end
+            end
+        end
+        check('map sets: there are sets and families', nSets >= 8 and table.getn(TS.MapFamilies) >= 4, nSets .. ' sets')
+        check('map sets: every texture of every set exists in the game data', table.getn(missing) == 0, Join(missing, ', '))
+        check('map sets: every set names a recipe style that exists', table.getn(noStyle) == 0, Join(noStyle, ', '))
+        local ranges = { rock = { 5, 80 }, cliff = { 20, 85 }, snow = { 0, 0.6 }, high = { 0.2, 0.95 }, beach = { 0, 20 }, wet = { 0, 10 }, dirt = { 0, 0.8 }, dark = { 0, 1 }, crisp = { 0, 1 } }
+        local badKnobs = {}
+        for _, p in Recipes.Presets do
+            if string.sub(p.id, 1, 2) == 'm_' then
+                for k, v in p.knobs do
+                    local r = ranges[k]
+                    if not r or v < r[1] or v > r[2] then table.insert(badKnobs, p.id .. '.' .. k .. '=' .. tostring(v)) end
+                end
+                if p.knobs.rock and p.knobs.cliff and p.knobs.cliff <= p.knobs.rock then table.insert(badKnobs, p.id .. ' cliff <= rock') end
+            end
+        end
+        check('map styles: every knob is inside the slider range, cliff above rock', table.getn(badKnobs) == 0, Join(badKnobs, ', '))
+        check('map sets: they do not change which kind of ground a known texture is', TS.RoleOfTexture('/env/Evergreen/layers/Dirt001_albedo.dds') == 'dirt')
+        local firstMapSet
+        for _, fam in TS.MapFamilies do if not firstMapSet then firstMapSet = fam.ids[1] end end
+        if firstMapSet and rawget(_G, 'ed_stratum_layer') then
+            local before = TS.Theme
+            check('map sets: a set applies layers', TS.Apply(firstMapSet) >= 5)
+            TS.SetTheme(before)
+        end
+    end
+
     -- ---- colours (synthetic pixels through the pure classifier) -----------------------------------------------------------------------------
     local colours = {
         { 'olive grass', 95, 105, 55, 'grass' }, { 'bright grass', 70, 120, 40, 'grass' }, { 'dark moss', 40, 70, 30, 'grass' },
