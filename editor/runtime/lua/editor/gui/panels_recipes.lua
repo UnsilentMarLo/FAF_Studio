@@ -233,8 +233,15 @@ Panels.Register{
             self:RefreshRows()
             local line, warnings = Recipes.Notes(self.roles)
             W.Fit(self.shaderLine, line, (self.w or 300) - Skin.S(16))
+            local nWarn = 0
             for i = 1, 5 do
                 W.Fit(self.warns[i], warnings[i] or '', (self.w or 300) - Skin.S(16))
+                if warnings[i] then nWarn = i end
+            end
+            -- the warning lines take the room they need: the panel is laid out again when their number changes
+            if nWarn ~= self.warnCount then
+                self.warnCount = nWarn
+                if self.w then self:OnResize(self.w, self.h) end
             end
             for _, s in self.knobSliders do s:Refresh() end
             W.Fit(self.note, 'Rules of the recipe: select a style, then Apply. Kinds with no layer are skipped.', (self.w or 300) - Skin.S(16))
@@ -274,8 +281,12 @@ Panels.Register{
             W.Place(self.shaderLine, group, pad, y)
             y = y + Skin.S(16)
             for i = 1, 5 do
-                W.Place(self.warns[i], group, pad, y)
-                y = y + Skin.S(16)
+                if i <= (self.warnCount or 0) then
+                    W.Place(self.warns[i], group, pad, y)
+                    y = y + Skin.S(16)
+                else
+                    W.Place(self.warns[i], group, -20000, 0)         -- no text: no room (and no scroll range)
+                end
             end
             y = y + Skin.S(4)
             W.Place(self.rolesLabel, group, pad, y)

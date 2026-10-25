@@ -81,13 +81,19 @@ function CullBox(y, h)
     cullBox = y and { y, h } or false
 end
 
---- The vertical extent used for the cull test and for the content height of a placed control.
-local function Extent(ctx, x, y, ch)
+--- The vertical extent used for the cull test and for the content height of a placed control. The control is remembered with its lower edge: the content height is the lowest edge of the controls
+--- that are there and show something (ctx:Measure), so a row reserved for text that is empty, a hidden control or a destroyed one does not leave blank scroll range behind.
+local function Extent(ctx, x, y, ch, c)
     local top, bot = y, y + ch
     if cullBox then top, bot = cullBox[1], cullBox[1] + cullBox[2] end
-    if y >= 0 and x > -1000 and bot > ctx.extent then
-        ctx.extent = bot
-        ctx.dirty = true
+    if y >= 0 and x > -1000 then
+        if c then ctx.items[c] = bot end
+        if bot > ctx.extent then
+            ctx.extent = bot
+            ctx.dirty = true
+        end
+    elseif c then
+        ctx.items[c] = nil
     end
     return top, bot
 end
@@ -107,7 +113,7 @@ function Place(c, parent, x, y, w, h)
     local ctx = parent.scroll
     local top, bot
     if ctx then
-        top, bot = Extent(ctx, x, y, h or c.Height() or Skin.S(14))
+        top, bot = Extent(ctx, x, y, h or c.Height() or Skin.S(14), c)
     end
     c.Left:Set(function() return parent.Left() + x end)
     if ctx then
@@ -137,7 +143,7 @@ function Label(parent, text, x, y, opts)
     t.Left:Set(function() return parent.Left() + x end)
     local ctx = parent.scroll
     if ctx then
-        local top, bot = Extent(ctx, x, y, t.Height())
+        local top, bot = Extent(ctx, x, y, t.Height(), t)
         ScrollTop(t, parent, ctx, y, top, bot)
     else
         t.Top:Set(function() return parent.Top() + y end)
@@ -193,7 +199,7 @@ end
 --- `id` keys the remembered scroll position. Returns the content group (`content.scroll` is the context).
 function ScrollContent(holder, id)
     local c = Skin.color
-    local ctx = { holder = holder, id = id, off = scrollMemory[id] or 0, extent = 0, maxOff = 0, dirty = true }
+    local ctx = { holder = holder, id = id, off = scrollMemory[id] or 0, extent = 0, maxOff = 0, dirty = true, items = {} }
     -- The content group is shifted up by the scroll offset, so its rectangle reaches over whatever lies above the panel (the tab strip of its dock): a scrolled panel
     -- swallowed every click on its own tab strip. The group is therefore not hit tested; the wheel over the empty parts of the panel is caught by a clear bitmap that stays
     -- on the panel's own rectangle.
@@ -251,9 +257,29 @@ function ScrollContent(holder, id)
         ctx.thumb:Show()
     end
 
+    --- The content height from the controls that are there: the lowest lower edge among those that are not hidden, not destroyed and, for a text, not empty.
+    function ctx:Measure()
+        local ext = 0
+        for c, bot in ctx.items do
+            local ok, hidden = pcall(c.IsHidden, c)
+            if not ok then
+                ctx.items[c] = nil
+            elseif not hidden then
+                local empty = false
+                if c.GetText then
+                    local okT, text = pcall(c.GetText, c)
+                    empty = okT and text == ''
+                end
+                if not empty and bot > ext then ext = bot end
+            end
+        end
+        ctx.extent = ext
+    end
+
     --- Re-reads the content height and the panel height (after a layout, a resize or a rebuild).
     function ctx:Update()
         ctx.dirty = false
+        ctx:Measure()
         local view = holder.Height()
         -- a panel that overshoots by a few pixels (a list that ends at the panel's padding) does not scroll
         ctx.maxOff = 0
@@ -316,7 +342,10 @@ end
 --- A panel that rebuilds its controls calls BeginLayout before and EndLayout after: the content height is measured anew.
 function BeginLayout(group)
     local ctx = group.scroll
-    if ctx then ctx.extent = 0 end
+    if ctx then
+        ctx.extent = 0
+        ctx.items = {}
+    end
 end
 
 function EndLayout(group)
@@ -324,10 +353,30 @@ function EndLayout(group)
     if ctx then ctx:Update() end
 end
 
+--- The live scroll contexts, for tests and diagnostics: { { id, view, extent, maxOff, off, ctx }, ... } (the panel height, the measured content height, how far it can scroll).
+function ScrollStats()
+    local list = {}
+    for ctx, _ in scrollLive do
+        local ok, hidden = pcall(ctx.holder.IsHidden, ctx.holder)
+        if ok and not hidden then
+            table.insert(list, { id = ctx.id, view = ctx.holder.Height(), extent = ctx.extent, maxOff = ctx.maxOff, off = ctx.off, ctx = ctx })
+        end
+    end
+    return list
+end
+
 --- Called by the shell's tick: contexts whose content grew since the last update (a Refresh placed something lower) get their bar.
 function ScrollTick()
     for ctx, _ in scrollLive do
-        if ctx.dirty then pcall(ctx.Update, ctx) end
+        local ok, hidden = pcall(ctx.holder.IsHidden, ctx.holder)
+        if ok and not hidden then
+            -- a text that was empty and has a text now (a status line, a warning) counts, one that was emptied does not: the height is measured again
+            local before = ctx.extent
+            ctx:Measure()
+            if ctx.dirty or ctx.extent ~= before then pcall(ctx.Update, ctx) end
+        elseif ctx.dirty then
+            pcall(ctx.Update, ctx)
+        end
     end
 end
 
@@ -464,6 +513,26 @@ function VirtualList(parent, opts)
     end
     L.bg.HandleEvent = Wheel
 
+    --- Places a part of the list (a row, a bar) at (x, y) inside the list. In a scrolling panel (L.holder) the part is shown only when it lies completely inside the panel's rectangle;
+    --- `whole`: only when the whole list does (the bars).
+    local function PlaceInList(c, x, y, w, h, whole)
+        local holder = L.holder
+        if not holder then
+            Place(c, L.root, x, y, w, h)
+            return
+        end
+        c.Left:Set(function() return L.root.Left() + x end)
+        c.Top:Set(function()
+            local t = L.root.Top()
+            local lo, hi = t + y, t + y + h
+            if whole then lo, hi = t, t + L.h end
+            if lo < holder.Top() or hi > holder.Bottom() then return -20000 end
+            return t + y
+        end)
+        c.Width:Set(w)
+        c.Height:Set(h)
+    end
+
     local function EnsureRows(n)
         while table.getn(L.rows) < n do
             local i = table.getn(L.rows) + 1
@@ -571,12 +640,12 @@ function VirtualList(parent, opts)
         if L.barX ~= tx or L.barH ~= trackH or L.barW ~= sw then
             L.barX, L.barH, L.barW = tx, trackH, sw
             L.track:SetSolidColor('50000000')
-            Place(L.track, L.root, tx, 0, sw, trackH)
+            PlaceInList(L.track, tx, 0, sw, trackH, true)
         end
         L.thumb:SetSolidColor(L.thumbHot and c.accent or c.textDim)
         if L.thumbY ~= ty or L.thumbH ~= thumbH or L.thumbX ~= tx then
             L.thumbY, L.thumbH, L.thumbX = ty, thumbH, tx
-            Place(L.thumb, L.root, tx, ty, sw, thumbH)
+            PlaceInList(L.thumb, tx, ty, sw, thumbH, true)
         end
         L.track:Show()
         L.thumb:Show()
@@ -596,7 +665,7 @@ function VirtualList(parent, opts)
                 local gy = (i - 1) * L.rowH
                 if row.gy ~= gy or row.gw ~= rowW or row.gh ~= L.rowH then
                     row.gy, row.gw, row.gh = gy, rowW, L.rowH
-                    Place(row.bg, L.root, 0, gy, rowW, L.rowH)
+                    PlaceInList(row.bg, 0, gy, rowW, L.rowH)
                 end
                 row.bg:Show()
                 row.text:Show()
@@ -618,7 +687,33 @@ function VirtualList(parent, opts)
 
     function L:SetRect(x, y, w, h)
         L.x, L.y, L.w, L.h = x, y, w, h
-        Place(L.root, parent, x, y, w, h)
+        local ctx = parent.scroll
+        if ctx then
+            -- A list in a scrolling panel is not shown or hidden as a whole (a tall list vanished with a blank band where it had been as soon as one row left the panel): the list stays
+            -- where it is, its rows (whole rows only), its bars and its background follow the panel's rectangle one by one.
+            L.holder = ctx.holder
+            ctx.items[L.root] = y + h
+            if y >= 0 and y + h > ctx.extent then
+                ctx.extent = y + h
+                ctx.dirty = true
+            end
+            L.root.Left:Set(function() return parent.Left() + x end)
+            L.root.Top:Set(function() return parent.Top() + y end)
+            L.root.Width:Set(w)
+            L.root.Height:Set(h)
+            L.bg.Top:Set(function()
+                local t = L.root.Top()
+                if t < ctx.holder.Top() then t = ctx.holder.Top() end
+                return t
+            end)
+            L.bg.Bottom:Set(function()
+                local b = L.root.Bottom()
+                if b > ctx.holder.Bottom() then b = ctx.holder.Bottom() end
+                return math.max(b, L.bg.Top())
+            end)
+        else
+            Place(L.root, parent, x, y, w, h)
+        end
         L:Refresh()
     end
 
