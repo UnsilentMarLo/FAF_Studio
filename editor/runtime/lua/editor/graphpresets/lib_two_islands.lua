@@ -197,6 +197,7 @@ Graph = {
         },
     },
     ['seed'] = 26,
+    ['symmetry'] = 'mirror_x',
     ['version'] = 1,
     ['view'] = {
         ['x'] = 20,

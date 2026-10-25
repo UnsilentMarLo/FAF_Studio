@@ -5,32 +5,80 @@ Graph = {
     ['nodes'] = {
         {
             ['id'] = 1,
-            ['params'] = { ['octaves'] = 5, ['scale'] = 90 },
+            ['params'] = {
+                ['basis'] = 'perlin',
+                ['octaves'] = 5,
+                ['persistence'] = 0.5,
+                ['scale'] = 90,
+                ['seed'] = 1,
+            },
             ['type'] = 'ridged',
             ['x'] = 0,
             ['y'] = 0,
         },
-        { ['id'] = 2, ['params'] = { ['hi'] = 95, ['lo'] = 25 }, ['type'] = 'range', ['x'] = 224, ['y'] = 0 },
+        {
+            ['id'] = 2,
+            ['params'] = {
+                ['hi'] = 35.69415,
+                ['lo'] = 25,
+            },
+            ['type'] = 'range',
+            ['x'] = 224,
+            ['y'] = 0,
+        },
         {
             ['id'] = 3,
-            ['params'] = { ['limit'] = 0.75, ['mode'] = 'lower' },
+            ['params'] = {
+                ['balance'] = 0.5,
+                ['limit'] = 0.75,
+                ['margin'] = 0.02,
+                ['mode'] = 'lower',
+                ['strength'] = 1,
+            },
             ['type'] = 'slope_limit',
             ['x'] = 448,
             ['y'] = 0,
         },
-        { ['id'] = 4, ['params'] = {}, ['type'] = 'out_height', ['x'] = 672, ['y'] = 0 },
+        {
+            ['id'] = 4,
+            ['params'] = {
+                ['gain'] = 1,
+                ['mode'] = 'replace',
+                ['strength'] = 1,
+            },
+            ['type'] = 'out_height',
+            ['x'] = 672,
+            ['y'] = 0,
+        },
         {
             ['id'] = 5,
-            ['params'] = { ['which'] = 'passable' },
+            ['params'] = {
+                ['class'] = '1',
+                ['soft'] = 0.05,
+                ['which'] = 'passable',
+            },
             ['type'] = 'unit_slope',
             ['x'] = 672,
             ['y'] = 152,
         },
-        { ['id'] = 6, ['params'] = { ['mode'] = 'size' }, ['type'] = 'regions', ['x'] = 896, ['y'] = 152 },
+        {
+            ['id'] = 6,
+            ['params'] = {
+                ['connectivity'] = '8',
+                ['mode'] = 'size',
+            },
+            ['type'] = 'regions',
+            ['x'] = 896,
+            ['y'] = 152,
+        },
     },
     ['seed'] = 15,
     ['version'] = 1,
-    ['view'] = { ['x'] = 20, ['y'] = 20, ['zoom'] = 0.8 },
+    ['view'] = {
+        ['x'] = 20,
+        ['y'] = 20,
+        ['zoom'] = 0.8,
+    },
     ['wires'] = {
         {
             1,

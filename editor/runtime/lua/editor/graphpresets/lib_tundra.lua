@@ -27,7 +27,7 @@ Graph = {
         {
             ['id'] = 3,
             ['params'] = {
-                ['hi'] = 56,
+                ['hi'] = 52.94528,
                 ['lo'] = 30,
             },
             ['type'] = 'range',
@@ -177,12 +177,12 @@ Graph = {
         {
             ['id'] = 18,
             ['params'] = {
-                ['below'] = 10,
+                ['below'] = 5,
                 ['edge'] = 20,
                 ['measure'] = 12,
-                ['radius'] = 50,
+                ['radius'] = 20,
                 ['soft'] = 6,
-                ['strength'] = 0.9,
+                ['strength'] = 0.7,
             },
             ['type'] = 'flatten',
             ['x'] = 1752,
@@ -190,6 +190,7 @@ Graph = {
         },
     },
     ['seed'] = 36,
+    ['symmetry'] = 'rot2',
     ['version'] = 1,
     ['view'] = {
         ['x'] = 20,

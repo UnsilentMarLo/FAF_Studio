@@ -24,6 +24,7 @@
 local Fields = import('/lua/editor/fields.lua')
 local World = import('/lua/editor/world.lua')
 local Strata = import('/lua/editor/strata.lua')
+local GenSym = import('/lua/editor/gensym.lua')
 
 -- ---- the catalogue ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -143,7 +144,10 @@ function NewContext(S, opts)
     local w, h, cell = Fields.Info(H)
     local hmin, hmax = Fields.Stats(H)
     local world = World.Get()
-    return { S = S, H = H, w = w, h = h, cell = cell, step = step, hmin = hmin, hmax = hmax, water = world.water_elev or 0, cache = {} }
+    -- symmetry: what the writers (WriteLayer, WriteTypes, recipes.lua) make symmetric. opts.symmetry = a spec (gensym.lua), false for none; not given: the editor's symmetry
+    local symmetry = opts.symmetry
+    if symmetry == nil then symmetry = GenSym.FromEditor() end
+    return { S = S, H = H, w = w, h = h, cell = cell, step = step, hmin = hmin, hmax = hmax, water = world.water_elev or 0, cache = {}, symmetry = symmetry }
 end
 
 local function Samples(c, units)
@@ -543,6 +547,7 @@ function WriteLayer(c, m, layer, target, noPush)
     if why then return nil, why end
     EnsureShader(layer)
     local S = c.S
+    m = GenSym.Field(S, m, c.symmetry, { seam = 8 })
     if target.takeAway then m = Op(c, 'mul', { a = m, b = FreeAbove(c, layer) }) end
     local old = S:Stratum(layer)
     local onGrid = Op(c, 'resample', { a = m, like = old })
@@ -575,6 +580,7 @@ end
 --- Writes terrain type `code` into the terrain-type grid where `m` is above `threshold`. Returns the undo entry (pushed unless noPush) and the cells changed.
 function WriteTypes(c, m, code, threshold, noPush)
     local S = c.S
+    m = GenSym.Field(S, m, c.symmetry, { seam = 8 })
     local tt = S:Add(Fields.TerrainTypes())
     local onGrid = Op(c, 'resample', { a = m, like = tt })
     local sel = Op(c, 'threshold', { a = onGrid, value = threshold })

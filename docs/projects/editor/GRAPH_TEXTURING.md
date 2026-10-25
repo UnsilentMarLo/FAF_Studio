@@ -96,3 +96,37 @@ chain per layer, `Select Convexity / Slope / Wetness / Height -> Bias/Gain -> Bl
   is how much. The upgrade script wires the last erosion before the height output of every graph that has one; the Open valley graph now has two erosions (droplet, hydraulic) like the reference.
 * The map-wide pictures (normal map, roughness) are outputs of the project: `Texture, roughness and colour pass` has Output: map normal map and Output: map lighting now.
 * Ramps by erosion are not made; the Base pads and Slope limit nodes do the playability part.
+
+## Heights of the shipped graphs (2026-10-25)
+
+Measured with `scripts/graph_height_audit.py` (builds every graph on a 512 map: min / max, land percentiles, mean slope, share over 5 and 30 degrees). The reference are the maps of the
+user's Maps folder (`scripts/map_texture_stats.py`, 143 maps of 512 and 161 of 1024): mean slope 4 to 18 degrees (median 10), 3 to 22 percent of the ground over 30 degrees (median 11), land
+heights from the 5th to the 95th percentile spanning 6 to 33 units (median 18), highest minus lowest point 15 to 89 (median 38).
+
+* **Too tall and too steep**: `mountains` (mean slope 44, 78 percent over 30 degrees), `badlands` (44 / 90), `pathing` (41 / 93), `lib_alpine` (54, 141 units high), `lib_highlands`, `lib_volcano` (133 units),
+  `archipelago`, `lib_archipelago_fair`, `lib_desert_dunes`, `lib_badlands`, `lib_ffa4_diag`, `pathable`. Their `Height range` node spans 50 to 130 units over features a few hundred units wide.
+* **Flat**: `lib_hex6`, `lib_tundra`, `lib_wetlands`, `plains`, `lib_ffa4_corners` came out at 2 degrees and 3 units of relief: the Flatten node that the upgrade script put into the gentle
+  graphs (below 8 to 12 degrees, radius 40 to 60, strength 0.9) blurred nearly all of the ground, since nearly all of it is under 12 degrees. They now flatten under 5 degrees at radius 20, strength 0.7.
+  `layout_terrain` is flat while the Layout workspace is empty: the build now warns (Map layout: heights has nothing to read).
+* `scripts/graph_height_tune.py` (with `graph_height_tune.lua`) scales the span of the `Height range` node of a graph until the mean slope of the built result is the target (secant on the
+  log of the span, 12 percent tolerance; `maxspan` caps a landscape with one tall feature, the volcano) and writes the graph; `graph_preset_install.py` copies it. Targets: mountains 22, alpine 26,
+  highlands 22, badlands 22, volcano 22 (span at most 70), dunes 18, islands 15 to 18, symmetric mountains (ffa4 diag) 18, pathable ones 14, gentle ones 5 to 8.
+  Result on the 512 map: mean slope 15 to 29 for the rough graphs (alpine 29, mountains 25), 4.5 to 8 for the gentle ones, no graph over 70 units of total relief except `lib_tropics` /
+  `lib_two_islands` (islands, 75 units from the sea floor).
+
+## Texture sets and recipe styles measured on the maps (2026-10-25)
+
+* `scripts/map_texture_stats.py` parses every `.scmap` of a maps folder with `scripts/pylib/scmap.py` (pure Python, 345 of 352 maps; 7 are campaign stubs) and writes `.runs/maptex/maps.json`: per map the
+  strata textures and tile sizes, per layer how much it covers and where (mean slope, height percentile, height over the surroundings, share of the cells in transition, weight per slope bin and per height decile).
+* `scripts/map_texture_presets.py` turns it into `editor/runtime/lua/editor/mapsets.lua` (generated; `texsets.lua` and `recipes.lua` read it):
+  1. every painted layer gets a kind of ground from the words of its texture name and from where it lies (a "grass" that lies on 30 degree slopes is rock; a dark sand that covers the flats is dirt);
+  2. a map is a palette (kind -> texture); palettes whose textures are not in the game data are dropped (191 of 345 maps give a usable palette, the rest paint with their own files or fewer than four kinds);
+     similar palettes are one cluster;
+  3. the families (the environment of the main ground texture: Evergreen 2, Desert, Paradise, Red barrens, Tropical, Ancient earth, Evergreen, Swamp, Lava, Geothermal, Crystalline, Tundra) give 35 texture
+     sets, the most used, most different palettes of each ("Evergreen 2: Operation Thor (7 maps)" ...);
+  4. one **recipe style per family**, measured: the slope where the rock layers reach half and nine tenths of their weight (rock and cliff slope: 12 to 22 and 18 to 43 degrees; the defaults 34 / 52 were
+     far too steep for what authors paint), snow share, the dirt share of flat ground, beach and wet strip from the sand and wet layers, dark rock, crispness of the masks (from 0.33 for Paradise to 0.5 for Evergreen 2).
+* In the editor: Textures panel, **Texture set** menu: the built-in sets, then "Measured on your maps" with a submenu per family. Choosing a set also selects the recipe style of its family (the message says so).
+  The Stratum recipes **Style** button is now a menu of all styles (the built-in ones, then `<Family> (from N maps)`). The sets of the maps are not used to guess the kind of ground of a texture (`RoleOfTexture` skips
+  them: the same texture is another kind of ground on another map). `selftest_recipes` checks that every texture of every set exists, every style names a recipe knob inside its slider range.
+* Open: the maps' tile sizes (`scale`) are collected but sets still use the Optimal tile size of `texscale.lua`; layer masks' noise scale (patch size) is not measured.

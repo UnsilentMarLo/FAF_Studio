@@ -18,6 +18,7 @@ local MaskGen = import('/lua/editor/maskgen.lua')
 local Map = import('/lua/editor/map.lua')
 local Props = import('/lua/editor/props.lua')
 local Symmetry = import('/lua/editor/symmetry.lua')
+local GenSym = import('/lua/editor/gensym.lua')
 local History = import('/lua/editor/history.lua')
 
 Settings = {
@@ -58,7 +59,7 @@ local PI2 = 6.2831853
 
 --- Where the props go. Returns the list { bp, x, z, heading, scale } and a report { attempts, tooClose, rejected, placed }, or nil and a message.
 function Plan(opts)
-    -- opts (the terrain graph, graphrun.lua): settings, entries, density (a mask field, instead of the Density rules)
+    -- opts (the terrain graph, graphrun.lua): settings, entries, density (a mask field, instead of the Density rules), symmetry (a spec of gensym.lua, false = none; default: the editor's)
     opts = opts or {}
     local s = opts.settings or Settings
     local entries = opts.entries or ((s.mode == 'decals') and DecalEntries or Entries)
@@ -141,7 +142,8 @@ function Plan(opts)
         local report = { attempts = 0, tooClose = 0, rejected = 0, placed = 0, open = openMax, water = c.water }
         local maxAttempts = math.min(600000, math.max(2000, s.count * 60))
         local limit = math.max(1, math.floor(s.count))
-        local symmetric = Symmetry.Mode ~= 'off'
+        local sym = opts.symmetry
+        if sym == nil then sym = GenSym.FromEditor() end
         while table.getn(out) < limit and report.attempts < maxAttempts do
             report.attempts = report.attempts + 1
             local x = margin + R.next() * span
@@ -151,7 +153,7 @@ function Plan(opts)
             if a <= 0.001 or roll > a * s.fill then
                 report.rejected = report.rejected + 1
             else
-                local images = Symmetry.Points(x, z)
+                local images = sym and GenSym.Points(sym, x, z) or { { x = x, z = z, kind = 'id', angle = 0 } }
                 local ok = true
                 for _, im in images do
                     if im.x < margin or im.z < margin or im.x > size - margin or im.z > size - margin or Near(im.x, im.z) then ok = false break end

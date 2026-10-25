@@ -27,7 +27,7 @@ Graph = {
         {
             ['id'] = 3,
             ['params'] = {
-                ['hi'] = 60,
+                ['hi'] = 55.66452,
                 ['lo'] = 28,
             },
             ['type'] = 'range',
@@ -187,6 +187,7 @@ Graph = {
                 ['crisp'] = 0.45,
                 ['dark'] = 0.5,
                 ['dirt'] = 0.38,
+                ['erosion'] = 0.7,
                 ['fine'] = 0.35,
                 ['high'] = 0.5,
                 ['patch'] = 50,
@@ -214,12 +215,12 @@ Graph = {
         {
             ['id'] = 19,
             ['params'] = {
-                ['below'] = 12,
+                ['below'] = 5,
                 ['edge'] = 20,
                 ['measure'] = 12,
-                ['radius'] = 40,
+                ['radius'] = 20,
                 ['soft'] = 6,
-                ['strength'] = 0.9,
+                ['strength'] = 0.7,
             },
             ['type'] = 'flatten',
             ['x'] = 2424,
@@ -227,6 +228,16 @@ Graph = {
         },
     },
     ['seed'] = 25,
+    ['symmetry'] = {
+        nil,
+        nil,
+        nil,
+        nil,
+        nil,
+        nil,
+        ['mode'] = 'rotn',
+        ['n'] = 6,
+    },
     ['version'] = 1,
     ['view'] = {
         ['x'] = 20,

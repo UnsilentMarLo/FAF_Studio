@@ -55,7 +55,7 @@ Graph = {
         {
             ['id'] = 5,
             ['params'] = {
-                ['hi'] = 60,
+                ['hi'] = 14.26804,
                 ['lo'] = 6,
             },
             ['type'] = 'range',
@@ -262,6 +262,7 @@ Graph = {
         },
     },
     ['seed'] = 27,
+    ['symmetry'] = 'rot4',
     ['version'] = 1,
     ['view'] = {
         ['x'] = 20,

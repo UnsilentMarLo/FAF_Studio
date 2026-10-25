@@ -80,7 +80,7 @@ end
 -- ---- undo -------------------------------------------------------------------------------------------------------------------------------------------
 
 local function Data()
-    return { seed = Current.seed, nodes = Copy(Current.nodes), wires = Copy(Current.wires), nextId = Current.nextId }
+    return { seed = Current.seed, symmetry = Copy(Current.symmetry), nodes = Copy(Current.nodes), wires = Copy(Current.wires), nextId = Current.nextId }
 end
 
 function Snapshot()
@@ -89,6 +89,7 @@ end
 
 local function Restore(snap)
     Current.seed = snap.seed
+    Current.symmetry = Copy(snap.symmetry)
     Current.nodes = Copy(snap.nodes)
     Current.wires = Copy(snap.wires)
     Current.nextId = snap.nextId
@@ -136,6 +137,7 @@ function Replace(plain, label)
     local g = Normalize(plain)
     Edit(label or 'load graph', function()
         Current.seed = g.seed
+        Current.symmetry = g.symmetry
         Current.nodes = g.nodes
         Current.wires = g.wires
         Current.nextId = g.nextId
@@ -226,6 +228,11 @@ function SetParams(id, values, label)
     Edit(label or 'set parameters', function()
         for k, v in values do n.params[k] = Copy(v) end
     end)
+end
+
+--- The symmetry of what the graph writes (gensym.lua): nil / 'map' follows the editor's symmetry, 'off', a symmetrize mode, or { mode = 'rotn', n }.
+function SetSymmetry(setting)
+    Edit('symmetry', function() Current.symmetry = Copy(setting) end)
 end
 
 function SetSeed(seed)
@@ -513,7 +520,7 @@ function Plain(graph)
     local wires = {}
     for _, w in graph.wires do table.insert(wires, { w[1], w[2], w[3], w[4] }) end
     local view = graph.view or { x = 0, y = 0, zoom = 1 }
-    return { version = 1, name = graph.name, seed = graph.seed, nodes = nodes, wires = wires, nextId = graph.nextId, view = { x = view.x, y = view.y, zoom = view.zoom } }
+    return { version = 1, name = graph.name, seed = graph.seed, symmetry = Copy(graph.symmetry), nodes = nodes, wires = wires, nextId = graph.nextId, view = { x = view.x, y = view.y, zoom = view.zoom } }
 end
 
 function Text(graph)
@@ -524,6 +531,7 @@ end
 function Normalize(data)
     local g = Fresh(data.name)
     g.seed = data.seed or 1
+    g.symmetry = Copy(data.symmetry)
     local maxId = 0
     for _, n in (data.nodes or {}) do
         local c = { id = n.id, type = n.type, x = n.x or 0, y = n.y or 0, params = Copy(n.params or {}), label = n.label, off = n.off }

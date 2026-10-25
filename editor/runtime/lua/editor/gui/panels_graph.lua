@@ -1118,6 +1118,23 @@ Panels.Register{
             local ok, gal = pcall(import, '/lua/editor/gui/panels_graphgallery.lua')
             if ok and gal.Make then gal.Make() end
         end))
+        -- the symmetry of what the graph writes (gensym.lua): the result is made symmetric where it leaves the graph, whatever the nodes before did
+        Pn.bSym = Add(Btn('Symmetry: ...', 190, function()
+            local GenSym = import('/lua/editor/gensym.lua')
+            local Menu = import('/lua/editor/gui/menu.lua')
+            local items = {}
+            local cur = GenSym.Key(Graph.Current.symmetry)
+            for _, ch in GenSym.Choices_ do
+                local choice = ch
+                table.insert(items, { title = choice.label, checked = (choice.id == cur), run = function()
+                    local setting = choice.id
+                    if string.sub(setting, 1, 4) == 'rotn' then setting = { mode = 'rotn', n = tonumber(string.sub(setting, 5)) } end
+                    Graph.SetSymmetry(setting)
+                    Pn:Tick(true)
+                end })
+            end
+            Menu.Show(GetFrame(0), Pn.bSym.Left(), Pn.bSym.Bottom(), items)
+        end, { tip = 'The symmetry of the result. Heights, paint, terrain types and props are made symmetric when the graph writes them (the master part is copied over the rest), so erosion, noise and random scatter after a Symmetrize node do not break it. "Follow the map" uses the Symmetry panel (found from the start positions).' }))
         Pn.seedLabel = W.Label(group, 'seed 0000', 0, 0, { color = c.text })
         Pn.seedW = Pn.seedLabel.Width()     -- the toolbar reserves the width of the widest seed text: a seed that grows from 'seed 4' to 'seed 9999' used to run into the Seed + button
         Add(Btn('Seed -', 50, function() Graph.SetSeed(Graph.Current.seed - 1) Pn:Tick(true) end)).seedAfter = true
@@ -1138,6 +1155,26 @@ Panels.Register{
         function Pn:UpdateStatus()
             local g = Graph.Current
             self.seedLabel:SetText('seed ' .. g.seed)
+            do
+                local GenSym = import('/lua/editor/gensym.lua')
+                local k = GenSym.Key(g.symmetry)
+                local text = 'Symmetry: ' .. GenSym.Label(g.symmetry)
+                if k == 'map' then
+                    local Symmetry = import('/lua/editor/symmetry.lua')
+                    text = 'Symmetry: map (' .. string.lower(Symmetry.LabelOf(Symmetry.Mode)) .. ')'
+                end
+                if self.symText ~= text then
+                    self.symText = text
+                    if self.bSym then
+                        self.bSym:SetText(text)
+                        local maxW = self.bSym.Width() - Skin.S(12)
+                        if self.bSym.label.Width() > maxW then
+                            W.Fit(self.bSym.label, text, maxW)
+                            W.Center(self.bSym.label, self.bSym, 0, 0, self.bSym.Width(), self.bSym.Height())
+                        end
+                    end
+                end
+            end
             if not self.w then return end
             local rep = GRun.Report
             local line = state.text

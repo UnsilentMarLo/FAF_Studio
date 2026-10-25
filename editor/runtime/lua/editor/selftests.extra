@@ -47,3 +47,4 @@ selftest_slope
 selftest_shaders
 selftest_layout
 selftest_kinds
+selftest_gensym

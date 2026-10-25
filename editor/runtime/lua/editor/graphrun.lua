@@ -20,6 +20,7 @@ local History = import('/lua/editor/history.lua')
 local Terrain = import('/lua/editor/terrain.lua')
 local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 local World = import('/lua/editor/world.lua')
+local GenSym = import('/lua/editor/gensym.lua')
 
 -- ---- the map's ground before the graph (the "Map heights" node reads this) -----------------------------------------------------------------------------
 
@@ -507,14 +508,16 @@ function FinalHeight(run, S, base)
     local cur = base
     local plain = true
     local any = false
+    local spec = GenSym.Spec(graph.symmetry)          -- what the graph writes is symmetric (gensym.lua): the nodes after a Symmetrize node (erosion, noise) break it again
     for _, node in OutputNodes(graph, 'height') do
         local entry = run.cache[node.id]
         if entry and entry.outs and entry.outs.view then
-            local field = entry.outs.view
+            local field = GenSym.Field(S, entry.outs.view, spec, { seam = 12 })
             local mode = V(run, node, 'mode')
             local strength = V(run, node, 'strength')
             local maskWire = Graph.WireInto(node.id, 'mask')
             local mask = maskWire and run:Value(maskWire[1], maskWire[2]) or nil
+            if mask then mask = GenSym.Field(S, mask, spec, { seam = 12 }) end
             any = true
             if mode == 'replace' and strength >= 0.9999 and not mask then
                 cur = field
@@ -943,6 +946,16 @@ function Build()
         end
     end
     local result = { changed = 0, layers = 0, types = 0, props = 0 }
+    -- a graph that reads the drawing of the Layout workspace has nothing to build from while nothing is drawn: say so instead of building flat ground
+    for _, n in graph.nodes do
+        if n.type == 'layout_height' and not n.off then
+            local okLayout, Layout = pcall(import, '/lua/editor/layout.lua')
+            if okLayout and Layout and not Layout.Drawn() then
+                result.warnings = result.warnings or {}
+                table.insert(result.warnings, { text = 'Map layout: heights has nothing to read, the Layout workspace is empty (draw layers there, or start from one of its templates).', code = 'layout', node = n.id })
+            end
+        end
+    end
     local depthBefore = History.Depth()
     local pushed = 0
     local failure = nil         -- a failure the build reports on purpose (a plain message, no traceback)
@@ -957,7 +970,8 @@ function Build()
         end
         -- texture layers
         local MaskGen = import('/lua/editor/maskgen.lua')
-        local c = MaskGen.NewContext(S, { step = 1 })
+        local spec = GenSym.Spec(graph.symmetry)
+        local c = MaskGen.NewContext(S, { step = 1, symmetry = spec })          -- the writers make the masks and the terrain types symmetric
         for _, node in OutputNodes(graph, 'layer') do
             local m = run:Value(node.id, 'view')
             local layer, whyNot, needsTexture = NodeLayer(run, node)
@@ -1024,6 +1038,7 @@ function Build()
         local Scatter = import('/lua/editor/scatter.lua')
         for _, node in OutputNodes(graph, 'scatter') do
             local density = run:Value(node.id, 'view')
+            if density then density = GenSym.Field(S, density, spec, { seam = 8 }) end
             local entries = node.params.entries or {}
             if table.getn(entries) > 0 then
                 local kind = V(run, node, 'kind')
@@ -1034,7 +1049,7 @@ function Build()
                     margin = V(run, node, 'margin'), underWater = V(run, node, 'underWater'),
                 }
                 settings.seed = math.mod((run.seed or graph.seed) * 1009 + node.id * 101 + math.floor(V(run, node, 'seed')), 1000003)
-                local plan, rep = Scatter.Plan{ settings = settings, entries = entries, density = density }
+                local plan, rep = Scatter.Plan{ settings = settings, entries = entries, density = density, symmetry = spec }
                 if plan then
                     local n = Scatter.Place(plan, 'terrain graph props', kind)
                     result.props = result.props + (n or 0)

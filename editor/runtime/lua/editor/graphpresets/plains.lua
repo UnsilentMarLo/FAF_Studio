@@ -18,7 +18,7 @@ Graph = {
         {
             ['id'] = 2,
             ['params'] = {
-                ['hi'] = 40,
+                ['hi'] = 42.31761,
                 ['lo'] = 32,
             },
             ['type'] = 'range',
@@ -116,6 +116,7 @@ Graph = {
                 ['crisp'] = 0.45,
                 ['dark'] = 0.5,
                 ['dirt'] = 0.38,
+                ['erosion'] = 0.7,
                 ['fine'] = 0.35,
                 ['high'] = 0.5,
                 ['patch'] = 50,
@@ -143,12 +144,12 @@ Graph = {
         {
             ['id'] = 11,
             ['params'] = {
-                ['below'] = 8,
+                ['below'] = 5,
                 ['edge'] = 20,
                 ['measure'] = 12,
-                ['radius'] = 50,
+                ['radius'] = 20,
                 ['soft'] = 6,
-                ['strength'] = 0.9,
+                ['strength'] = 0.7,
             },
             ['type'] = 'flatten',
             ['x'] = 632,

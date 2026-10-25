@@ -21,6 +21,7 @@
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
 local Fields = import('/lua/editor/fields.lua')
+local GenSym = import('/lua/editor/gensym.lua')
 
 Blends = { 'add', 'multiply', 'max', 'min', 'replace' }
 BlendNames = { add = 'Add', multiply = 'Multiply', max = 'Raise only', min = 'Lower only', replace = 'Replace' }
@@ -291,6 +292,12 @@ function Build(p)
         local mask, maskWhy = MaskField(S, H, p)
         if maskWhy then return nil, maskWhy end
         local G = Relief(S, H, p)
+        -- the editor's symmetry (Symmetry panel): what is generated is symmetric, so the ground stays so (p.symmetric = false leaves the relief as it is)
+        local sym = (p.symmetric ~= false) and GenSym.FromEditor() or false
+        if sym then
+            G = GenSym.Field(S, G, sym, { seam = 12 })
+            if mask then mask = GenSym.Field(S, mask, sym, { seam = 12 }) end
+        end
         local o = { mode = p.blend, strength = p.strength, mask = mask, feather = math.max(4, p.flatRadius * 0.6) }
         if p.keepFlat then o.pts = Pads(p) end
         if p.keepWater then o.water = WaterLevel() end

@@ -171,6 +171,7 @@ Graph = {
                 ['crisp'] = 0.45,
                 ['dark'] = 0.5,
                 ['dirt'] = 0.38,
+                ['erosion'] = 0.7,
                 ['fine'] = 0.35,
                 ['high'] = 0.5,
                 ['patch'] = 50,
@@ -197,6 +198,7 @@ Graph = {
         },
     },
     ['seed'] = 38,
+    ['symmetry'] = 'rot2',
     ['version'] = 1,
     ['view'] = {
         ['x'] = 20,

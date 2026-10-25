@@ -31,7 +31,7 @@ Graph = {
         {
             ['id'] = 3,
             ['params'] = {
-                ['hi'] = 80,
+                ['hi'] = 51.22897,
                 ['lo'] = 26,
             },
             ['type'] = 'range',
@@ -172,6 +172,7 @@ Graph = {
         },
     },
     ['seed'] = 24,
+    ['symmetry'] = 'mirror_xz',
     ['version'] = 1,
     ['view'] = {
         ['x'] = 20,

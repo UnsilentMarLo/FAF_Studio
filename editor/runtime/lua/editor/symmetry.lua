@@ -48,8 +48,9 @@ local function Add(list, x, z, yawKind, angle)
     table.insert(list, { x = x, z = z, kind = yawKind, angle = angle })
 end
 
---- The images of the point (x, z) under `mode` about the centre (cx, cz): the point itself first. Points uses the current mode and centre; the detection tries the others.
-function PointsFor(mode, cx, cz, x, z)
+--- The images of the point (x, z) under `mode` about the centre (cx, cz): the point itself first. Points uses the current mode and centre; the detection tries the others. The generators
+--- (gensym.lua) also use 'adiag' (the anti-diagonal alone) and 'rotn' (n turns, n >= 2).
+function PointsFor(mode, cx, cz, x, z, n)
     local list = { { x = x, z = z, kind = 'id', angle = 0 } }
     if mode == 'off' then return list end
     local dx, dz = x - cx, z - cz
@@ -69,6 +70,15 @@ function PointsFor(mode, cx, cz, x, z)
         Add(list, cx + dz, cz - dx, 'rot', PI / 2)
     elseif mode == 'diag' then
         Add(list, cx + dz, cz + dx, 'dg', 0)
+    elseif mode == 'adiag' then
+        Add(list, cx - dz, cz - dx, 'da', 0)
+    elseif mode == 'rotn' then
+        local count = math.max(2, math.floor((n or 3) + 0.5))
+        for k = 1, count - 1 do
+            local a = 2 * PI * k / count
+            local c, s = math.cos(a), math.sin(a)
+            Add(list, cx + dx * c - dz * s, cz + dx * s + dz * c, 'rot', -a)
+        end
     elseif mode == 'diag_both' then
         Add(list, cx + dz, cz + dx, 'dg', 0)          -- across the diagonal x = z
         Add(list, cx - dz, cz - dx, 'da', 0)          -- across the other diagonal

@@ -37,7 +37,7 @@ def run(tag, lua, timeout=900):
     path = os.path.join(EI.inst_dir(tag), 'lab_cmd.lua')
     with open(path, 'w') as f:
         f.write(lua)
-    r = subprocess.run([sys.executable, os.path.join(HERE, 'editor_inst.py'), 'cmd', tag, path, '--timeout', str(timeout), '--chars', '6000'], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, os.path.join(HERE, 'editor_inst.py'), 'cmd', tag, path, '--timeout', str(timeout), '--chars', '20000'], capture_output=True, text=True)
     return (r.stdout + r.stderr).strip()
 
 

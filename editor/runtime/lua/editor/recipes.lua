@@ -55,6 +55,7 @@ local MaskGen = import('/lua/editor/maskgen.lua')
 local Strata = import('/lua/editor/strata.lua')
 local Detect = import('/lua/editor/roledetect.lua')
 local World = import('/lua/editor/world.lua')
+local GenSym = import('/lua/editor/gensym.lua')
 
 local function Rule(type, values, op, invert)
     local r = MaskGen.NewRule(type)
@@ -801,6 +802,7 @@ function WriteTargets(S, c, plan, roles, target, groups, o)
         for layer = cap, 1, -1 do
             local t = target[layer]
             if t then
+                t = GenSym.Field(S, t, c.symmetry, { seam = 8 })          -- the cascade, the layers and the terrain types below are made of the symmetric weights
                 local cum = S:Op('invert', { a = free, lo = 0, hi = 1 })
                 local rec = S:Op('remap', { a = cum, points = RECIP_POINTS, smooth = 1 })
                 local m = S:Op('clamp', { a = S:Op('mul', { a = t, b = rec }), lo = 0, hi = 1 })
