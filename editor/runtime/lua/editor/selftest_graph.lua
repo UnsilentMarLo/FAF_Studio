@@ -242,7 +242,8 @@ function Run(verbose)
     local fs, fb = small:Value(r1.id, 'out'), big:Value(r1.id, 'out')
     local match = true
     for _, ij in { { 3, 5 }, { 10, 20 }, { 30, 30 }, { 50, 7 } } do
-        if Fields.Get(fs, ij[1], ij[2]) ~= Fields.Get(fb, ij[1] * 4, ij[2] * 4) then match = false end
+        -- the two runs place the sample positions with different float rounding (differences of about 1e-5 on heights of 30): equal to a thousandth of a unit is the same noise
+        if math.abs(Fields.Get(fs, ij[1], ij[2]) - Fields.Get(fb, ij[1] * 4, ij[2] * 4)) > 0.001 then match = false end
     end
     local sw = Fields.Info(fs)
     small:Free()
