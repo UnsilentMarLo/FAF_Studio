@@ -30,6 +30,8 @@ local function Sum(layer)
 end
 
 function Run()
+    local resWas = Layout.DefaultRes
+    Layout.DefaultRes = 128                                    -- the checks below count cells
     local failures, lines = {}, {}
     local function check(name, ok, detail)
         if ok then
@@ -144,6 +146,7 @@ function Run()
     if not w or not Fields.IsAvailable() then
         table.insert(lines, '  (no map: the generator checks are skipped)')
         Symmetry.SetMode(symWas)
+        Layout.DefaultRes = resWas
         if docWas then Layout.Load(docWas) else Layout.New({}) end
         return Done()
     end
@@ -417,6 +420,27 @@ function Run()
     Layout.New({})
     check('the area is back as it was', not Layout.Stale() and Layout.Doc.rw == 128 and Layout.Doc.rh == 128)
 
+    -- ---- the resolution of the drawing ---------------------------------------------------------------------------------------------------------------------------------
+    Layout.New({})
+    Layout.FillRect(1, 20, 10, 40, 30, 1, false)                         -- world 40 .. 80 x 20 .. 60 on the 256 unit map
+    local cell0 = Layout.Doc.cell
+    check('a finer drawing: Refit with a resolution', Layout.Refit(256) == true and Layout.Doc.res == 256 and Layout.Doc.rw == 256 and Layout.Doc.rh == 256 and math.abs(Layout.Doc.cell - cell0 / 2) < 1e-6)
+    local fx, fz = Layout.ToCell(60, 40)
+    check('what was drawn stays at the same place when the resolution changes', Layout.Layer(1).data[math.floor(fz) * 256 + math.floor(fx) + 1] > 0.99 and Layout.Layer(1).data[math.floor(fz) * 256 + math.floor(fx + 80) + 1] == 0)
+    check('the area of the drawing is the same', math.abs(Sum(Layout.Layer(1)) - 4 * 20 * 20) < 4 * 20 * 3, Sum(Layout.Layer(1)))
+    History.Undo()
+    check('undo gives the old resolution back', Layout.Doc.res == 128 and Layout.Doc.rw == 128 and Layout.Layer(1).data[20 * 128 + 30 + 1] == 1)
+    History.Redo()
+    Layout.Refit(64)
+    check('a coarser drawing keeps its shape', Layout.Doc.rw == 64 and Layout.Layer(1).data[10 * 64 + 15 + 1] > 0.99, Layout.Layer(1).data[10 * 64 + 15 + 1])
+    check('the resolution is limited', Layout.MAX_RES == 512 and Layout.MIN_RES == 32)
+    Symmetry.SetMode('rot2')
+    check('the brush preview has an image of the ring for each image of the point', table.getn(Layout.BrushImages(10, 10)) == 2)
+    Symmetry.SetMode('off')
+    check('and one without symmetry', table.getn(Layout.BrushImages(10, 10)) == 1)
+    Layout.New({})
+    while History.Depth() > depth0 do History.Undo() end
+
     -- ---- colour and pictures -----------------------------------------------------------------------------------------------------------------------------------------
     Layout.SetColor(1, 10, 300, -5)
     check('the colour of a layer is clamped and kept', Layout.Layer(1).color[1] == 10 and Layout.Layer(1).color[2] == 255 and Layout.Layer(1).color[3] == 0)
@@ -481,6 +505,7 @@ function Run()
     LM.ClearPlan()
     pcall(function() import('/lua/editor/graphrun.lua').Release() end)
     pcall(function() import('/lua/editor/graphrun.lua').DropBuildCache() end)
+    Layout.DefaultRes = resWas
     if docWas then Layout.Load(docWas) else Layout.New({}) end
     if gpuWas and rawget(_G, 'ed_gpu_enable') then ed_gpu_enable(true) end
     check('no field leaks', ed_field_count() == startFields, ed_field_count() - startFields)

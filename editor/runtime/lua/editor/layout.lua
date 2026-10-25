@@ -61,6 +61,10 @@ Kinds = {
         params = {} },
 }
 
+MAX_RES = 512
+MIN_RES = 32
+DefaultRes = 256          -- cells on the long side of a new drawing (the resolution slider changes a drawing; the tests use 128)
+
 local DEFAULT_KINDS = { 'hills', 'mountains', 'plateau', 'water', 'valley', 'base' }
 
 Doc = false
@@ -120,10 +124,10 @@ local function MakeLayer(kind, name)
     return L
 end
 
---- A fresh document. opts: res (cells on the long side, 32 .. 256, default 128), kinds (a list of kinds to start with), area ({ x0, z0, x1, z1 }: default the playable area).
+--- A fresh document. opts: res (cells on the long side, 32 .. MAX_RES, default DefaultRes = 256), kinds (a list of kinds to start with), area ({ x0, z0, x1, z1 }: default the playable area).
 function New(opts)
     opts = opts or {}
-    local res = math.max(32, math.min(256, math.floor(opts.res or 128)))
+    local res = math.max(32, math.min(MAX_RES, math.floor(opts.res or DefaultRes)))
     local x0, z0, x1, z1 = Area()
     if opts.area then x0, z0, x1, z1 = opts.area[1], opts.area[2], opts.area[3], opts.area[4] end
     Doc = { res = res, base = 25, water = 20, seed = 1, weather = 0, layers = {}, sel = 1, rev = 0, generated = {} }
@@ -245,6 +249,11 @@ end
 local function Smoothstep(t)
     if t <= 0 then return 0 elseif t >= 1 then return 1 end
     return t * t * (3 - 2 * t)
+end
+
+--- The images of a canvas point under the editor's symmetry ({ { x, z } } in canvas cells, the point itself first): the brush preview draws one ring on each.
+function BrushImages(cx, cz)
+    return Images(cx, cz)
 end
 
 --- A round dab on layer i at canvas point (cx, cz): radius r cells, hardness 0..1 (how much of the radius is full strength), strength 0..1. Erase takes paint away instead of adding it.
@@ -415,28 +424,32 @@ local BG = { 28, 32, 38 }
 function Pixels(opts)
     opts = opts or {}
     local rw, rh = Doc.rw, Doc.rh
+    local n = rw * rh
     local px = {}
-    local layers = Doc.layers
-    local nl = table.getn(layers)
+    local bgR, bgG, bgB = BG[1], BG[2], BG[3]
     local o = 0
-    for z = 0, rh - 1 do
-        for x = 0, rw - 1 do
-            local r, g, b = BG[1], BG[2], BG[3]
-            local at = z * rw + x + 1
-            for li = 1, nl do
-                local L = layers[li]
-                if L.visible then
-                    local v = L.data[at]
-                    if v > 0.004 then
-                        local a = v * (opts.only and (li == opts.only and 0.95 or 0.4) or 0.85)
-                        r = r + (L.color[1] - r) * a
-                        g = g + (L.color[2] - g) * a
-                        b = b + (L.color[3] - b) * a
-                    end
+    for _ = 1, n do
+        px[o + 1], px[o + 2], px[o + 3], px[o + 4] = bgR, bgG, bgB, 255
+        o = o + 4
+    end
+    -- layer by layer over the whole picture (the cheap way round: most cells of a layer are empty)
+    for li, L in Doc.layers do
+        if L.visible then
+            local data = L.data
+            local af = opts.only and (li == opts.only and 0.95 or 0.4) or 0.85
+            local cr, cg, cb = L.color[1], L.color[2], L.color[3]
+            local at4 = 0
+            for at = 1, n do
+                local v = data[at]
+                if v > 0.004 then
+                    local a = v * af
+                    local r, g, b = px[at4 + 1], px[at4 + 2], px[at4 + 3]
+                    px[at4 + 1] = r + (cr - r) * a
+                    px[at4 + 2] = g + (cg - g) * a
+                    px[at4 + 3] = b + (cb - b) * a
                 end
+                at4 = at4 + 4
             end
-            px[o + 1], px[o + 2], px[o + 3], px[o + 4] = r, g, b, 255
-            o = o + 4
         end
     end
     return px, rw, rh
@@ -755,7 +768,7 @@ end
 --- is empty. One undo step. Returns true, or false when nothing had to change.
 function Refit(res)
     local x0, z0, x1, z1 = Area()
-    local want = math.max(32, math.min(256, math.floor(res or Doc.res)))
+    local want = math.max(32, math.min(MAX_RES, math.floor(res or Doc.res)))
     local f = Frame(want, x0, z0, x1, z1)
     if want == Doc.res and SameFrame(Doc, f) then return false end
     local before = Plain()
@@ -848,7 +861,20 @@ function ImportImage(i, path, o)
             end
             f = S:Op('clamp', { a = f, lo = 0, hi = 1 })
             if o.invert then f = S:Op('affine', { a = f, mul = -1, add = 1 }) end
-            values = ed_field_read(f, 0, 0, rw - 1, rh - 1)
+            -- ed_field_read gives at most 65536 samples a call: read in blocks of rows
+            values = {}
+            local n = 0
+            local block = math.max(1, math.floor(65536 / rw))
+            local z = 0
+            while z < rh do
+                local z1 = math.min(rh - 1, z + block - 1)
+                local part = ed_field_read(f, 0, z, rw - 1, z1)
+                for i = 1, table.getn(part) do
+                    n = n + 1
+                    values[n] = part[i]
+                end
+                z = z1 + 1
+            end
         end)
     end)
     Interop.FreeCache()

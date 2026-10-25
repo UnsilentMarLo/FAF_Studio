@@ -24,7 +24,7 @@ local Map = import('/lua/editor/map.lua')
 live = {}
 
 --- Module level (the controls come and go).
-state = { tool = 'brush', size = 5, hard = 0.6, strength = 1, view = 'layers', solo = false, markers = true, paintGround = false, status = '' }
+state = { tool = 'brush', size = 8, hard = 0.6, strength = 1, view = 'layers', solo = false, markers = true, paintGround = false, status = '' }
 
 TOOLS = {
     { id = 'brush', label = 'Brush', tip = 'Paint with a round brush. Right button erases. The hardness is how much of the radius is full strength; strength below 1 paints partial heights.' },
@@ -87,6 +87,34 @@ local function DrawMarkers(px)
     end
 end
 
+local ringTexture = false
+
+--- The picture of the brush ring (white, transparent inside): made once, scaled to the brush size.
+local function RingTexture()
+    if ringTexture then return ringTexture end
+    local n = 128
+    local px = {}
+    local o = 0
+    for z = 0, n - 1 do
+        for x = 0, n - 1 do
+            local dx, dz = x + 0.5 - n / 2, z + 0.5 - n / 2
+            local d = math.sqrt(dx * dx + dz * dz) / (n / 2)
+            local a = 0
+            if d > 0.9 and d < 1.0 then
+                a = 255
+                if d < 0.93 then a = 255 * (d - 0.9) / 0.03 end
+                if d > 0.985 then a = 255 * (1.0 - d) / 0.015 end
+            elseif d < 0.05 then
+                a = 200
+            end
+            px[o + 1], px[o + 2], px[o + 3], px[o + 4] = 255, 255, 255, a
+            o = o + 4
+        end
+    end
+    ringTexture = Fields.PreviewPixels(px, n, n)
+    return ringTexture
+end
+
 Panels.Register{
     id = 'layoutcanvas', title = 'Layout canvas', minW = 300, minH = 300,
     create = function(group, host)
@@ -101,7 +129,7 @@ Panels.Register{
             local b = Btn(t.label, 70, function() state.tool = id P:Refresh() end, { toggle = true, tip = t.tip })
             P.buttons[id] = b
         end
-        P.size = W.Slider(group, { label = 'Brush size (cells)', min = 1, max = 40, step = 0.5, fmt = '%.1f', compact = true, get = function() return state.size end, set = function(v) state.size = v end, tip = 'The radius of the brush in cells of the drawing (also the width of a line).' })
+        P.size = W.Slider(group, { label = 'Brush size (cells)', min = 1, max = 80, step = 0.5, fmt = '%.1f', compact = true, get = function() return state.size end, set = function(v) state.size = v if P.UpdateCursor then P:UpdateCursor() end end, tip = 'The radius of the brush in cells of the drawing (also the width of a line). The ring on the canvas shows it.' })
         P.hard = W.Slider(group, { label = 'Brush hardness', min = 0, max = 1, step = 0.05, fmt = '%.2f', compact = true, get = function() return state.hard end, set = function(v) state.hard = v end, tip = 'How much of the brush radius is full strength; the rest fades out. 1 is a hard edged disc.' })
         P.strength = W.Slider(group, { label = 'Brush strength', min = 0.05, max = 1, step = 0.05, fmt = '%.2f', compact = true, get = function() return state.strength end, set = function(v) state.strength = v end, tip = 'How much the brush paints (1 = fully). Less than 1 paints partial values: lower hills, a weaker mountain.' })
         P.sym = Btn('Symmetry: off', 190, function()
@@ -134,6 +162,44 @@ Panels.Register{
         P.img:SetSolidColor(c.panelAlt)
         P.img.Depth:Set(function() return group.Depth() + 5 end)
 
+        -- the brush preview: a ring of the brush radius on the cursor and on its images under the symmetry (4 at most)
+        P.rings = {}
+        local tex = RingTexture()
+        for i = 1, 4 do
+            local ring = Bitmap(group)
+            if tex then ring:SetTexture(tex) else ring:SetSolidColor('00000000') end
+            ring.Depth:Set(function() return P.img.Depth() + 3 end)
+            ring:DisableHitTest()
+            ring:Hide()
+            P.rings[i] = ring
+        end
+
+        --- Puts the rings where the cursor is (nothing when it is off the picture or the layer is hidden).
+        function P:UpdateCursor()
+            local h = P.hover
+            local doc = Layout.Doc
+            if not h or not doc or not P.iw then
+                for _, r in P.rings do r:Hide() end
+                return
+            end
+            local cellPx = P.iw / doc.rw
+            local radius = state.size
+            if state.tool == 'rect' or state.tool == 'ellipse' or state.tool == 'lasso' then radius = 1.5 end
+            local images = Layout.BrushImages(h[1], h[2])
+            for i, r in P.rings do
+                local im = images[i]
+                if im and im[1] > -radius and im[2] > -radius and im[1] < doc.rw + radius and im[2] < doc.rh + radius then
+                    local side = math.max(4, math.floor(2 * radius * cellPx + 0.5))
+                    local x = P.ix + im[1] * cellPx - side / 2
+                    local y = P.iy + im[2] * cellPx - side / 2
+                    W.Place(r, group, math.floor(x + 0.5), math.floor(y + 0.5), side, side)
+                    r:Show()
+                else
+                    r:Hide()
+                end
+            end
+        end
+
         local lastName = false
         local function Show(px, w, h)
             local vfs = Fields.PreviewPixels(px, w, h)
@@ -148,6 +214,7 @@ Panels.Register{
         function P:Render()
             local doc = Layout.Doc
             if not doc then return end
+            local t0 = GetSystemTimeSeconds()
             -- an empty drawing follows the playable area; another shape (a template, undo of a fit) changes the aspect of the picture
             if Layout.Sync() or P.geo ~= (doc.rw .. 'x' .. doc.rh) then
                 P:OnResize(P.w, P.h)
@@ -190,6 +257,7 @@ Panels.Register{
             end
             Show(px, w, h)
             P.dirty = false
+            P.renderMs = (GetSystemTimeSeconds() - t0) * 1000
         end
 
         local function ToCanvas(mx, my)
@@ -200,10 +268,22 @@ Panels.Register{
         end
 
         local function Pump()
-            Throttle.Defer('layoutcanvas', function() if live.canvas == P then P:Render() end end, state.view == 'height' and 350 or 70)
+            -- a big drawing takes longer to paint: wait a little more than the last picture took, so the canvas never falls behind the brush
+            local wait = math.max(state.view == 'height' and 350 or 70, math.floor((P.renderMs or 0) * 1.3))
+            Throttle.Defer('layoutcanvas', function() if live.canvas == P then P:Render() end end, wait)
         end
 
         P.img.HandleEvent = function(self, event)
+            if event.Type == 'MouseMotion' or event.Type == 'MouseEnter' then
+                local hx, hz = ToCanvas(event.MouseX, event.MouseY)
+                P.hover = { hx, hz }
+                P:UpdateCursor()
+                return true
+            elseif event.Type == 'MouseExit' then
+                P.hover = false
+                P:UpdateCursor()
+                return true
+            end
             if event.Type ~= 'ButtonPress' then return false end
             local doc = Layout.Doc
             local mods = event.Modifiers or {}
@@ -224,6 +304,8 @@ Panels.Register{
             local dragger = Dragger()
             dragger.OnMove = function(d, x, y)
                 local nx, nz = ToCanvas(x, y)
+                P.hover = { nx, nz }
+                P:UpdateCursor()
                 if tool == 'brush' or tool == 'eraser' then
                     Layout.Line(index, last[1], last[2], nx, nz, state.size, state.hard, state.strength, erase)
                     last = { nx, nz }
@@ -266,6 +348,7 @@ Panels.Register{
             P.view:SetOn(state.view == 'height')
             P.mk:SetOn(state.markers)
             for _, s in { P.size, P.hard, P.strength } do s:Refresh() end
+            P:UpdateCursor()
             local doc = Layout.Doc
             local L = doc and doc.layers[doc.sel]
             local note = ''
@@ -296,7 +379,9 @@ Panels.Register{
             local scale = math.min(availW / doc.rw, availH / doc.rh)
             local iw, ih = math.max(Skin.S(60), math.floor(doc.rw * scale)), math.max(Skin.S(60), math.floor(doc.rh * scale))
             P.s = iw
-            W.Place(P.img, group, pad + math.floor((availW - iw) / 2), y, iw, ih)
+            P.ix, P.iy, P.iw, P.ih = pad + math.floor((availW - iw) / 2), y, iw, ih
+            W.Place(P.img, group, P.ix, P.iy, iw, ih)
+            P:UpdateCursor()
             P:Refresh()
             P:Render()
         end
@@ -484,7 +569,30 @@ Panels.Register{
                 table.insert(P.sliders, s)
                 return s
             end
-            P.docSliders = { Doc('Ground height (units)', 'base', 0, 120, 1, '%d', 'The height of the plain ground where nothing is drawn; hills, mountains and plateaus rise from it.'),
+            -- the resolution of the drawing: applied when the slider has rested (every change resamples the layers)
+            local resSlider = W.Slider(group, { label = 'Resolution (cells on the long side)', stops = { 32, 48, 64, 96, 128, 160, 192, 256, 320, 384, 512 }, fmt = '%d',
+                get = function() return P.pendingRes or Layout.Doc.res end,
+                set = function(v)
+                    P.pendingRes = v
+                    P.resToken = (P.resToken or 0) + 1
+                    local mine = P.resToken
+                    ForkThread(function()
+                        WaitSeconds(0.7)
+                        if mine == P.resToken and P.pendingRes then
+                            local want = P.pendingRes
+                            P.pendingRes = false
+                            if want ~= Layout.Doc.res then
+                                Layout.Refit(want)
+                                Say('the drawing now has ' .. Layout.Doc.rw .. ' x ' .. Layout.Doc.rh .. ' cells (what was drawn is resampled; one undo step)')
+                            end
+                            local cv = live.canvas
+                            if cv then cv:Refresh() end
+                        end
+                    end)
+                end,
+                tip = 'How many cells the long side of the canvas has: more cells, finer shapes (and a slower canvas, more memory). What is drawn is resampled to the new grid; one undo step.' })
+            table.insert(P.sliders, resSlider)
+            P.docSliders = { resSlider, Doc('Ground height (units)', 'base', 0, 120, 1, '%d', 'The height of the plain ground where nothing is drawn; hills, mountains and plateaus rise from it.'),
                              Doc('Water level (units)', 'water', 0, 120, 1, '%d', 'The height of the water surface: written to the map when a water layer is drawn.'),
                              Doc('Seed', 'seed', 0, 9999, 1, '%d', 'The seed of the noise relief: another number, another surface on the same drawing.'),
                              Doc('Weathering (gullies)', 'weather', 0, 1, 0.05, '%.2f', 'Droplet erosion on top of the layout (gullies and drainage lines). 0 leaves the surface as it is.') }
@@ -536,6 +644,8 @@ Panels.Register{
             local tl = {}
             for _, b in P.templates do table.insert(tl, { b, Skin.S(84) }) end
             y = W.Flow(group, tl, pad, y, w - 2 * pad, Skin.S(22), Skin.S(3)) + Skin.S(8)
+            P.docSliders[1]:Place(pad, y, w - 2 * pad)          -- the resolution of the drawing comes first: it is chosen before drawing
+            y = y + Skin.S(50)
             for _, row in P.rows do
                 y = W.Flow(group, { { row.eye, Skin.S(34) }, { row.name, Skin.S(110) }, { row.up, Skin.S(30) }, { row.down, Skin.S(30) }, { row.del, Skin.S(24) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(3)) + Skin.S(4)
             end
@@ -558,7 +668,11 @@ Panels.Register{
                 end
                 y = y + Skin.S(28)
                 for _, s in P.sliders do
-                    if s ~= P.docSliders[1] and s ~= P.docSliders[2] and s ~= P.docSliders[3] and s ~= P.docSliders[4] then
+                    local isDoc = false
+                    for _, d in P.docSliders do
+                        if s == d then isDoc = true end
+                    end
+                    if not isDoc then
                         s:Place(pad, y, w - 2 * pad)
                         y = y + Skin.S(50)
                     end
@@ -577,9 +691,11 @@ Panels.Register{
             y = y + Skin.S(20)
             y = W.Flow(group, { { P.imgBtn, Skin.S(130) } }, pad, y, w - 2 * pad, Skin.S(24), Skin.S(3)) + Skin.S(3)
             y = W.Flow(group, P.imgOpts, pad, y, w - 2 * pad, Skin.S(22), Skin.S(3)) + Skin.S(10)
-            for _, s in P.docSliders do
-                s:Place(pad, y, w - 2 * pad)
-                y = y + Skin.S(50)
+            for i, s in P.docSliders do
+                if i > 1 then
+                    s:Place(pad, y, w - 2 * pad)
+                    y = y + Skin.S(50)
+                end
             end
         end
 

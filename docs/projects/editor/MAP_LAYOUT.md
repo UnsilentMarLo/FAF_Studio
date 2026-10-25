@@ -1,7 +1,7 @@
 # Map layout editor and start / resource generator (2026-10-25)
 
 Goal (user): a canvas where the map is drawn in layers, turned into a height map by the generator and into masks for the generator nodes; plus a generator that places mass around start positions by shape and
-distance. User help: `editor/help/10_map_layout.md`. Tests: `selftest_layout.lua` (98 checks). Workspace: **Layout**.
+distance. User help: `editor/help/10_map_layout.md`. Tests: `selftest_layout.lua` (106 checks, they run at 128 cells). Workspace: **Layout**.
 
 ## Pieces
 
@@ -16,7 +16,7 @@ distance. User help: `editor/help/10_map_layout.md`. Tests: `selftest_layout.lua
 ## The document and the painting
 
 `Layout.Doc = { res, rw, rh, cell, ox, oz, base, water, seed, weather, layers = { { id, name, kind, visible, color, p, data } }, sel, rev, generated }`. The drawing covers the **playable area**
-(`playable.lua Get`, the whole terrain when there is none): `res` cells (128 by default) on the long side, square cells of `cell` world units, `rw x rh` cells in all (a 2 : 1 area gives 128 x 64),
+(`playable.lua Get`, the whole terrain when there is none): `res` cells (`DefaultRes` = 256 for a new drawing, 32 .. `MAX_RES` = 512, the resolution slider of the layers panel; every change is a `Refit`) on the long side, square cells of `cell` world units, `rw x rh` cells in all (a 2 : 1 area gives 128 x 64),
 the drawing centred on the area (`ox, oz` = the world position of its corner). `ToWorld` / `ToCell` convert. Outside the drawing the generator continues the edge cells. The grid is saved with
 the drawing (files from before have no grid: they load as the whole map, square). `Stale()` says the area changed under a drawing; `Sync()` refits an empty drawing silently, `Refit()` ("Fit to the
 area") resamples a drawn one by world position (what was drawn stays at its place on the map, one undo step). `CentreSymmetry()` puts the editor symmetry centre in the middle of the drawing (templates
@@ -43,6 +43,14 @@ area); `Plan()` fits every marker (`Fit`): inside the playable area (4 units in)
 of the others in the plan; when the ideal spot fails, 30 attempts at other angles and distances around the start. `Place()` removes what the generator made before (`Doc.generated`), replaces the start markers
 when they come from a pattern or the bases (`Tools.PlaceMarker`, names `ARMY_<n>` from `armies.NextName`), places the plan and merges all history entries into one. The random numbers are a small generator
 whose values stay below 2^24 (the Lua numbers here are 32 bit floats).
+
+## Resolution and the brush preview
+
+The slider **Resolution (cells on the long side)** (32 .. 512, first control under the templates) applies when it has rested for 0.7 s: `Refit(res)` resamples every layer by world position (bilinear), one
+undo step. At 512 cells the canvas picture takes about 0.4 s (`Pixels` is layer by layer over the cells; `Preview` and `Generate` take 0.2 s), so the canvas waits 1.3 times the last picture time
+between two pictures while a stroke is drawn (`panels_layout.lua Pump`); the brush itself is never late. The ring of the brush is not part of the picture: it is up to four transparent bitmaps (a
+ring texture made once, `Fields.PreviewPixels`) laid over the picture on the cursor and on its images under the symmetry (`Layout.BrushImages`), moved on every mouse move without a repaint of the
+picture. A test instance cannot hover with `ed_input.py` (the engine reads the real cursor: every posted move is followed by a mouse exit), so the ring was checked by placing it by hand.
 
 ## Colour and pictures
 

@@ -2,6 +2,7 @@
 """Posts real mouse and keyboard messages to the window of a test editor instance (scripts/editor_inst.py tags), so a feature can be driven the way a user does (no cursor movement, no focus needed).
 
     python scripts/ed_input.py <tag> click X Y [--right]       X, Y are pixels of the editor window (the coordinates of `editor_inst.py shot`)
+    python scripts/ed_input.py <tag> move X Y                   hover only (the pointer moves, no button)
     python scripts/ed_input.py <tag> drag X0 Y0 X1 Y1
     python scripts/ed_input.py <tag> wheel X Y DELTA            DELTA +120 up / -120 down
     python scripts/ed_input.py <tag> type "text"                characters to the focused field
@@ -98,11 +99,26 @@ def key(h, name):
     time.sleep(0.25)
 
 
+def dpi_scale(h):
+    """The editor reads mouse messages in logical pixels: on a display scaled to 125 % a message at X lands on X * 1.25 of the screenshot. ED_INPUT_SCALE overrides (1 = raw)."""
+    env = os.environ.get("ED_INPUT_SCALE")
+    if env:
+        return float(env)
+    try:
+        return user32.GetDpiForWindow(user32.GetAncestor(h, 2)) / 96.0
+    except Exception:
+        return 1.0
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
         return 1
     h = target(argv[0])
+    k = dpi_scale(h)
+
+    def sc(v):
+        return int(round(int(v) / k))
     rest = argv[1:]
     actions, cur = [], []
     for token in rest:
@@ -115,11 +131,13 @@ def main(argv):
     for act in actions:
         verb = act[0]
         if verb == "click":
-            click(h, int(act[1]), int(act[2]), "--right" in act)
+            click(h, sc(act[1]), sc(act[2]), "--right" in act)
+        elif verb == "move":
+            move(h, sc(act[1]), sc(act[2]))
         elif verb == "drag":
-            drag(h, int(act[1]), int(act[2]), int(act[3]), int(act[4]))
+            drag(h, sc(act[1]), sc(act[2]), sc(act[3]), sc(act[4]))
         elif verb == "wheel":
-            wheel(h, int(act[1]), int(act[2]), int(act[3]))
+            wheel(h, sc(act[1]), sc(act[2]), int(act[3]))
         elif verb == "type":
             chars(h, act[1])
         elif verb == "key":
