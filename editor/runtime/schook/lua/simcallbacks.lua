@@ -201,7 +201,13 @@ do
         local y = data.y or GetTerrainHeight(data.x, data.z)
         -- an army that was added after the sim started has no brain yet: the unit appears after the map is saved and reopened
         local ok, unit = pcall(function() return CreateUnitHPR(data.bp, army, data.x, y, data.z, 0, data.heading or 0, 0) end)
-        if ok and unit then FreezeUnit(unit) end
+        if ok and unit then
+            -- the engine turns a new unit to the slope under it (pitch and roll that make it look rotated from above on uneven ground); the map only records the heading, and a structure
+            -- stands upright, so the entity gets the plain turn about the vertical axis (the same quaternion as the props above)
+            local h = data.heading or 0
+            pcall(function() unit:SetOrientation(Quaternion(0, math.sin(h * 0.5), 0, math.cos(h * 0.5)), true) end)
+            FreezeUnit(unit)
+        end
         if ok and unit and data.group == '_view' then unit.EdViewUnit = true end      -- the unit viewer's own units (EdClearLab takes them down)
         -- no shooting while editing: hold fire (the viewer's units are skipped, they are protected); the armies are neutral already, Enter again in case the session start missed it
         if ok and unit and not ScenarioInfo.EditorPlaying then
