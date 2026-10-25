@@ -83,7 +83,7 @@ Named = {}                            -- { { name, file, channel, flipX, flipZ, 
 Revision = 0                          -- bumped by changes the panel should show
 
 function NewItem(file, channel)
-    return { file = file or '', channel = channel or 'gray', target = 'layer', layer = 1, code = 2, threshold = 0.5, name = '', invert = false }
+    return { file = file or '', channel = channel or 'gray', target = 'layer', layer = 1, code = 2, threshold = 0.5, name = '', invert = false, stretch = false }
 end
 
 -- ---- reading images (cached) -----------------------------------------------------------------------------------------------------------------------
@@ -311,6 +311,9 @@ function BuildHeights(S, st)
         table.insert(warnings, '8-bit image: only 256 height levels, the slopes will be terraced (export 16 bit)')
     end
     local advice, relief, meanSlope = Advice(S, region, rLo, rHi, warnings)
+    if st.mode == 'normalised' and not st.stretch and srcHi - srcLo > 1e-9 and srcHi - srcLo < 0.25 then
+        table.insert(warnings, string.format('the image only uses %.1f percent of its range (%.3f to %.3f): choose "Stretch to image range" (the tool did not normalise the export)', (srcHi - srcLo) * 100, srcLo, srcHi))
+    end
     if info.nodata and info.nodata > 0 then
         table.insert(warnings, info.nodata .. ' samples without data were set to the lowest value')
     end
@@ -362,6 +365,10 @@ end
 local function MaskField(S, item, ms, st)
     local f, info = ReadScoped(S, item.file, st or Settings, item.channel)
     if not f then return nil, info end
+    if item.stretch then
+        local lo, hi = Fields.Stats(f)
+        if hi - lo > 1e-6 then f = S:Op('affine', { a = f, mul = 1 / (hi - lo), add = -lo / (hi - lo) }) end
+    end
     local o, align, filter = MaskOrientation(ms)
     local ro = Oriented(S, f, o)
     local iw, ih = Fields.Info(ro)
@@ -414,7 +421,7 @@ function ApplyMasks(ms)
         end
         for _, item in namedItems do
             if item.name == '' then return nil, 'a named mask needs a name' end
-            SetNamed({ name = item.name, file = item.file, channel = item.channel, invert = item.invert, flipX = Settings.flipX, flipZ = Settings.flipZ, rot = Settings.rot })
+            SetNamed({ name = item.name, file = item.file, channel = item.channel, invert = item.invert, stretch = item.stretch, flipX = Settings.flipX, flipZ = Settings.flipZ, rot = Settings.rot })
             nNamed = nNamed + 1
         end
         if table.getn(parts) > 0 then
@@ -478,7 +485,7 @@ function NamedField(S, slot, like)
         FreeNamed(n.name)
         local ms = { sync = false, flipX = n.flipX, flipZ = n.flipZ, rot = n.rot, align = 'auto', filter = 'bilinear' }
         local out, err = Fields.Run(function(S2)
-            local m, why = MaskField(S2, { file = n.file, channel = n.channel, invert = n.invert }, ms, Settings)
+            local m, why = MaskField(S2, { file = n.file, channel = n.channel, invert = n.invert, stretch = n.stretch }, ms, Settings)
             if not m then return nil, why end
             S2:Keep(m)
             return m
@@ -518,10 +525,12 @@ function SuggestMax(st, which)
     local src = LoadSource(st.file, st)
     if not src then return nil end
     local lo, hi = Fields.Stats(src)
-    local span = st.stretch and 1 or (hi - lo)
-    if span < 0.05 then span = 1 end
+    if hi - lo < 1e-9 then return nil end
+    -- an image that uses only a sliver of its range (Gaea exported one at 0.01 to 0.052) has to be stretched, or "Image 1" would have to be hundreds of units
+    local needsStretch = (not st.stretch) and (hi - lo) < 0.5
+    local span = (st.stretch or needsStretch) and 1 or (hi - lo)
     local relief = sug.relief[which or 3]
-    return st.min + relief / span, relief
+    return st.min + relief / span, relief, needsStretch
 end
 
 --- Compares what is imported with the maps of this size and adds warnings: returns a line of text, the relief and the mean slope of the import.
@@ -579,12 +588,27 @@ function GuessMask(path)
     return nil, role
 end
 
---- Sets the target of a mask item from its file name; returns a text, or nil when the name says nothing.
-function GuessItem(item)
+--- `name` made different from the named masks of the other items (Flow and Flow-Secondary become flow and flow2).
+local function UniqueName(items, name, item)
+    local taken = {}
+    for _, it in items or {} do
+        if it ~= item and it.target == 'named' then taken[it.name] = true end
+    end
+    local out, i = name, 1
+    while taken[out] do
+        i = i + 1
+        out = name .. i
+    end
+    return out
+end
+
+--- Sets the target of a mask item from its file name (`items`: the items already in the list, for the names); returns a text, or nil when the name says nothing.
+function GuessItem(item, items)
     local kind, role = GuessMask(item.file)
     if kind then
-        item.target, item.name = 'named', kind
-        return "'" .. kind .. "' mask: kept as a named mask, the External mask node feeds it to the Ground kinds"
+        item.target, item.name = 'named', UniqueName(items, kind, item)
+        item.stretch = true             -- erosion masks are relative measures: Gaea exported these three with their highest value at 0.52
+        return "'" .. item.name .. "' mask (stretched to 0..1): kept as a named mask, the External mask node feeds it to the Ground kinds"
     end
     if role then
         local okT, TS = pcall(import, '/lua/editor/texsets.lua')
@@ -780,15 +804,18 @@ local function Adopt(path)
             if Basename(it.file) == base then return false end
         end
         local item = NewItem(path)
-        local text = GuessItem(item) or 'a texture layer'
+        local text = GuessItem(item, MaskSet.items) or 'a texture layer'
         table.insert(MaskSet.items, item)
         LinkLog('new mask ' .. base .. ' added: ' .. text)
         return 'masks'
     end
     if Settings.file == '' or IsOwnExport(Settings.file) then
         Settings.file = path
-        local typical = SuggestMax(Settings, 3)
-        if typical and Settings.mode == 'normalised' then Settings.max = math.floor(typical * 2 + 0.5) / 2 end
+        local typical, _, needsStretch = SuggestMax(Settings, 3)
+        if typical and Settings.mode == 'normalised' then
+            if needsStretch then Settings.stretch = true end
+            Settings.max = math.floor(typical * 2 + 0.5) / 2
+        end
         LinkLog('new heightmap ' .. base .. ' taken as the heightmap' .. (typical and string.format(' (image 1 = %.1f units: the relief of the median map of your folder)', Settings.max) or ''))
         return 'heights'
     end

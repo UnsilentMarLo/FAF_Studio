@@ -85,3 +85,16 @@ The Interop panel got a first page, **Gaea / WM**, and the import knows more abo
 * EXR is still not read (no Windows codec; a reader would be an engine patch). Choosing an `.exr` now says so and what to export instead.
 * Not done: reading the tools' project files (`.tmd`, Gaea's project) to check resolution and extents; a Gaea / World Machine plugin (their extension APIs are C# / C++ / Lua and do not document a build or
   export hook).
+
+## A real Gaea export as a test (cracked_basin, Gaea 1.3.2.7, 512 x 512, 10 x 10 km map)
+
+Five 16-bit greyscale PNGs from a project given to the user: `Final Heightmap`, `Flow`, `Flow-Secondary`, `wear`, `deposit`. What the import had to learn from them:
+
+* The heightmap uses 0.0100 to 0.0519 of the 16-bit range (the export was not normalised): imported as it is, it has a relief of 4 units and a mean slope of 1.8 degrees. `SuggestMax` thought the image spanned the
+  whole range (a guard against tiny spans); it now says the image needs the stretch, the typical-height buttons switch **Stretch to image range** on, and the preview warns "the image only uses 4.2 percent of its
+  range". With the stretch and the median relief of the maps of this size (31 units) the terrain imports as plateaus with craters and cliffs.
+* The three masks all peak at exactly 0.52. Imported as they are they would be half strength: erosion masks guessed by name are now **stretched to 0..1** (a toggle per mask, `item.stretch`; named masks keep it).
+* `Flow.png` and `Flow-Secondary.png` are two different images and both mean "flow": the second is named `flow2` (`UniqueName`), so neither replaces the other.
+* 512 pixels on a 512 cell (513 sample) map: the alignment picked is "cell", which is right.
+* The sample graph "Gaea / World Machine terrain" built from these (External terrain, the stretched wear / deposit / flow into Ground kinds, valley textures) paints the cliffs rock, the plateaus tan and the
+  basins green with no further setting; `texture_lab.py --pre <lua>` runs the import setup before a graph case.

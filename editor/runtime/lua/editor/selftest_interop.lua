@@ -512,6 +512,47 @@ function Run(verbose)
         History.Undo()
         Flat(25)
 
+        -- an export that uses a sliver of its range (a real Gaea Final Heightmap: 0.01 to 0.052) and masks whose highest value is 0.52
+        do
+            local narrow = Fields.Op('gradient', { width = w, height = h, angle = 0, lo = 0.01, hi = 0.052 })
+            local npath = WriteTif('narrow.tif', narrow)
+            Fields.Free(narrow)
+            local ns = Interop.DefaultSettings()
+            Interop.Settings = ns
+            ns.file, ns.min, ns.max, ns.align = npath, 0, 100, 'corner'
+            local m3, r3, needs = Interop.SuggestMax(ns, 3)
+            check('a narrow image is suggested with the stretch, at a sensible height', needs == true and m3 and near(m3, r3, 0.01), tostring(m3) .. ' ' .. tostring(needs))
+            local pvn = Interop.PreviewHeights(ns, 64)
+            local says = false
+            for _, wt in pvn.warnings do if string.find(wt, 'only uses', 1, true) then says = true end end
+            check('and the preview says the image uses a sliver of its range', says)
+            ns.stretch = true
+            local pvs = Interop.PreviewHeights(ns, 64)
+            local still = false
+            for _, wt in pvs.warnings do if string.find(wt, 'only uses', 1, true) then still = true end end
+            check('stretched, that warning goes', not still)
+            local a, b = Interop.NewItem('c:/g/Flow.png'), Interop.NewItem('c:/g/Flow-Secondary.png')
+            local list = {}
+            Interop.GuessItem(a, list)
+            table.insert(list, a)
+            Interop.GuessItem(b, list)
+            check('two flow files get two names, and erosion masks are stretched', a.name == 'flow' and b.name == 'flow2' and a.stretch and b.stretch, tostring(a.name) .. ' ' .. tostring(b.name))
+            local weak = Fields.Op('gradient', { width = w, height = h, angle = 90, lo = 0, hi = 0.52 })
+            local wpath = WriteTif('weakmask.tif', weak)
+            Fields.Free(weak)
+            Interop.Named = {}
+            Interop.SetNamed({ name = 'plain', file = wpath, channel = 'gray', invert = false })
+            Interop.SetNamed({ name = 'stretched', file = wpath, channel = 'gray', invert = false, stretch = true })
+            local hiPlain, hiStretched = Fields.Run(function(S)
+                local f1, f2 = Interop.NamedFieldByName(S, 'plain', S:Height(1)), Interop.NamedFieldByName(S, 'stretched', S:Height(1))
+                local _, h1 = Fields.Stats(f1)
+                local _, h2 = Fields.Stats(f2)
+                return h1, h2
+            end)
+            check('a stretched mask reaches 1, the same file as it is only 0.52', near(hiPlain, 0.52, 0.01) and near(hiStretched, 1, 0.01), tostring(hiPlain) .. ' ' .. tostring(hiStretched))
+            Interop.Named = {}
+        end
+
         -- the graph nodes
         local Graph = import('/lua/editor/graph.lua')
         local GRun = import('/lua/editor/graphrun.lua')

@@ -282,10 +282,11 @@ Panels.Register{
                     Row('label', Lbl(string.format('Your maps of this size (%d): relief %.0f units (%.0f to %.0f), mean slope %.1f deg. Set Image 1 so the import has the relief of:', sug.n, sug.relief[3], sug.relief[2],
                         sug.relief[4], sug.slope[3])))
                     local function Typical(which, name)
-                        local m, relief = Interop.SuggestMax(st, which)
+                        local m, relief, needsStretch = Interop.SuggestMax(st, which)
                         if m then
+                            if needsStretch then st.stretch = true end
                             st.max = math.floor(m * 2 + 0.5) / 2
-                            Say(string.format('Image 1 = %.1f units: a relief of %.0f units, the %s of your maps', st.max, relief, name))
+                            Say(string.format('Image 1 = %.1f units: a relief of %.0f units, the %s of your maps%s', st.max, relief, name, needsStretch and ' (the image uses a sliver of its range: stretched)' or ''))
                             Changed()
                             Later()
                         end
@@ -362,7 +363,7 @@ Panels.Register{
                             local item = Interop.NewItem(f)
                             item.layer = math.min(8, layer)
                             layer = layer + 1
-                            local guess = Interop.GuessItem(item)       -- flow / wear / deposit, or a kind of ground, from the file name
+                            local guess = Interop.GuessItem(item, ms.items)       -- flow / wear / deposit, or a kind of ground, from the file name
                             if guess then table.insert(told, Basename(f) .. ': ' .. guess) end
                             table.insert(ms.items, item)
                         end
@@ -407,6 +408,7 @@ Panels.Register{
                     Cyc('Target', 130, { 'layer', 'types', 'named' }, function() return it.target end, function(v) it.target = v end, { layer = 'texture layer', types = 'terrain types', named = 'named mask' }),
                     Cyc('Channel', 82, Interop.CHANNELS, function() return it.channel end, function(v) it.channel = v end),
                     Tog('Invert', 50, function() return it.invert end, function(v) it.invert = v end),
+                    Tog('Stretch to 0..1', 110, function() return it.stretch end, function(v) it.stretch = v end),
                     Btn('Remove', 56, function() table.remove(ms.items, index) Later() end),
                 }
                 Row('buttons', line)

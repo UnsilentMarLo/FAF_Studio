@@ -53,6 +53,7 @@ def main():
     ap.add_argument('--keep', action='store_true')
     ap.add_argument('--amp', type=float, default=0)
     ap.add_argument('--name', default='')
+    ap.add_argument('--pre', default='', help='a Lua file run first (the Interop settings of an imported terrain ...)')
     ap.add_argument('--post', default='', help='Lua run after the recipe (shader switch, generators ...)')
     ap.add_argument('--shader', default='', help='terrain shader to switch to before the recipe')
     a = ap.parse_args()
@@ -81,6 +82,8 @@ def main():
             lua += 'LAB.post = [[%s]]\n' % a.post
         if a.shader:
             lua += "LAB.shader = '%s'\n" % a.shader
+        if a.pre:
+            lua = open(a.pre, encoding='utf-8').read() + chr(10) + lua
         lua += open(os.path.join(HERE, '..', 'editor', 'textlab', 'lab_scene.lua'), encoding='utf-8').read()
         name = '%s_%s_%s' % (terrain.replace('-', 'keep'), theme.replace('-', 'keep'), recipe) if not a.name else a.name
         if graph_ids:
