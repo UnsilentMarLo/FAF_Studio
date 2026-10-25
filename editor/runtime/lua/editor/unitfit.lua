@@ -142,8 +142,29 @@ local function Overlap(a, b)
     return math.min(a[3], b[3]) - math.max(a[1], b[1]) > 0.01 and math.min(a[4], b[4]) - math.max(a[2], b[2]) > 0.01
 end
 
+local LAYER_BITS = { 'LAYER_Land', 'LAYER_Seabed', 'LAYER_Sub', 'LAYER_Water', 'LAYER_Air' }       -- bit 0 .. 4 of the number the loaded blueprint holds
+
+--- The layers a structure may stand on as a table { LAYER_Land = true ... }. The unit blueprint files hold such a table, but the BLUEPRINT THE ENGINE LOADED holds a string: the name of
+--- the one layer ('Land', 'Water' ...) or a number (a string of digits) with one bit per layer (1 Land, 2 Seabed, 4 Sub, 8 Water, 16 Air; '9' = land and water) -- lua/ui/game/unitviewDetail.lua
+--- reads it that way. Reading it as a table made every structure "fit neither the ground nor the water" (the preview was always red).
 local function Caps(bp)
-    return bp.Physics and bp.Physics.BuildOnLayerCaps
+    local caps = bp.Physics and bp.Physics.BuildOnLayerCaps
+    local kind = type(caps)
+    if kind == 'table' then return caps end
+    if kind == 'string' or kind == 'number' then
+        local out = {}
+        local n = tonumber(caps)
+        if n then
+            for i, name in LAYER_BITS do out[name] = math.mod(math.floor(n / math.pow(2, i - 1)), 2) == 1 end
+            return out
+        end
+        local name = string.gsub(caps, '^LAYER_', '')
+        for _, full in LAYER_BITS do
+            if full == 'LAYER_' .. name then out[full] = true end
+        end
+        return out
+    end
+    return nil
 end
 
 -- ---- terrain samples and layer rules (ports of the engine's own checks: STIMap.cpp OCCUPY_Check / OCCUPY_CheckAreaFlatness / OCCUPY_CheckEdgeFlatness / OCCUPY_MobileCheck) ----

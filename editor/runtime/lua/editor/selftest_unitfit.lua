@@ -60,6 +60,17 @@ function Rules()
         end
         Check(bad == '', 'flat ground at ' .. h .. ', no water: everything fits ' .. bad)
     end
+    -- the blueprints the engine loaded hold BuildOnLayerCaps as a string: a layer name, or a number with one bit per layer (1 land, 2 seabed, 4 sub, 8 water)
+    local function Strs(caps) return Bp(5, { MotionType = 'RULEUMT_None', SkirtSizeX = 8, SkirtSizeZ = 8, FlattenSkirt = true, MaxGroundVariation = 1.1, BuildOnLayerCaps = caps }) end
+    Check(Fit.Check(Strs('Land'), x, z, 0, Ctx(Flat(25), nil)), 'caps "Land" (the loaded form): a structure fits on dry ground')
+    Check(Fit.Check(Strs('9'), x, z, 0, Ctx(Flat(25), nil)), 'caps "9" (land and water): fits on dry ground')
+    Check(Fit.Check(Strs(9), x, z, 0, Ctx(Flat(25), nil)), 'caps 9 as a number: fits on dry ground')
+    Check(not Fit.Check(Strs('Water'), x, z, 0, Ctx(Flat(25), nil)), 'caps "Water": does not fit on dry ground')
+    Check(Fit.Check(Strs('Water'), x, z, 0, Ctx(Flat(0), 20)), 'caps "Water": fits in deep water')
+    Check(not Fit.Check(Strs('Land'), x, z, 0, Ctx(Flat(0), 20)), 'caps "Land": does not fit under water')
+    Check(Fit.Check(Strs('8'), x, z, 0, Ctx(Flat(0), 20)), 'caps "8" (water): fits in deep water')
+    local real = rawget(_G, '__blueprints') and (__blueprints['uab1101'] or __blueprints['ueb1101'])
+    if real then Check(Fit.Check(real, x, z, 0, Ctx(Flat(25), nil)), 'a loaded extractor fits on flat dry ground') end
     local ok, why, kind = Fit.Check(navy, x, z, 0, Ctx(Flat(25), nil))
     Check(not ok and kind == 'water', 'a naval factory on dry ground: ' .. tostring(why))
     ok, why, kind = Fit.Check(boat, x, z, 0, Ctx(Flat(25), nil))
