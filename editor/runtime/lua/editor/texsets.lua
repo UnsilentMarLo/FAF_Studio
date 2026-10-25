@@ -34,7 +34,7 @@ Themes = {
         dirt = { '/env/Evergreen/layers/Dirt001_albedo.dds' }, wet = { '/env/Evergreen/layers/Sandwet_albedo.dds' },
         highrock = { '/env/Evergreen/layers/RockLight_albedo.dds' }, darkrock = { '/env/Evergreen/layers/SandRock_albedo.dds' },
         snow = { '/env/Evergreen/layers/snow001_albedo.dds' } },
-    -- the textures of a map that looks right (Adaptive Archsimkats Valley, docs/projects/editor/GRAPH_TEXTURING.md): deep green grass against light tan gravel is the contrast, the rock is grey
+    -- the textures of a reference map that looks right (docs/projects/editor/GRAPH_TEXTURING.md): deep green grass against light tan gravel is the contrast, the rock is grey
     valley = { label = 'Open valley (Evergreen 2: green hills, tan plains)', size = 12,
         base = { '/env/Evergreen2/Layers/EvGrass005a_albedo.dds', '/env/Evergreen2/Layers/EG_Grass001_albedo.dds', '/env/Evergreen/layers/grass001_albedo.dds' }, upper = { '/env/Evergreen/layers/macrotexture000_albedo.dds' },
         grass = { '/env/Evergreen2/Layers/EvGrass005a_albedo.dds', '/env/Evergreen2/Layers/EG_Grass001_albedo.dds', '/env/Evergreen/layers/grass000_albedo.dds' },
@@ -86,7 +86,7 @@ Themes = {
 }
 ThemeOrder = { 'temperate', 'valley', 'desert', 'tropical', 'tundra', 'lava', 'swamp', 'geothermal' }
 
--- The sets measured on the maps of the user's Maps folder (scripts/map_texture_stats.py, map_texture_presets.py -> mapsets.lua): Themes of the same shape (they have a `family`), MapFamilies = { { family,
+-- The sets measured on a set of reference maps (scripts/map_texture_stats.py, map_texture_presets.py -> mapsets.lua): Themes of the same shape (they have a `family`), MapFamilies = { { family,
 -- label, ids } } for the menu, and the recipe style of each family (`style`, an id of recipes.lua Presets).
 MapFamilies = {}
 do

@@ -333,7 +333,7 @@ Panels.Register{
             for _, id in TS.ThemeOrder do table.insert(items, SetItem(id)) end
             if table.getn(TS.MapFamilies) > 0 then
                 table.insert(items, { separator = true })
-                table.insert(items, { header = true, title = 'Measured on your maps' })
+                table.insert(items, { header = true, title = 'Environment sets' })
                 for _, fam in TS.MapFamilies do
                     local sub = {}
                     for _, id in fam.ids do table.insert(sub, SetItem(id)) end

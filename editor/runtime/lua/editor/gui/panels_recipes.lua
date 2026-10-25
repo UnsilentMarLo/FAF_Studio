@@ -86,7 +86,7 @@ Panels.Register{
                 end })
             end
             Menu.Show(GetFrame(0), Pn.bPreset.Left(), Pn.bPreset.Bottom(), items)
-        end, { tip = 'The style of the recipe: the built-in ones (natural, alpine, desert, arctic, rocky, valley, coast) and one per family of maps, measured on the maps of your Maps folder. It sets the numbers below.' })
+        end, { tip = 'The style of the recipe: the built-in ones (natural, alpine, desert, arctic, rocky, valley, coast) and one per environment (Evergreen, Desert, Tundra ...) with rock, cliff, dirt and beach settings typical for it. It sets the numbers below.' })
 
         -- one row per layer 0..8: texture, kind of ground (a menu), Show, coverage
         for l = 0, 8 do

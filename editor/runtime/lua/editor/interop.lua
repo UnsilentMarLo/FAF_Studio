@@ -12,7 +12,7 @@
 --   Named / NamedField(S, slot, like)    imported masks kept for the mask generator (rule 'Imported mask')
 --   Link                     the live link: Poll() applies a changed file with the saved settings as one undo step, Revert() takes it back; a new file in a watched folder is adopted by its name
 --                            (heightmap, a mask of a ground kind, flow / wear / deposit); SendAndWatch() exports and starts watching the export folder
---   Suggest() / SuggestMax(st, which)   what the maps of the user's Maps folder look like at this map size (relief, slope): the "typical height" of an import; the preview compares the import with it
+--   Suggest() / SuggestMax(st, which)   what a set of reference maps looks like at this map size (relief, slope): the "typical height" of an import; the preview compares the import with it
 --   GuessMask(path) / GuessItem(item)   what a mask file is for, from its name (flow, wear, deposit -> named masks for the ground kinds; grass, rock ... -> the layer of that kind of ground)
 --   MappedImage(S, st, like)            the image on the grid of `like` as heights (graph node External terrain); NamedFieldByName(S, name, like) (graph node External mask)
 --   GraphSignature([now])               what the External nodes of the graph read (settings, file stamps): the graph runner re-evaluates when it changes and stays still for a second
@@ -499,7 +499,7 @@ end
 
 -- ---- what the maps of the user's folder look like ----------------------------------------------------------------------------------------------------
 
---- The numbers of the maps of this size in the user's Maps folder (mapsets.lua Stats, made by scripts/map_texture_presets.py): { n, relief, span, slope, steep } (each a list of the
+--- The numbers of the reference maps of this size (mapsets.lua Stats, made by scripts/map_texture_presets.py): { n, relief, span, slope, steep } (each a list of the
 --- 5 / 25 / 50 / 75 / 95 percentile over the maps), the size they are for (0 = all maps) and the map's own size. nil when there are none.
 function Suggest()
     local ok, M = pcall(import, '/lua/editor/mapsets.lua')
@@ -540,19 +540,19 @@ function Advice(S, field, lo, hi, warnings)
     local slopeField = S:Op('slope', { a = field, mode = 'degrees', radius = 1 })
     local _, _, meanSlope = Fields.Stats(slopeField)
     if not sug then return nil, relief, meanSlope end
-    local where = key == 0 and 'maps' or (key .. ' maps')
-    local text = string.format('relief %.0f units, mean slope %.1f deg; %d %s of yours: relief %.0f (%.0f to %.0f), slope %.1f deg (%.1f to %.1f)', relief, meanSlope, sug.n, where,
+    local where = key == 0 and '' or string.format(' at %d km', math.floor(key / 51.2 + 0.5))
+    local text = string.format('relief %.0f units, mean slope %.1f deg; %d reference maps%s: relief %.0f (%.0f to %.0f), slope %.1f deg (%.1f to %.1f)', relief, meanSlope, sug.n, where,
         sug.relief[3], sug.relief[2], sug.relief[4], sug.slope[3], sug.slope[2], sug.slope[4])
     if relief > sug.relief[5] then
-        table.insert(warnings, string.format('the relief of %.0f units is more than that of 95 percent of your maps (%.0f): lower "Image 1 = height"', relief, sug.relief[5]))
+        table.insert(warnings, string.format('the relief of %.0f units is more than that of 95 percent of the reference maps (%.0f): lower "Image 1 = height"', relief, sug.relief[5]))
     end
     if meanSlope > sug.slope[5] then
-        table.insert(warnings, string.format('mean slope %.1f deg is steeper than 95 percent of your maps (%.1f deg): units struggle on ground like this, lower the height', meanSlope, sug.slope[5]))
+        table.insert(warnings, string.format('mean slope %.1f deg is steeper than 95 percent of the reference maps (%.1f deg): units struggle on ground like this, lower the height', meanSlope, sug.slope[5]))
     elseif relief > 4 and meanSlope < sug.slope[1] * 0.5 then
-        table.insert(warnings, string.format('mean slope %.1f deg is flatter than nearly all of your maps (%.1f deg and up)', meanSlope, sug.slope[1]))
+        table.insert(warnings, string.format('mean slope %.1f deg is flatter than nearly all of the reference maps (%.1f deg and up)', meanSlope, sug.slope[1]))
     end
     if relief < sug.relief[1] * 0.5 and relief < 10 then
-        table.insert(warnings, string.format('the relief of %.0f units is very low (the flattest of your maps has %.0f): raise "Image 1 = height"', relief, sug.relief[1]))
+        table.insert(warnings, string.format('the relief of %.0f units is very low (the flattest reference map has %.0f): raise "Image 1 = height"', relief, sug.relief[1]))
     end
     return text, relief, meanSlope
 end
@@ -816,7 +816,7 @@ local function Adopt(path)
             if needsStretch then Settings.stretch = true end
             Settings.max = math.floor(typical * 2 + 0.5) / 2
         end
-        LinkLog('new heightmap ' .. base .. ' taken as the heightmap' .. (typical and string.format(' (image 1 = %.1f units: the relief of the median map of your folder)', Settings.max) or ''))
+        LinkLog('new heightmap ' .. base .. ' taken as the heightmap' .. (typical and string.format(' (image 1 = %.1f units: the relief of the median reference map)', Settings.max) or ''))
         return 'heights'
     end
     LinkLog('new file ' .. base .. ' (not part of the import: add it to the mask list)')

@@ -209,7 +209,7 @@ Panels.Register{
             Row('label', Lbl(string.format('Gaea: build resolution %d (or %d). Export Height as 16-bit PNG / TIFF or 32-bit float TIFF; masks as greyscale PNG. No EXR.', mw, n)))
             Row('label', Lbl(string.format('World Machine: build size %d x %d, terrain extents %d m wide, output .r16 / 16-bit PNG / 32-bit TIFF; masks as bitmaps.', mw, mh, n)))
             if sug then
-                Row('label', Lbl(string.format('Height: your %d maps of this size have a relief of %.0f to %.0f units (median %.0f) and a mean slope of %.1f to %.1f deg (median %.1f). Gaea\'s default heights are',
+                Row('label', Lbl(string.format('Height: %d reference maps of this size have a relief of %.0f to %.0f units (median %.0f) and a mean slope of %.1f to %.1f deg (median %.1f). Gaea\'s default heights are',
                     sug.n, sug.relief[2], sug.relief[4], sug.relief[3], sug.slope[2], sug.slope[4], sug.slope[3])))
                 Row('label', Lbl('Both tools let you choose the height of the terrain: aim for about the median relief, or set it with the buttons of the Heightmap page.'))
             end
@@ -279,14 +279,14 @@ Panels.Register{
             if st.mode == 'normalised' then
                 local sug = Interop.Suggest()
                 if sug and st.file ~= '' then
-                    Row('label', Lbl(string.format('Your maps of this size (%d): relief %.0f units (%.0f to %.0f), mean slope %.1f deg. Set Image 1 so the import has the relief of:', sug.n, sug.relief[3], sug.relief[2],
+                    Row('label', Lbl(string.format('Reference maps of this size (%d): relief %.0f units (%.0f to %.0f), mean slope %.1f deg. Set Image 1 so the import has the relief of:', sug.n, sug.relief[3], sug.relief[2],
                         sug.relief[4], sug.slope[3])))
                     local function Typical(which, name)
                         local m, relief, needsStretch = Interop.SuggestMax(st, which)
                         if m then
                             if needsStretch then st.stretch = true end
                             st.max = math.floor(m * 2 + 0.5) / 2
-                            Say(string.format('Image 1 = %.1f units: a relief of %.0f units, the %s of your maps%s', st.max, relief, name, needsStretch and ' (the image uses a sliver of its range: stretched)' or ''))
+                            Say(string.format('Image 1 = %.1f units: a relief of %.0f units, the %s of the reference maps%s', st.max, relief, name, needsStretch and ' (the image uses a sliver of its range: stretched)' or ''))
                             Changed()
                             Later()
                         end

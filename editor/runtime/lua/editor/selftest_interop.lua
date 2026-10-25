@@ -479,7 +479,7 @@ function Run(verbose)
         local pv = Interop.PreviewHeights(st, 64)
         local tooTall = false
         for _, wt in pv.warnings do if string.find(wt, 'relief', 1, true) and string.find(wt, 'more than', 1, true) then tooTall = true end end
-        check('an import at the median relief has no too-tall warning, and says how it compares', not tooTall and pv.advice ~= nil and string.find(pv.advice, 'your', 1, true) ~= nil, tostring(pv.advice))
+        check('an import at the median relief has no too-tall warning, and says how it compares', not tooTall and pv.advice ~= nil and string.find(pv.advice, 'reference', 1, true) ~= nil, tostring(pv.advice))
         st.max = (sug and sug.relief[5] or 90) * 3
         pv = Interop.PreviewHeights(st, 64)
         tooTall = false
