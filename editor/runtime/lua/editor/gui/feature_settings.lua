@@ -27,6 +27,18 @@ Commands.Register{ id = 'dev.gpu', title = 'GPU compute: show the adapter and ru
     if last then pcall(function() import('/lua/editor/ui.lua').Say(last) end) end
 end }
 
+-- dev.display: the window, the frame rate and the camera as this machine sees them (a laptop with two graphics adapters, a high DPI screen): send these lines when the picture misbehaves.
+Commands.Register{ id = 'dev.display', title = 'Display: show the window size, the frame rate and the camera (results in the Console panel)', run = function()
+    local lines = import('/lua/editor/display.lua').Report()
+    local captured = false
+    pcall(function() captured = import('/lua/editor/consolelog.lua').Installed() end)
+    for _, text in lines do
+        LOG('EDITOR display: ' .. text)
+        if not captured then pcall(function() import('/lua/editor/gui/model.lua').Log(text) end) end
+    end
+    if lines[2] then pcall(function() import('/lua/editor/ui.lua').Say(lines[2]) end) end
+end }
+
 Menu.Extend('menubar.File', function()
     return {
         { command = 'settings.open' },

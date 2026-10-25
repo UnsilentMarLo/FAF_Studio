@@ -1386,6 +1386,7 @@ function Update(ui)
         return true
     end
     frameCount = frameCount + 1
+    pcall(function() import('/lua/editor/display.lua').Frame() end)
     -- The engine keeps its overlay objects (icons, lines, decals) in static tables that outlive a session, and this module's own id lists are lost with the
     -- Lua state: after opening another map the markers of the previous one stayed on screen (outside the new terrain, hanging at their old heights).
     if not engineCleared then

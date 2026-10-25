@@ -42,6 +42,8 @@ Defs = {
     { key = 'antialiasing', tip = 'Smooths jagged edges by drawing each pixel several times. Applies at once; the window may flicker for a moment.', label = 'Anti-aliasing', states = AAStates, apply = Con('SC_AntiAliasingSamples'), device = true },
     { key = 'gpu_compute', tip = 'Runs heavy terrain operations (blur, and later erosion and noise) on the graphics card with Direct3D 11 compute shaders, where a GPU version exists. On any problem the editor uses the processor instead. Off: always the processor.', label = 'GPU compute', states = { { 'Off', 0 }, { 'On', 1 } },
       apply = function(v) local f = rawget(_G, 'ed_gpu_enable') if f then f(v == 1) end end },
+    { key = 'frame_limit', tip = 'The most frames per second the editor draws. A map editor does not need more than 60, and every frame costs the graphics card the whole scene. With vertical sync on, the refresh rate of the monitor limits it as well.', label = 'Frame rate limit',
+      states = { { '30', 33 }, { '60', 16 }, { '100', 10 }, { '144', 7 }, { 'No limit', 2 } }, apply = function(v) ConExecute('sc_FrameTimeClamp ' .. tostring(v)) end },
     { key = 'vsync', tip = 'Wait for the monitor before showing a frame: no tearing, but a lower frame rate on slow machines.', label = 'Vertical sync', states = { { 'Off', 0 }, { 'On', 1 } }, apply = Con('SC_VerticalSync'), device = true },
 }
 
@@ -74,6 +76,7 @@ function Default(key)
     if key == 'antialiasing' then return 0 end
     if key == 'vsync' then return 1 end
     if key == 'gpu_compute' then return 1 end        -- not part of the quality presets: the GPU is used whenever it works
+    if key == 'frame_limit' then return 16 end       -- milliseconds between frames: 60 per second (the engine's own default is 10: 100 per second, a fifth of a laptop GPU for a still scene)
     return Presets.ultra[key]
 end
 
@@ -141,7 +144,8 @@ end
 function Apply(startup)
     for _, d in Defs do
         local value = Get(d.key)
-        if not (startup and d.device and value == Default(d.key)) then
+        -- (vertical sync is applied at start too: a profile that never ran the game has it off, and the editor then draws as many frames as the card can make)
+        if not (startup and d.device and d.key ~= 'vsync' and value == Default(d.key)) then
             local ok, err = pcall(d.apply, value)
             if not ok then LOG('EDITOR graphics: ' .. d.key .. ' could not be applied (' .. tostring(err) .. ')') end
         end

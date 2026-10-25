@@ -965,6 +965,7 @@ Command = {
     ["camera.north"] = "Turn the camera so that north is up.",
     ["camera.reset"] = "Move the camera back above the middle of the map.",
     ["camera.topdown"] = "Look straight down at the map.",
+    ["dev.display"] = "Show the window size, the measured frame rate, the saved graphics settings and the camera zoom, and print the live values of the frame limit, vertical sync and level of detail. The results appear in the Console panel.",
     ["dev.gpu"] = "Show the graphics adapter used for GPU compute and run its self test. The results appear in the Console panel.",
     ["edit.align.bottom"] = "Move the selected objects so that their south edges line up.",
     ["edit.align.centerx"] = "Move the selected objects so that their centres line up horizontally.",
