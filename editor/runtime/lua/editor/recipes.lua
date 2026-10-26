@@ -66,8 +66,8 @@ local function Rule(type, values, op, invert)
 end
 
 
-Knobs = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, mix = 0.55, soft = 0, seed = 1 }
-KnobDefaults = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, mix = 0.55, soft = 0, seed = 1 }
+Knobs = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, mix = 0.55, soft = 0, wear = 0.12, sed = 0.22, chan = 0.07, edge = 0.04, seed = 1 }
+KnobDefaults = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, mix = 0.55, soft = 0, wear = 0.12, sed = 0.22, chan = 0.07, edge = 0.04, seed = 1 }
 
 KnobInfo = {
     { key = 'cliff', label = 'Cliff slope from (degrees)', min = 20, max = 85, step = 1, fmt = '%d' },
@@ -84,10 +84,14 @@ KnobInfo = {
     { key = 'fine', label = 'Fine grain (variation at texture size)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
     { key = 'mix', label = 'Variant mix (how much of a kind a second texture of it takes)', min = 0.1, max = 0.95, step = 0.05, fmt = '%.2f' },
     { key = 'soft', label = 'Blend width between kinds (units, 0 = as resolved)', min = 0, max = 20, step = 0.5, fmt = '%.1f' },
+    { key = 'wear', label = 'Erosion paint: worn rock (share of the ground)', min = 0.02, max = 0.5, step = 0.01, fmt = '%.2f' },
+    { key = 'sed', label = 'Erosion paint: sediment (share of the ground)', min = 0.02, max = 0.6, step = 0.01, fmt = '%.2f' },
+    { key = 'chan', label = 'Erosion paint: drainage channels (share of the ground)', min = 0.01, max = 0.3, step = 0.01, fmt = '%.2f' },
+    { key = 'edge', label = 'Erosion paint: edge softness (share of a mask range)', min = 0.005, max = 0.3, step = 0.005, fmt = '%.3f' },
     { key = 'seed', label = 'Seed', min = 0, max = 9999, step = 1, fmt = '%d' },
 }
 
-ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', 'breakup', 'patch', 'crisp', 'fine', 'mix', 'soft', 'seed' }
+ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', 'breakup', 'patch', 'crisp', 'fine', 'mix', 'soft', 'wear', 'sed', 'chan', 'edge', 'seed' }
 
 --- The styles. `knobs` replaces the settings when the style is chosen (SelectPreset); `off` lists roles the style does not paint.
 Presets = {
@@ -102,6 +106,10 @@ Presets = {
     -- layered textures (Layered textures button, texsets.ApplyLayered): several textures of one kind of ground. Without them it is the Natural style with softer edges.
     { id = 'layered', name = 'Layered (many textures blended softly)', uses = ALL_KNOBS, knobs = { mix = 0.8, soft = 4, patch = 36, crisp = 0.3, breakup = 0.7, fine = 0.55, dirt = 0.4, rock = 20, cliff = 40, wet = 3, dark = 0.5, snow = 0 },
       off = { snow = true }, layered = true },
+    -- the paint read off the erosion (erosionpaint.lua): worn rock, sediment and the drainage network from the wear / deposit / flow masks, the second texture of a kind by bands of those masks; crisp edges,
+    -- no noise patches. Wire erosion or imported masks into the Ground kinds node; without them the masks are made from the heights (a solver free stand-in).
+    { id = 'erosion', name = 'Erosion paint (rock, sediment and channels from the water)', uses = ALL_KNOBS, knobs = { soft = 0, edge = 0.012, wear = 0.12, sed = 0.22, chan = 0.07, rock = 26, cliff = 44, snow = 0 },
+      off = { snow = true }, erosion = true },
     { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.36, snow = 0, rock = 38, cliff = 56, crisp = 0.3 }, off = { snow = true } },
 }
 
@@ -737,7 +745,7 @@ end
 
 --- The selection of every kind of ground that has a layer (or is the base): sel[role] = field (none for the base kind: it is what the others leave), groups[role] = its layers. A kind on a layer
 --- the B shaders draw from the side only (3, 4) gets steep ground only. Nothing is resolved yet (Resolve does that).
-local function Selections_(S, c, plan, roles, k, st)
+local function Selections_(S, c, plan, roles, k, st, masks, erosion)
     local byId = {}
     for _, r in roles do byId[r.id] = r end
     local groups, sel = {}, {}
@@ -764,6 +772,7 @@ local function Selections_(S, c, plan, roles, k, st)
             end
         end
     end
+    if erosion then import('/lua/editor/erosionpaint.lua').Override(S, c, sel, groups, k, masks) end
     return sel, groups
 end
 
@@ -785,7 +794,9 @@ local function Resolve(S, c, plan, sel, groups, k, st)
         if reg then
             local left = reg
             for gi = 2, table.getn(g) do
-                local t = S:Op('mul', { a = left, b = PatchField(c, k, st, id, gi - 1) })
+                -- a variant field of the selection (erosion paint: a band of the wear / deposit / flow mask) decides, noise only when there is none
+                local vf = sel[id .. '#' .. (gi - 1)]
+                local t = S:Op('mul', { a = left, b = vf or PatchField(c, k, st, id, gi - 1) })
                 left = S:Op('sub', { a = left, b = t })
                 target[g[gi]] = t
             end
@@ -802,7 +813,7 @@ end
 
 --- The visible weight of every layer of the plan, as fields: { [layer] = field }. See the header (priority cascade, then variants split a role's region).
 local function Weights(S, c, plan, roles, k, st)
-    local sel, groups = Selections_(S, c, plan, roles, k, st)
+    local sel, groups = Selections_(S, c, plan, roles, k, st, nil, Presets[State.preset].erosion)
     return Resolve(S, c, plan, sel, groups, k, st)
 end
 
@@ -944,7 +955,7 @@ function Selections(S, c, o)
     local k, index = KnobsFor(o)
     local st = StatsOf(S, c.H, c.water)
     local roles = Roles(Context(plan), st, k, index)
-    local sel, groups = Selections_(S, c, plan, roles, k, st)
+    local sel, groups = Selections_(S, c, plan, roles, k, st, o and o.masks, Presets[index].erosion)
     return sel, plan, roles, groups
 end
 
@@ -968,6 +979,9 @@ function WriteKinds(S, c, sel, o)
         if list then
             groups[id] = list
             if sel[id] and plan.base ~= id then use[id] = sel[id] end
+            for n = 1, 8 do
+                if sel[id .. '#' .. n] then use[id .. '#' .. n] = sel[id .. '#' .. n] end        -- bands of the erosion masks for the second, third ... layer of a kind
+            end
         end
     end
     local biplanarGate

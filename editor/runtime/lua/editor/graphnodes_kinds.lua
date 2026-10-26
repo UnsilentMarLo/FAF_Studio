@@ -75,6 +75,9 @@ function Install(Kit, Covers)
 
     local kindOutputs = {}
     for _, id in ROLES do table.insert(kindOutputs, Out(id, 'mask')) end
+    -- the bands of the erosion masks that split a kind between its layers (the erosion paint style): port name -> the key of the selection (recipes.lua Resolve: sel['rock#1'] ...)
+    local VARIANTS = { { 'rock2', 'rock#1' }, { 'rock3', 'rock#2' }, { 'dirt2', 'dirt#1' }, { 'wet2', 'wet#1' }, { 'grass2', 'grass#1' } }
+    for _, vr in VARIANTS do table.insert(kindOutputs, Out(vr[1], 'mask', true)) end
     local kindParams = { StyleParam(), N('erosion', 'Erosion masks decide (when wired)', 0, 1, 0.05, '%.2f', 0.7) }
     for _, p in KnobParams() do table.insert(kindParams, p) end
 
@@ -89,7 +92,11 @@ function Install(Kit, Covers)
             local w, h = Fields.Info(H)
             local hmin, hmax = Fields.Stats(H)
             local c = { S = E, H = H, w = w, h = h, cell = E.cell, step = E.step, hmin = hmin, hmax = hmax, water = E.water, cache = {} }
-            local sel, plan = Recipes.Selections(E, c, { preset = v.style, knobs = Moved(v) })
+            local sel, plan = Recipes.Selections(E, c, { preset = v.style, knobs = Moved(v), masks = { wear = ins.wear, deposit = ins.deposit, flow = ins.flow } })
+            local erosionStyle = false
+            for _, p in Recipes.Presets do
+                if p.id == v.style and p.erosion then erosionStyle = true end
+            end
             -- what the erosion did decides too (the way a World Machine map is painted from its erosion masks): wear bares rock, the sediment settles as dirt on the flat ground, the flow is wet
             -- ground; `erosion` is how much of the kind's own selection they may replace (a kind that is the base layer or has no layer is left alone)
             local function Lift(id, m)
@@ -98,13 +105,16 @@ function Install(Kit, Covers)
                     sel[id] = E:Op('max', { a = sel[id], b = up })
                 end
             end
-            Lift('rock', ins.wear)
-            Lift('dirt', ins.deposit)
-            Lift('wet', ins.flow)
+            if not erosionStyle then          -- the erosion paint style uses the masks itself (erosionpaint.lua)
+                Lift('rock', ins.wear)
+                Lift('dirt', ins.deposit)
+                Lift('wet', ins.flow)
+            end
             local out = {}
             for _, id in ROLES do
                 out[id] = sel[id] or E:Const((plan.base == id) and 1 or 0)
             end
+            for _, vr in VARIANTS do out[vr[1]] = sel[vr[2]] end
             return out
         end })
 
@@ -139,6 +149,10 @@ function Install(Kit, Covers)
         table.insert(outInputs, In(id, 'mask', true))
         table.insert(outOutputs, Out('seen_' .. id, 'mask', true))      -- (the inputs passed through: the build reads them here; other names than the inputs)
     end
+    for _, vr in VARIANTS do
+        table.insert(outInputs, In(vr[1], 'mask', true))
+        table.insert(outOutputs, Out('seen_' .. vr[1], 'mask', true))
+    end
     Def('out_kinds', { label = 'Output: ground kinds', cat = 'outputs', kw = 'output ground kinds all grass dirt wet sand rock snow layers paint texture shader stratum recipe terrain types roughness 7 8 layers',
         desc = 'Build paints the whole ground from the kind masks (Ground kinds node, or your own): overlaps are settled the way the recipes do (snow over high rock over dark rock over rock over wet ground over sand over dirt over grass), every kind goes to the layer that holds it whatever the shader (4, 7 or 8 painted layers, the base layer is what is left, side-mapped layers get steep ground only), the masks are written in the shader\'s encoding, then the terrain types follow what shows most and the PBR shaders get their roughness multiplier. A kind with a layer but no wire is cleared from its layer. One undo step with the rest of the build.',
         inputs = outInputs, outputs = outOutputs, output = 'kinds',
@@ -146,6 +160,7 @@ function Install(Kit, Covers)
         eval = function(E, v, ins)
             local out = {}
             for _, id in ROLES do out['seen_' .. id] = ins[id] end
+            for _, vr in VARIANTS do out['seen_' .. vr[1]] = ins[vr[1]] end
             return out
         end })
 end

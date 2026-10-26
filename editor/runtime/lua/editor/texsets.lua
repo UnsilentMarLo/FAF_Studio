@@ -84,7 +84,14 @@ Themes = {
         wet = { '/env/Geothermal/layers/Geo_LavaDk_01_albedo.dds' }, highrock = { '/env/Geothermal/layers/Geo_Rock002_albedo.dds' },
         darkrock = { '/env/Geothermal/layers/Geo_LavaMd_01_albedo.dds' }, snow = { '/env/Geothermal/layers/Geo_LavaLt_01_albedo.dds' } },
 }
-ThemeOrder = { 'temperate', 'valley', 'desert', 'tropical', 'tundra', 'lava', 'swamp', 'geothermal' }
+-- Mars: tan sand with red-brown rock and dark pebbles (the look of the Gaea reference map: peach ground, dark rock bands). Desert sands and rocks with the red barrens gravel.
+Themes.redbarrens = { label = 'Mars (tan sand, red-brown rock)', size = 14,
+    base = { '/env/Desert/Layers/Des_SandMed01_albedo.dds' }, upper = { '/env/Red Barrens/Layers/macrotexture001_albedo.dds', '/env/Evergreen/layers/macrotexture000_albedo.dds' },
+    grass = { '/env/Desert/Layers/Des_SandMed01_albedo.dds' }, rock = { '/env/Desert/Layers/Des_Rock_albedo.dds', '/env/Red Barrens/Layers/RB_Rock04_albedo.dds' },
+    sand = { '/env/Desert/Layers/Des_SandMed_albedo.dds' }, dirt = { '/env/Desert/Layers/Des_Gravel_albedo.dds', '/env/Red Barrens/Layers/RB_Gravel01_albedo.dds' },
+    wet = { '/env/Desert/Layers/Des_SandDark02_albedo.dds', '/env/Desert/Layers/Des_SandDark_albedo.dds' }, highrock = { '/env/Desert/Layers/Des_Rock03_albedo.dds', '/env/Red Barrens/Layers/RB_Rock02_albedo.dds' },
+    darkrock = { '/env/Desert/Layers/Des_Rock06_albedo.dds', '/env/Red Barrens/Layers/RB_Rock09_albedo.dds' }, snow = { '/env/Desert/Layers/Des_SandMed_albedo.dds' } }
+ThemeOrder = { 'temperate', 'valley', 'desert', 'redbarrens', 'tropical', 'tundra', 'lava', 'swamp', 'geothermal' }
 
 -- ---- layered sets: several textures of one kind of ground (docs/projects/editor/GRAPH_TEXTURING.md, "Operation Citadel") -------------------------------------------------------------
 -- A map that looks rich has three to five textures of the same kind side by side: Operation Citadel paints three kinds of rock and three of wet ground, every texel blends 2.7 layers on average.
@@ -108,6 +115,12 @@ Variants = {
         rock = { '/env/Desert/Layers/Des_Rock01_albedo.dds', '/env/Desert/Layers/Des_Rock02_albedo.dds', '/env/Desert/Layers/Des_Rock04_albedo.dds' },
         dirt = { '/env/Desert/Layers/Des_Gravel01_albedo.dds', '/env/Desert/Layers/Des_SandDark02_albedo.dds' },
         wet = { '/env/Desert/Layers/Des_SandDark_albedo.dds', '/env/Desert/Layers/Des_SandWet_albedo.dds' },
+    },
+    redbarrens = {
+        grass = { '/env/Desert/Layers/Des_SandMed02_albedo.dds', '/env/Desert/Layers/Des_SandDark_albedo.dds', '/env/Red Barrens/Layers/RB_Sand_albedo.dds' },
+        rock = { '/env/Red Barrens/Layers/RB_Rock04_albedo.dds', '/env/Desert/Layers/Des_Rock05_albedo.dds', '/env/Red Barrens/Layers/RB_Rock02_albedo.dds' },
+        dirt = { '/env/Desert/Layers/Des_Gravel01_albedo.dds', '/env/Red Barrens/Layers/RB_Gravel01_albedo.dds' },
+        wet = { '/env/Desert/Layers/Des_SandDark_albedo.dds', '/env/Red Barrens/Layers/RB_SandWet01_albedo.dds' },
     },
     tropical = {
         grass = { '/env/Tropical/Layers/TrGrass003_albedo.dds', '/env/Tropical/Layers/TrGrass004_albedo.dds', '/env/Tropical/Layers/Trop_Grass_albedo.dds' },

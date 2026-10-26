@@ -78,6 +78,16 @@ Sets = {
         ground = { E .. 'Swamp/Decals/sw_boulder002_albedo.dds', E .. 'Swamp/Decals/sw_boulder007_albedo.dds', E .. 'Swamp/Decals/sw_boulder008_albedo.dds' },
         cliff = { E .. 'Swamp/Decals/swcliff01_albedo.dds', E .. 'Swamp/Decals/swcliff02_albedo.dds', E .. 'Swamp/Decals/swcliff03_albedo.dds', E .. 'Swamp/Decals/cliffside001_albedo.dds' },
     },
+    redbarrens = {
+        group = 'redrocks',
+        small = { 'rock_sm01', 'rock_sm02', 'rock_sm03', 'rock_sm04', 'rock_sm05', 'rock_sm06', 'rock_sm07' },
+        big = { 'rock01', 'rock02', 'rock03', 'boulder01', 'boulder02', 'boulder03', 'boulder04' },
+        crack = { E .. 'Desert/Decals/des_rockground_albedo.dds', E .. 'Desert/Decals/des_rockground2_albedo.dds', E .. 'Desert/Decals/des_rockground3_albedo.dds',
+                  E .. 'Desert/Decals/des_swirl01_albedo.dds', E .. 'Desert/Decals/des_swirl02_albedo.dds' },
+        ground = { E .. 'Red Barrens/Decals/rb_rockground_albedo.dds', E .. 'Red Barrens/Decals/rb_rockground2_albedo.dds' },
+        cliff = { E .. 'Red Barrens/Decals/rb_cliff01_albedo.dds', E .. 'Red Barrens/Decals/rb_cliff02_albedo.dds', E .. 'Red Barrens/Decals/rb_cliff03_albedo.dds' },
+        scale = { small = { 320, 560 }, big = { 160, 280 } },
+    },
     geothermal = {
         group = 'geothermal',
         small = { 'georock01', 'georock04', 'georock05' },
@@ -88,7 +98,7 @@ Sets = {
     },
 }
 -- which environment a texture set belongs to
-SetOf = { temperate = 'evergreen', valley = 'evergreen', desert = 'desert', tropical = 'tropical', tundra = 'tundra', lava = 'lava', swamp = 'swamp', geothermal = 'geothermal' }
+SetOf = { temperate = 'evergreen', valley = 'evergreen', desert = 'desert', redbarrens = 'redbarrens', tropical = 'tropical', tundra = 'tundra', lava = 'lava', swamp = 'swamp', geothermal = 'geothermal' }
 
 -- the classes: slope window (degrees), how many per 1,000 square units (Operation Citadel: small 9.8, big 1.8, crevices 0.7, rock ground 0.17), the minimum distance, the scale window (percent), the decal
 -- size (units at 100 percent), the clustering: noise of `size` units whose top `share` of the map takes the density (things lie in groups along the ground, not evenly)
@@ -97,7 +107,7 @@ Defs = {
     { id = 'big', label = 'Big rocks (steep ground, cliffs)', mode = 'props', slopeMin = 6, slopeMax = 55, per1000 = 1.8, minDist = 10, scaleMin = 90, scaleMax = 150, cluster = { size = 50, share = 0.85 } },
     { id = 'crack', label = 'Crevice and patch decals (gentle ground)', mode = 'decals', slopeMin = 0, slopeMax = 12, per1000 = 0.7, minDist = 14, scaleMin = 60, scaleMax = 160, decalSize = 25, cluster = { size = 90, share = 0.6 } },
     { id = 'ground', label = 'Rock ground decals (steeper ground)', mode = 'decals', slopeMin = 8, slopeMax = 35, per1000 = 0.17, minDist = 25, scaleMin = 70, scaleMax = 140, decalSize = 36, cluster = { size = 110, share = 0.6 } },
-    { id = 'cliff', label = 'Cliff face decals (steep ground)', mode = 'decals', slopeMin = 30, slopeMax = 85, per1000 = 0.25, minDist = 18, scaleMin = 70, scaleMax = 130, decalSize = 30, cluster = { size = 70, share = 0.8 } },
+    { id = 'cliff', label = 'Cliff face decals (steep ground)', mode = 'decals', slopeMin = 30, slopeMax = 85, per1000 = 0.12, minDist = 22, scaleMin = 60, scaleMax = 110, decalSize = 26, cluster = { size = 70, share = 0.8 } },
 }
 
 -- decal textures are files of the game data; prop blueprints are not (the game loads them into its rules: DiskGetFileInfo does not see them), and they lie in subfolders (/env/evergreen/props/rocks/...):
@@ -127,6 +137,7 @@ function Classes(themeId)
         local c = {}
         for k, v in d do c[k] = v end
         c.entries = {}
+        if set.scale and set.scale[d.id] then c.scaleMin, c.scaleMax = set.scale[d.id][1], set.scale[d.id][2] end
         for _, p in set[d.id] or {} do
             if d.mode == 'props' then
                 local path = PropPath(set.group, p)

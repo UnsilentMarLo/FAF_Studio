@@ -1006,6 +1006,11 @@ function Build()
                 local m = run:Value(node.id, 'seen_' .. id)
                 if m then sel[id] = m any = true end
             end
+            -- the bands that split a kind between its layers (Ground kinds, erosion paint style)
+            for _, vr in { { 'rock2', 'rock#1' }, { 'rock3', 'rock#2' }, { 'dirt2', 'dirt#1' }, { 'wet2', 'wet#1' }, { 'grass2', 'grass#1' } } do
+                local m = run:Value(node.id, 'seen_' .. vr[1])
+                if m then sel[vr[2]] = m end
+            end
             if any then
                 local Recipes = import('/lua/editor/recipes.lua')
                 local summary, cellsOrWhy = Recipes.WriteKinds(S, c, sel, { label = 'terrain graph', types = V(run, node, 'types'), roughness = V(run, node, 'roughness'), amount = V(run, node, 'amount') })
