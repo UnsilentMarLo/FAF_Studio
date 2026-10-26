@@ -201,7 +201,7 @@ def assemble(a):
     # editor tree: tracked content from this checkout, generated content (git-ignored) from here or from the main checkout
     runtime = os.path.join(ROOT, 'editor', 'runtime')
     dest = os.path.join(pkg, 'editor')
-    n = copy_tree(runtime, dest, skip_dirs=('testdata',), skip_files=(r'^selftest_.*\.lua$', r'^selftests\.extra$'))
+    n = copy_tree(runtime, dest, skip_dirs=('testdata', '.editor_backup'), skip_files=(r'^selftest_.*\.lua$', r'^selftests\.extra$'))
     for rel in ('maps', 'brushes', os.path.join('override', 'textures')):
         if not os.path.isdir(os.path.join(dest, rel)) or not os.listdir(os.path.join(dest, rel)):
             src = os.path.join(main, 'editor', 'runtime', rel)
