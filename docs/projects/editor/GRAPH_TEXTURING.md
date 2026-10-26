@@ -167,3 +167,17 @@ Built from the Citadel numbers above; the terrain shape stays the Gaea one (the 
   (1025 map): 10,769 things in 3 s; the small rocks stand on 4.4 degrees of slope under them (Citadel 4.2, the terrain 8.6), the big ones on 32 to 36 degrees (the terrain is bimodal: flat or vertical; Citadel 16).
 * **Not done**: the detail pass is not a graph node yet (the graph's own `Output: scatter props` still does one class); the flow, wear and deposit masks of Gaea are not mixed into the layered recipe; the Terrain2xx shaders (Citadel's family) show the
   recipe wrongly in the texture lab (a flat green picture: the lab does not make the roughness / height atlas they blend with), so the check was made with TTerrainXP.
+
+### Erosion paint: texture masks made from the water (2026-10-27)
+
+The user's World Machine / Gaea projects build the paint from erosion masks at high resolution; random noise patches and soft blurred transitions look wrong next to them. `erosionpaint.lua` does the same with the editor's own tools:
+
+* **Masks**: `wear` (where the flow stripped the ground), `deposit` (where sediment settled: flat, downstream), `flow` (the drainage network). Imported ones (Interop panel, named masks) or the outputs of an erosion node (`erode_hydraulic` / `droplet` / `stream`: ports wear, deposit, flow, accum) are used as they are;
+  without them they are made from the heights: `rockiness` (wear), topographic `wetness` times flat ground (deposit), D8 `flow`. A solver free stand-in, not the real thing.
+* **Bands, not noise**: every mask is a threshold at a SHARE of the ground (`wear` 12 percent, `sed` 22, `chan` 7 by default; knobs), found by bisection on the field (`Above`), so it means the same on any map. The kinds with several layers are split by BANDS of the masks: the second rock is
+  the strongest wear, the third rock the concave cavities on slopes, the second dirt the thickest sediment, the second wet ground the channel core, the second grass the ridge tops. (`recipes.lua` `Resolve` takes the variant fields `sel['rock#1']` ... before it falls back to noise patches.)
+* **Crisp**: `edge` (a share of the mask's range, 0.012) plus two squeeze passes (`sharpen`): a threshold of a smooth gradient keeps a wide transition, the squeeze makes the edge the place where the mask crosses the threshold. An imported mask of lower resolution than the map stays soft at its own resolution.
+* **Where**: recipe style **Erosion paint** (Stratum recipes panel, graph node `Ground kinds` style); the `Ground kinds` node has five new optional outputs (rock2, rock3, dirt2, wet2, grass2) and `Output: ground kinds` the matching inputs; graphs `Gaea / World Machine terrain, painted by the erosion masks`
+  (`external_erosion`: imported masks) and `Eroded hills painted by the water` (`eroded_hills`: the hydraulic erosion node's own masks). Use **Layered textures** first so every kind has several textures to split between.
+* **Cost** (1025 map, this PC): Apply of the Erosion paint style 0.8 s, Layered 0.5 s, Natural 0.5 s. Detail pass on 1025: 3.0 s for 10,700 props and decals.
+* **Test**: `selftest_erosionpaint.lua` (thresholds find their share, variants and selections exist, edges narrow, the node ports). Visual check on the imported Gaea terrain: worn rock along the cliff tops, sediment streaks and the dendritic channel network as the wet layer.
