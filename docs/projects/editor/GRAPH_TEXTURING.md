@@ -130,3 +130,22 @@ heights from the 5th to the 95th percentile spanning 6 to 33 units (median 18), 
   The Stratum recipes **Style** button is now a menu of all styles (the built-in ones, then `<Family> (from N maps)`). The sets of the maps are not used to guess the kind of ground of a texture (`RoleOfTexture` skips
   them: the same texture is another kind of ground on another map). `selftest_recipes` checks that every texture of every set exists, every style names a recipe knob inside its slider range.
 * Open: the maps' tile sizes (`scale`) are collected but sets still use the Optimal tile size of `texscale.lua`; layer masks' noise scale (patch size) is not measured.
+
+## Operation Citadel (coop mission, World Machine workflow) measured as a reference (2026-10-26)
+
+Map folder `Documents/My Games/.../Maps/Operation_Citadel.v0001`, read with `scripts/pylib/scmap.py`, opened in the editor (`cit` instance) and measured with `scripts/terrain_metrics.lua`.
+
+* **Format**: 1025 x 1025 samples (20 km), height range 74 units (4.1 .. 78.3), water at 4.3. Shader **Terrain251**. Map-wide textures are files in `env/layers`: `mapInfo.dds` (lighting texture, 2048 x 2048 DXT5),
+  `mapNormal.dds` (2048 x 2048 DXT5), `roughnessAndHeight.dds` (2048 x 2048, 8 bit). The two stratum mask textures are 1024 x 1024 DXT5. 8 strata (Crystalline textures, Red Barrens cracked normals), 12,625 props,
+  971 decals, lighting multiplier 1.5. The editor's Map textures panel (cap 2048) covers every map-wide texture size this map has.
+* **Terrain**: mean slope 8.7 degrees; ground steeper than 5 / 10 / 20 / 30 / 40 / 50 degrees: 53 / 27 / 11 / 4.7 / 2.0 / 0.8 percent. Relief (rms of H - blur(H, r)) r = 2 / 8 / 32 / 128: 0.12 / 0.65 / 2.4 / 5.8 units,
+  i.e. **very smooth small scales** (the shipped `badlands` has 0.45 at r = 2, `canyon` 0.49, the Gaea terrain imported from cracked_basin 0.32, `hills` 0.14) and relief living in large shapes. Heights are not two-humped here
+  (5/25/50/75/95 percentiles 6.9 / 18.8 / 23.5 / 28.7 / 44.6).
+* **Paint**: very soft masks. Layer 3 (wet sand) covers 35 percent of the map with 44 percent of the map in transition, layer 2 (rock) 37 percent with 48 percent in transition; only layer 1 has hard areas (17 percent
+  fully covered). The base layer is what is seen on 46 percent of the ground.
+* **The map normal is the height normal at twice the resolution**: the one channel our image reader returns correlates -0.92 with the normal computed from the heights (per cell, 62,000 samples); what is finer than
+  one cell is 1.5 percent of its variance. (Caveat: the reader returns one gray channel for DDS files; the x channel in alpha could not be read separately.) So the richness of this map is not baked micro relief: it is
+  the strata normals of eight textures, soft masks, the lighting texture, props and decals.
+* **Props by slope** (mean slope under the prop; the terrain's mean is 8.6 degrees): small rocks (CrysSmRock01..05, CrystalRock01..02, 8,300 props) 4.2 degrees, crystals (cryscrystal01..08, 2,000 props) 3.8 to 4.2,
+  with the large ones (06 .. 08) on the flattest ground, the big cliff rocks (georock02 / 03, 1,850 props) 16 degrees with 27 to 31 percent of them on ground steeper than 20 degrees. One scatter class per size, driven by
+  slope: small things on gentle ground, big rocks on the cliffs.
