@@ -85,27 +85,36 @@ function Report()
     local okE, e = pcall(function() return rawget(_G, 'ed_engine_info') and ed_engine_info() or nil end)
     local okB, Build = pcall(function() return import('/lua/editor/buildinfo.lua') end)
     if okE and type(e) == 'table' then
-        table.insert(out, string.format('engine built %s; editor Lua %s (revision %s)', tostring(e.built), okB and tostring(Build.Build) or '?', okB and tostring(Build.Revision) or '?'))
-        table.insert(out, string.format('monitor %.0f Hz; the active frame cap is %.0f per second (follows the monitor: %s)', e.refreshHz or 0, e.cap or 0, tostring(e.followRefresh)))
+        table.insert(out, string.format('engine built %s', tostring(e.built)))
+        table.insert(out, string.format('editor Lua %s, revision %s', okB and tostring(Build.Build) or '?', okB and tostring(Build.Revision) or '?'))
+        table.insert(out, string.format('monitor %.0f Hz; active frame cap %.0f per second (follows monitor: %s)', e.refreshHz or 0, e.cap or 0, tostring(e.followRefresh)))
         for line in string.gfind(tostring(e.renderInfo or ''), '[^\n]+') do
-            if string.find(line, 'backend', 1, true) or string.find(line, 'adapter', 1, true) or string.find(line, 'video memory', 1, true) or string.find(line, 'swap', 1, true) then
-                table.insert(out, 'renderer: ' .. string.gsub(line, '^%s+', ''))
+            local t = string.gsub(line, '^%s+', '')
+            if string.find(t, 'adapter:', 1, true) then
+                local name = string.gsub(t, '%s*%(vendor.*$', '')
+                table.insert(out, 'renderer ' .. name)
+                local drv = string.gsub(t, '^.*driver%s+', '')
+                if drv ~= t then table.insert(out, 'driver ' .. drv) end
+            elseif string.find(t, 'backend:', 1, true) or string.find(t, 'swap chain:', 1, true) then
+                table.insert(out, 'renderer ' .. t)
             end
         end
     else
-        table.insert(out, 'this engine is older than the editor Lua: it has no ed_engine_info (the editor Lua is revision ' .. (okB and tostring(Build.Revision) or '?') .. ')')
+        table.insert(out, 'this engine is older than the editor Lua: it has no ed_engine_info')
+        table.insert(out, 'editor Lua revision ' .. (okB and tostring(Build.Revision) or '?'))
     end
     local okL, lod = pcall(function() return rawget(_G, 'ed_lod_info') and ed_lod_info() or nil end)
     if okL and type(lod) == 'table' then
-        table.insert(out, string.format('level of detail: scale %.2f (0.9 high, 1.0 medium, 1.2 low), field of view %.2f, zoom %.1f, eye distance %.1f, view %d x %d, plane %.3f %.3f %.3f %.1f',
-            lod.lodScale or 0, lod.fov or 0, lod.zoom or 0, lod.eyeDistance or 0, lod.viewportW or 0, lod.viewportH or 0, lod.lodRowA or 0, lod.lodRowB or 0, lod.lodRowC or 0, lod.lodRowD or 0))
+        table.insert(out, string.format('level of detail scale %.2f (0.9 high, 1.0 medium, 1.2 low), field of view %.2f', lod.lodScale or 0, lod.fov or 0))
+        table.insert(out, string.format('zoom %.1f, eye distance %.1f, view %d x %d', lod.zoom or 0, lod.eyeDistance or 0, lod.viewportW or 0, lod.viewportH or 0))
+        table.insert(out, string.format('LOD plane %.3f %.3f %.3f %.1f', lod.lodRowA or 0, lod.lodRowB or 0, lod.lodRowC or 0, lod.lodRowD or 0))
     else
         table.insert(out, 'level of detail: ed_lod_info is missing (an older engine)')
     end
     local nativeGrid = rawget(_G, 'ed_overlay_grid') ~= nil
     local okO, perf = pcall(function() return { ed_overlay_perf() } end)
     if okO and type(perf) == 'table' and perf[15] then
-        table.insert(out, string.format('build grid: %s; leaves %d, segments %d (the budget grows with the screen), %.2f ms', nativeGrid and 'native quadtree' or 'Lua fallback', perf[15] or 0, perf[16] or 0, perf[14] or 0))
+        table.insert(out, string.format('build grid: %s; leaves %d, segments %d, %.2f ms', nativeGrid and 'native quadtree' or 'Lua fallback', perf[15] or 0, perf[16] or 0, perf[14] or 0))
     else
         table.insert(out, 'build grid: ' .. (nativeGrid and 'native quadtree' or 'Lua fallback (an older engine)'))
     end

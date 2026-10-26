@@ -146,7 +146,7 @@ Panels.Register{
             end, { tip = 'Measures the frame rate and lists the window size, the graphics settings and the camera. Take a screenshot of it, or find the same lines in the Console panel.' })
             y = y + rowH + Skin.S(8)
             self.displayLabels = {}
-            for i = 1, 9 do
+            for i = 1, 26 do      -- the report has about 20 lines; a line too long for the panel is cut, so display.lua keeps them short
                 self.displayLabels[i] = Keep(W.Label(group, '', pad, y, { color = c.textDim, size = 'small' }))
                 y = y + Skin.S(16)
             end
