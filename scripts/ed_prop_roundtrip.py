@@ -4,8 +4,8 @@ engine opens it, dumps what it holds, saves it untouched and edited, and the Pyt
 
     python scripts/ed_prop_roundtrip.py
 
-Needs the editor engine staged (python scripts/studio.py engine stage). Stops only the engine process it started; it uses its
-own log (roundtrip.log) and command file, so it does not touch a running editor's run.log.
+Needs the editor engine staged (python scripts/studio.py build). It runs in its own editor instance (.runs/rt, scripts/editor_inst.py) and stops only that
+process, so it does not touch a running editor.
 """
 import math
 import os
@@ -18,7 +18,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.insert(0, HERE)
 import studio_paths as P  # noqa: E402
-RUN = P.ENGINE_RUN
+TAG = "rt"
+RUN = os.path.join(P.RUNS, TAG)
 sys.path.insert(0, os.path.join(HERE, "pylib"))
 sys.path.insert(0, HERE)
 import ed_make_blank_map  # noqa: E402
@@ -77,44 +78,25 @@ def compare(label, got, want, errors):
 
 
 def run_engine(errors):
-    exe = os.path.join(RUN, "bin", "main_x64_la.exe")
-    log = os.path.join(RUN, "roundtrip.log")
-    if os.path.exists(log):
-        os.remove(log)
-    shutil.copyfile(os.path.join(ROOT, "editor", "runtime", "init_editor.lua"),
-                    os.path.join(RUN, "bin", "init_editor.lua"))
-    cmdfile = os.path.join(RUN, "edcmd_roundtrip.lua")
-    for name in (cmdfile, cmdfile + ".out", cmdfile + ".stamp", os.path.join(RUN, "bin", "edcmd_roundtrip.lua.stamp")):
-        if os.path.exists(name):
-            os.remove(name)
-    cmd = [exe, "/init", "init_editor.lua", "/log", log, "/nomovie", "/nosound", "/windowed", "1280", "720",
-           "/editor", "/map", "/maps/prop_scale_in.v0001/prop_scale_in_scenario.lua", "/edcmd", cmdfile]
-    env = dict(os.environ, MSYS_NO_PATHCONV="1")
-    proc = subprocess.Popen(cmd, cwd=os.path.join(RUN, "bin"), env=env)
-    print("engine pid", proc.pid)
-    result = None
+    """Runs the check in its own editor instance (scripts/editor_inst.py, tag `rt`); returns the selftest's answer or None."""
+    inst = [sys.executable, os.path.join(HERE, "editor_inst.py")]
+    subprocess.run(inst + ["new", TAG], check=True, stdout=subprocess.DEVNULL)
+    started = subprocess.run(inst + ["start", TAG, "--map", "/maps/prop_scale_in.v0001/prop_scale_in_scenario.lua", "--wait", "150"],
+                             capture_output=True, text=True)
     try:
-        for _ in range(150):
-            time.sleep(1)
-            if os.path.exists(log) and "command channel" in open(log, encoding="utf-8", errors="replace").read():
-                break
-        else:
-            errors.append("engine did not reach the command channel")
+        if started.returncode != 0:
+            errors.append("engine did not reach the command channel: " + (started.stdout + started.stderr).strip()[-300:])
             return None
-        time.sleep(3)
+        cmdfile = os.path.join(RUN, "roundtrip_cmd.lua")
         with open(cmdfile, "w") as fh:
-            fh.write("return import('/lua/editor/selftest_props.lua').Run('../mapout/prop_scale_out.v0001', 'prop_scale')\n")
-        for _ in range(60):
-            time.sleep(1)
-            if os.path.exists(cmdfile + ".out"):
-                result = open(cmdfile + ".out", encoding="utf-8").read()
-                break
-        else:
-            errors.append("no result from the engine")
+            fh.write("return import('/lua/editor/selftest_props.lua').Run('../mapout/prop_scale_out.v0001', 'prop_scale')" + chr(10))
+        done = subprocess.run(inst + ["cmd", TAG, cmdfile, "--timeout", "120"], capture_output=True, text=True)
+        if done.returncode != 0 or not done.stdout.strip():
+            errors.append("no result from the engine: " + (done.stdout + done.stderr).strip()[-300:])
+            return None
+        return done.stdout
     finally:
-        proc.kill()
-        proc.wait()
-    return result
+        subprocess.run(inst + ["stop", TAG], stdout=subprocess.DEVNULL)
 
 
 def main():
@@ -150,7 +132,7 @@ def main():
                 errors.append(f"edit: added prop scale {added[0]['scale']}")
             if not close(added[1]["scale"], [1.75, 1.75, 1.75], 0.0):
                 errors.append(f"edit: uniform prop scale {added[1]['scale']}")
-            ry = rot_y(0.3)
+            ry = rot_y(-0.3)   # the engine's heading h is the file rows of rot_y(-h): MatrixToQuat / VAxes3 are the binary's (decompiled), Python's rot_y is the other way round
             if not (close(added[0]["rot_x"], ry[0]) and close(added[0]["rot_z"], ry[2])):
                 errors.append(f"edit: added prop rotation {added[0]['rot_x']} {added[0]['rot_z']}")
     if errors:

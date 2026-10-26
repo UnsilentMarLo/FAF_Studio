@@ -1,4 +1,4 @@
--- Sample graphs of the terrain graph editor (written by scripts/make_graph_presets.py).
+-- Sample graphs of the terrain graph editor (shipped data: one .lua file per graph in this folder).
 List = {
     { id = 'mountains', name = 'Mountains (ridges, droplet erosion, cliffs and snow)', note = 'Ridged noise bent by a warp, scaled to heights, eroded by droplets; cliffs on the steep ground, snow on the high ground.' },
     { id = 'island', name = 'Island (radial falloff, hills, beach)', note = 'A noisy island: noise times a radial falloff, droplet erosion (valleys running down to the coast), a sand beach on the shore band.' },

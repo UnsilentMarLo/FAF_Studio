@@ -1,5 +1,5 @@
 -- Golden cases of the field engine (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T1). One line per case: label | op | params | inputs | checksum.
--- Shared by the native test (engine/faf-re/src/sdk/moho/editor/tests/EdFieldTest.cpp: builds and checks these with 1, 2, 3, 5 and 8 threads, and
+-- Shared by the native test (engine/faf-re/src/moho/editor/tests/EdFieldTest.cpp: builds and checks these with 1, 2, 3, 5 and 8 threads, and
 -- rewrites the checksums with --update) and the in-editor self test (selftest_fields.lua: the same cases through the ed_field_* natives).
 -- params: k=v,k=v with v a number, a word, or a list x:y;x:y (flattened). inputs: name=Fixture,... with the fixtures
 --   A = perlin width=33,height=33,seed=7,scale=12,octaves=4      H = affine(A, mul=40, add=10) (a height field)

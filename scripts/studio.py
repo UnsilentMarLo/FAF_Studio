@@ -2,14 +2,11 @@
 """FAF Studio: set-up, build and check commands of this repository. Everything else has its own script (docs/REPOSITORY.md lists them).
 
     python scripts/studio.py doctor                 what is installed, what is missing
-    python scripts/studio.py build                  EVERYTHING in one go: apply new engine patches, build the engine, build edtext.dll, stage and brand the exe, say what changed
-    python scripts/studio.py deps                   the engine's third-party libraries (boost, wxWindows, LuaPlus, zlib, WildMagic, FFmpeg) are NOT in git: find them (an older checkout, FAF_STUDIO_DEPS),
-                                                    link them into engine/faf-re/dependencies, download FFmpeg when it is the only thing missing; `build` runs this first
-    python scripts/studio.py engine setup           clone the reconstructed engine (engine/BASE.json) and apply our patch series (engine/patches) -> engine/faf-re
-    python scripts/studio.py engine sync            apply the patches of engine/patches that engine/faf-re does not have yet (setup does this too; `git pull` adds patches, it does not apply them)
-    python scripts/studio.py engine build           MSBuild the editor engine (Visual Studio + the June 2010 DirectX SDK), then stage it
-    python scripts/studio.py engine stage           copy the built exe and DLLs, FAF's init files and the editor's init_editor.lua into engine/run, brand the exe (FAFStudio.exe)
-    python scripts/studio.py engine export          write the commits of engine/faf-re on top of the base back to engine/patches (commit them here)
+    python scripts/studio.py build                  EVERYTHING in one go: bring the engine to the commit this repository pins, build it (CMake, clang-cl), build edtext.dll, stage and brand the exe, say what changed
+    python scripts/studio.py engine setup           check out engine/faf-re (our fork UnsilentMarLo/faf-re, branch `editor`, a git submodule) with its own submodules
+    python scripts/studio.py engine sync            move engine/faf-re to the commit this repository pins (fast-forward; refuses when the checkout has changes of its own)
+    python scripts/studio.py engine build           configure (first time) and build the editor engine with CMake: -DFAF_EDITOR=ON, build/editor-x64 inside engine/faf-re, then stage it
+    python scripts/studio.py engine stage           copy the built exe, FAF's init files and the editor's init_editor.lua into engine/run, brand the exe (FAFStudio.exe)
     python scripts/studio.py edtext                 build edtext.dll (DirectWrite text backend, xmake) and stage it
     python scripts/studio.py version                show the version (editor/VERSION, major.minor.patch); a successful `build` raises the patch number (--no-bump keeps it);
                                                     `version --bump minor|major` or `--set X.Y.Z` change it. The number goes into the exe's properties and the editor's start screen
@@ -20,7 +17,6 @@
 Paths and environment variables: scripts/studio_paths.py. The editor runs on top of the FAForever client's installation (FAF_DATA), nothing of the game is copied into this repository.
 """
 import argparse
-import email
 import glob
 import json
 import os
@@ -29,15 +25,16 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.request
-import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import studio_paths as P  # noqa: E402
 
-ENGINE_META = os.path.join(P.ROOT, 'engine', 'BASE.json')
-PATCHES = os.path.join(P.ROOT, 'engine', 'patches')
+ENGINE_FORK = 'https://github.com/UnsilentMarLo/faf-re.git'            # our fork: the engine with the editor, branch `editor` (engine/faf-re is a submodule of it)
+ENGINE_UPSTREAM = 'https://github.com/Draiget/faf-re.git'             # where the reconstruction itself comes from
+ENGINE_BRANCH = 'editor'
+BUILD_SUBDIR = os.path.join('build', 'editor-x64')                     # inside engine/faf-re
+ENGINE_EXE_NAME = 'main_ed_x64'
 
 
 def run(cmd, cwd=None, check=True, **kw):
@@ -51,10 +48,6 @@ def run(cmd, cwd=None, check=True, **kw):
 def git(*args, cwd=None):
     r = subprocess.run(['git'] + list(args), cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace')
     return r.returncode, (r.stdout + r.stderr).strip()
-
-
-def meta():
-    return json.load(open(ENGINE_META, encoding='utf-8'))
 
 
 # ---- doctor ---------------------------------------------------------------------------------------------------------------------------------
@@ -96,25 +89,23 @@ def cmd_doctor(a):
     row('Forged Alliance install', bool(retail and os.path.isdir(retail)), str(retail))
     row('engine sources', os.path.isdir(os.path.join(P.SDK, 'moho', 'editor')), P.ENGINE_SRC + '   (studio.py engine setup)')
     row('staged engine', os.path.isfile(os.path.join(P.ENGINE_BIN, 'main_x64_la_p2.exe')), P.ENGINE_BIN + '   (studio.py engine stage)')
-    if os.path.isdir(os.path.join(P.ENGINE_SRC, '.git')):
-        try:
-            code, out = git('log', '--format=%s', meta()['base'] + '..HEAD', cwd=P.ENGINE_SRC)
-            have = set(' '.join(line.split()) for line in out.splitlines())
-            patches = sorted(glob.glob(os.path.join(PATCHES, '*.patch')))
-            missing = [os.path.basename(p) for p in patches if patch_subject(p) not in have]
-            row('engine patches applied', not missing, '%d of %d%s' % (len(patches) - len(missing), len(patches), ('   MISSING: ' + ', '.join(missing[:3]) + ('...' if len(missing) > 3 else '') + '   (python scripts/studio.py build applies them)') if missing else ''))
-        except Exception as e:
-            row('engine patches applied', False, str(e)[:100])
-    if os.path.isdir(P.ENGINE_SRC):
-        miss = deps_missing()
-        row('engine dependencies', not miss, ('all %d in engine/faf-re/dependencies' % len(DEPENDENCIES)) if not miss else 'MISSING: ' + ', '.join(miss) + '   (python scripts/studio.py deps)')
+    if os.path.exists(os.path.join(P.ENGINE_SRC, '.git')):
+        pinned = engine_pinned()
+        code, head = git('rev-parse', 'HEAD', cwd=P.ENGINE_SRC)
+        if pinned:
+            code2, behind = git('merge-base', '--is-ancestor', pinned, head, cwd=P.ENGINE_SRC)
+            row('engine at the pinned commit', code == 0 and code2 == 0, 'pinned %s, checked out %s%s' % (pinned[:9], head[:9], '' if code2 == 0 else '   (studio.py engine sync)'))
+    cmake = find_cmake()
+    row('CMake + Ninja', bool(cmake), cmake or 'Visual Studio 2022 / 2026 with the C++ CMake tools, or CMake 3.25+ and Ninja on PATH')
+    llvm = find_llvm()
+    row('LLVM (clang-cl)', bool(llvm), llvm or 'LLVM in C:\\Program Files\\LLVM or LLVM_ROOT (the engine builds with clang-cl)')
     exe_path = os.path.join(P.ENGINE_BIN, 'FAFStudio.exe')
-    built = os.path.join(P.ENGINE_SRC, 'output', 'main', 'x64', 'Release', 'main_x64_la.exe')
+    built = engine_exe()
     if os.path.isfile(exe_path) and os.path.isfile(built):
         row('FAFStudio.exe is current', os.path.getmtime(exe_path) >= os.path.getmtime(built) - 5, 'FAFStudio.exe %s, built engine %s' % (stamp(exe_path)[:19], stamp(built)[:19]))
     row('generated assets', os.path.isfile(os.path.join(P.ROOT, 'editor', 'runtime', 'maps', 'editor_blank', 'editor_blank.scmap')), 'studio.py generate')
     vc = find_vcvars()
-    row('Visual Studio C++ tools', bool(vc), vc or 'only needed to build the engine (FAF_STUDIO_VCVARS)')
+    row('Visual Studio C++ tools', bool(vc), vc or 'the Windows SDK and runtime libraries the engine links (FAF_STUDIO_VCVARS)')
     dx = find_dxsdk()
     row('DirectX SDK (June 2010)', bool(dx), dx or 'only needed to build the engine (FAF_STUDIO_DXSDK or DXSDK_DIR)')
     row('xmake', shutil.which('xmake') is not None, shutil.which('xmake') or 'only needed for edtext.dll (https://xmake.io)')
@@ -125,241 +116,83 @@ def cmd_doctor(a):
 
 
 # ---- engine ---------------------------------------------------------------------------------------------------------------------------------
+# engine/faf-re is a git submodule of this repository: our fork (UnsilentMarLo/faf-re), branch `editor`, which is the reconstructed engine of Draiget/faf-re (remote `upstream`) with the editor
+# on top (src/moho/editor and the changes to the engine files, ordinary commits). This repository pins the commit it builds with; commit a new pin with `git add engine/faf-re`.
+
+def engine_pinned():
+    """The commit of the engine this repository is pinned to (the gitlink of engine/faf-re), or None."""
+    code, out = git('ls-tree', 'HEAD', 'engine/faf-re', cwd=P.ROOT)
+    parts = out.split()
+    return parts[2] if code == 0 and len(parts) >= 3 and parts[1] == 'commit' else None
+
+
+def find_cmake():
+    """cmake.exe: the copy Visual Studio ships (its certificate handling downloads the dependencies; the cmake of some other installs cannot), else the one on PATH. Also puts Ninja on PATH."""
+    vswhere = os.path.join(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'), 'Microsoft Visual Studio', 'Installer', 'vswhere.exe')
+    if os.path.isfile(vswhere):
+        r = subprocess.run([vswhere, '-latest', '-products', '*', '-property', 'installationPath'], capture_output=True, text=True)
+        base = r.stdout.strip().splitlines()[0] if r.stdout.strip() else ''
+        bundled = os.path.join(base, 'Common7', 'IDE', 'CommonExtensions', 'Microsoft', 'CMake')
+        exe = os.path.join(bundled, 'CMake', 'bin', 'cmake.exe')
+        if base and os.path.isfile(exe):
+            os.environ['PATH'] = os.path.join(bundled, 'Ninja') + os.pathsep + os.environ.get('PATH', '')
+            return exe
+    on_path = shutil.which('cmake')
+    return on_path if on_path and shutil.which('ninja') else None
+
+
+def find_llvm():
+    root = os.environ.get('LLVM_ROOT') or r'C:\Program Files\LLVM'
+    exe = os.path.join(root, 'bin', 'clang-cl.exe')
+    return root if os.path.isfile(exe) else None
+
 
 def engine_setup(a):
-    m = meta()
-    url = os.environ.get('FAF_STUDIO_ENGINE_UPSTREAM') or m['upstream']
     dst = P.ENGINE_SRC
-    if os.path.isdir(os.path.join(dst, '.git')):
-        code, out = git('log', '--oneline', '-1', cwd=dst)
-        print('engine sources exist:', dst, '\n  HEAD', out)
-        engine_sync(a)
-        return 0
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    run(['git', 'clone', '--no-checkout', url, dst])
-    run(['git', 'checkout', '-B', 'editor', m['base']], cwd=dst)
-    patches = sorted(glob.glob(os.path.join(PATCHES, '*.patch')))
-    if not patches:
-        print('no patches in engine/patches: the plain upstream engine is checked out')
-        return 0
-    env = dict(os.environ, GIT_COMMITTER_NAME=os.environ.get('GIT_COMMITTER_NAME', 'FAF Studio'), GIT_COMMITTER_EMAIL=os.environ.get('GIT_COMMITTER_EMAIL', 'faf-studio@localhost'))
-    r = run(['git', 'am', '--3way', '--keep-cr'] + patches, cwd=dst, check=False, env=env)
-    if r.returncode != 0:
-        run(['git', 'am', '--abort'], cwd=dst, check=False)
-        raise SystemExit('the patch series does not apply to %s at %s: is engine/BASE.json right?' % (url, m['base']))
-    print('engine ready: %d patches on top of %s' % (len(patches), m['base'][:10]))
+    if not os.path.exists(os.path.join(dst, '.git')):
+        if engine_pinned():
+            run(['git', 'submodule', 'update', '--init', 'engine/faf-re'], cwd=P.ROOT)
+        else:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            run(['git', 'clone', '--branch', ENGINE_BRANCH, ENGINE_FORK, dst])
+    code, out = git('remote', 'get-url', 'upstream', cwd=dst)
+    if code != 0:
+        run(['git', 'remote', 'add', 'upstream', ENGINE_UPSTREAM], cwd=dst)
+    run(['git', 'submodule', 'update', '--init', '--recursive', '--depth', '1'], cwd=dst)        # Wild Magic, zlib, FX11, Vulkan headers, FFmpeg; CMake fetches boost, wxWidgets and DXC itself
+    code, out = git('log', '--oneline', '-1', cwd=dst)
+    print('engine sources:', dst, '\n  HEAD', out)
+    engine_sync(a)
     return 0
-
-
-# ---- third-party libraries of the engine -----------------------------------------------------------------------------------------------------
-
-# name under engine/faf-re/dependencies -> a file that proves it is complete enough. None of these are in git (upstream vendors them as private .7z archives; see
-# engine/faf-re/dependencies/patches/*.md for what each one is): boost 1.34.1 (headers and 12 thread sources), LuaPlus Build 1081, zlib 1.2.3 (13 files), wxWindows 2.4.2 (patched, with
-# lib\x64\wxmswu.lib), WildMagic 3.8 (Foundation.vcxproj is a project reference), FFmpeg 7.1.x shared LGPL (include, lib\*.lib, bin\*.dll; docs/FAF_SFD_COMPATIBILITY.md).
-DEPENDENCIES = [
-    ('boost_1_34_1', 'boost/config.hpp'),
-    ('LuaPlus_Build1081', 'Src/LuaPlus/include'),
-    ('zlib-1.2.3', 'include'),
-    ('wxWindows-2.4.2', 'include/wx'),
-    ('WildMagic3p8', 'Foundation/Foundation.vcxproj'),
-    ('ffmpeg/x64', 'include/libavcodec/avcodec.h'),
-]
-
-
-def deps_dir():
-    return os.path.join(P.ENGINE_SRC, 'dependencies')
-
-
-def deps_missing():
-    return [name for name, proof in DEPENDENCIES if not os.path.exists(os.path.join(deps_dir(), name, proof))]
-
-
-def deps_candidates():
-    """Folders that may hold a prepared `dependencies` tree: FAF_STUDIO_DEPS (the dependencies folder, or an engine checkout that has one), then the places an earlier workspace
-    of this project kept it, next to this checkout (Documents\\SupCom_Dev_Workspace\\engine_decomp\\faf-re-upstream\\dependencies and the like)."""
-    out = []
-    env = os.environ.get('FAF_STUDIO_DEPS')
-    if env:
-        out += [env, os.path.join(env, 'dependencies')]
-    parent = os.path.dirname(P.ROOT)
-    for pattern in ('*/engine_decomp/*/dependencies', '*/engine_decomp/*/*/dependencies', '*/engine/faf-re/dependencies', '*/dependencies', '*/engine_decomp/_deps_src', '*/engine_decomp/_deps_src/*'):
-        out += sorted(glob.glob(os.path.join(parent, pattern)))
-    out += sorted(glob.glob(os.path.join(P.ROOT, 'engine_decomp', '*', 'dependencies')))
-    here = os.path.realpath(deps_dir())
-    seen, result = set(), []
-    for c in out:
-        r = os.path.realpath(c)
-        if os.path.isdir(r) and r != here and r not in seen:
-            seen.add(r)
-            result.append(r)
-    return result
-
-
-def link_dir(link, target):
-    """A folder link (junction on Windows: no administrator rights, no copy), else a copy."""
-    os.makedirs(os.path.dirname(link), exist_ok=True)
-    if os.path.lexists(link):
-        return False
-    if os.name == 'nt':
-        r = subprocess.run(['cmd', '/c', 'mklink', '/J', link, target], capture_output=True, text=True)
-        if r.returncode == 0:
-            return True
-    else:
-        try:
-            os.symlink(target, link)
-            return True
-        except OSError:
-            pass
-    shutil.copytree(target, link)
-    return True
-
-
-def fetch_ffmpeg():
-    """FFmpeg 7.1.x LGPL shared build for Windows x64 (BtbN/FFmpeg-Builds: include, lib\\*.lib import libraries, bin\\*.dll) into dependencies/ffmpeg/x64. The asset is looked up
-    in the release list at run time (its file name changes with every build). Returns True on success."""
-    dst = os.path.join(deps_dir(), 'ffmpeg', 'x64')
-    print('looking for an FFmpeg 7.1 LGPL shared build (BtbN/FFmpeg-Builds) ...')
-    try:
-        req = urllib.request.Request('https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=8', headers={'User-Agent': 'faf-studio', 'Accept': 'application/vnd.github+json'})
-        releases = json.load(urllib.request.urlopen(req, timeout=60))
-        asset = None
-        for rel in releases:
-            for a in rel.get('assets', []):
-                name = a['name']
-                if name.endswith('.zip') and 'win64-lgpl-shared-7.1' in name and 'n7.1' in name:
-                    asset = a
-                    break
-            if asset:
-                break
-        if not asset:
-            print('no ffmpeg-n7.1...-win64-lgpl-shared-7.1.zip asset in the latest releases of BtbN/FFmpeg-Builds')
-            return False
-        zpath = os.path.join(P.ENGINE_DIR, asset['name'])
-        os.makedirs(P.ENGINE_DIR, exist_ok=True)
-        print('downloading %s (%.0f MB)' % (asset['name'], asset['size'] / 1e6))
-        urllib.request.urlretrieve(asset['browser_download_url'], zpath)
-    except Exception as e:
-        print('download failed: %s' % e)
-        return False
-    tmp = os.path.join(P.ENGINE_DIR, '_ffmpeg_unpack')
-    shutil.rmtree(tmp, ignore_errors=True)
-    with zipfile.ZipFile(zpath) as z:
-        z.extractall(tmp)
-    top = [d for d in os.listdir(tmp) if os.path.isdir(os.path.join(tmp, d))]
-    src = os.path.join(tmp, top[0]) if top else tmp
-    if not os.path.isfile(os.path.join(src, 'include', 'libavcodec', 'avcodec.h')) or not glob.glob(os.path.join(src, 'lib', 'avcodec*.lib')):
-        print('the archive has no include/libavcodec and lib/avcodec*.lib: not a development package')
-        return False
-    shutil.rmtree(dst, ignore_errors=True)
-    os.makedirs(dst)
-    for sub in ('include', 'lib', 'bin'):
-        if os.path.isdir(os.path.join(src, sub)):
-            shutil.copytree(os.path.join(src, sub), os.path.join(dst, sub))
-    shutil.rmtree(tmp, ignore_errors=True)
-    os.remove(zpath)
-    print('FFmpeg is in', dst, '(LGPL shared build: its license texts and source offer have to travel with a distributed package)')
-    return True
-
-
-def cmd_deps(a=None):
-    """Makes every third-party library of the engine available in engine/faf-re/dependencies; returns 0 when nothing is missing afterwards."""
-    if not os.path.isdir(P.ENGINE_SRC):
-        raise SystemExit('no engine checkout at %s: python scripts/studio.py engine setup' % P.ENGINE_SRC)
-    missing = deps_missing()
-    if not missing:
-        print('engine dependencies: all %d present in %s' % (len(DEPENDENCIES), deps_dir()))
-        return 0
-    print('engine dependencies missing: ' + ', '.join(missing))
-    candidates = deps_candidates()
-    for name in list(missing):
-        proof = dict(DEPENDENCIES)[name]
-        for c in candidates:
-            if os.path.exists(os.path.join(c, name, proof)):
-                if link_dir(os.path.join(deps_dir(), name), os.path.join(c, name)):
-                    print('  linked %-18s -> %s' % (name, os.path.join(c, name)))
-                    break
-    missing = deps_missing()
-    if 'ffmpeg/x64' in missing:
-        fetch_ffmpeg()
-        missing = deps_missing()
-    if not missing:
-        print('engine dependencies: complete')
-        return 0
-    print()
-    print('STILL MISSING in %s: %s' % (deps_dir(), ', '.join(missing)))
-    print('These libraries are not in git (upstream keeps them as private archives). If you built the engine before, they are in the old engine checkout of that workspace')
-    print('(for example ...\\SupCom_Dev_Workspace\\engine_decomp\\faf-re-upstream\\dependencies): point FAF_STUDIO_DEPS at that `dependencies` folder and run this again, e.g.')
-    print('    set FAF_STUDIO_DEPS=C:\\Users\\<you>\\Documents\\SupCom_Dev_Workspace\\engine_decomp\\faf-re-upstream\\dependencies')
-    print('    python scripts/studio.py deps')
-    print('What each one is and how it is patched: engine/faf-re/dependencies/patches/*.md; FFmpeg: engine/faf-re/docs/FAF_SFD_COMPATIBILITY.md.')
-    return 1
-
-
-def patch_subject(path):
-    """The commit subject of a format-patch file (the folded Subject header, without the [PATCH n/m] tag), whitespace normalised."""
-    with open(path, 'rb') as f:
-        msg = email.message_from_binary_file(f)
-    subject = str(email.header.make_header(email.header.decode_header(msg.get('Subject', ''))))
-    subject = re.sub(r'^\s*\[PATCH[^\]]*\]\s*', '', subject)
-    return ' '.join(subject.split())
-
-
-ENGINE_GENERATED = ('src/sdk/moho/editor/EdGpuShaders.generated.h',)      # tracked in the engine repo, rewritten by scripts/gen_gpu_shaders.py
 
 
 def engine_sync(a=None):
-    """Applies the patches of engine/patches that the engine checkout does not have yet. `git pull` of this repository adds patch files but never touches engine/faf-re, so a
-    build after a pull compiled the OLD engine: that is why the exe did not change. Matching is by commit subject. Returns the number of patches applied."""
-    m = meta()
+    """Brings engine/faf-re to the commit this repository pins: a fast-forward only. A checkout that is AHEAD of the pin (your own commits) is left alone, with a reminder to commit the new pin;
+    one with uncommitted changes to tracked files is not touched."""
     dst = P.ENGINE_SRC
-    if not os.path.isdir(os.path.join(dst, '.git')):
+    if not os.path.exists(os.path.join(dst, '.git')):
         raise SystemExit('no engine checkout at %s: python scripts/studio.py engine setup' % dst)
-    patches = sorted(glob.glob(os.path.join(PATCHES, '*.patch')))
-    code, out = git('log', '--format=%s', m['base'] + '..HEAD', cwd=dst)
-    if code != 0:
-        raise SystemExit('the engine checkout %s does not contain the base commit %s (engine/BASE.json): %s' % (dst, m['base'][:10], out[:200]))
-    have = set(' '.join(line.split()) for line in out.splitlines())
-    missing = [p for p in patches if patch_subject(p) not in have]
-    if not missing:
-        print('engine sources: all %d patches of engine/patches are applied' % len(patches))
+    pinned = engine_pinned()
+    code, head = git('rev-parse', 'HEAD', cwd=dst)
+    if not pinned:
+        print('engine sources: this repository does not pin an engine commit (git add engine/faf-re); HEAD %s is used' % head[:9])
         return 0
-    # generated files are tracked in the engine repo (the patches change them) but a local `gen_gpu_shaders.py` run rewrites them: .gitignore does not apply to tracked files, so they show up as
-    # uncommitted changes and used to stop the patches. Put the committed version back (the build regenerates them) before looking for real changes.
-    for rel in ENGINE_GENERATED:
-        code, out = git('status', '--porcelain', '--untracked-files=no', '--', rel, cwd=dst)
-        if out.strip():
-            print('engine sources: %s was regenerated locally; restoring the committed version before applying patches' % rel)
-            git('checkout', '--', rel, cwd=dst)
+    if head == pinned:
+        print('engine sources: at the pinned commit %s' % pinned[:9])
+        return 0
+    if git('cat-file', '-e', pinned + '^{commit}', cwd=dst)[0] != 0:
+        run(['git', 'fetch', 'origin'], cwd=dst)
+    if git('merge-base', '--is-ancestor', pinned, head, cwd=dst)[0] == 0:
+        print('engine sources: %s is ahead of the pinned commit %s: commit the new pin here (git add engine/faf-re)' % (head[:9], pinned[:9]))
+        return 0
     code, out = git('status', '--porcelain', '--untracked-files=no', cwd=dst)
     if out.strip():
-        raise SystemExit('%d new engine patches (%s ...) but the engine checkout has uncommitted changes, so they cannot be applied:\n%s\n'
-                         'Commit them there (then `engine export`) or stash them, and run this again.' % (len(missing), os.path.basename(missing[0]), out))
-    env = dict(os.environ, GIT_COMMITTER_NAME=os.environ.get('GIT_COMMITTER_NAME', 'FAF Studio'), GIT_COMMITTER_EMAIL=os.environ.get('GIT_COMMITTER_EMAIL', 'faf-studio@localhost'))
-    print('engine sources lack %d patch(es): applying' % len(missing))
-    for p in missing:
-        print('  +', os.path.basename(p))
-    r = run(['git', 'am', '--3way', '--keep-cr'] + missing, cwd=dst, check=False, env=env)
+        raise SystemExit('the engine is behind the pinned commit %s but has uncommitted changes (commit or stash them in %s):\n%s' % (pinned[:9], dst, out))
+    r = run(['git', 'merge', '--ff-only', pinned], cwd=dst, check=False)
     if r.returncode != 0:
-        run(['git', 'am', '--abort'], cwd=dst, check=False)
-        raise SystemExit('the new patches do not apply to your engine checkout (it has changes of its own that clash). Nothing was changed. Options: commit your engine changes there and '
-                         'run `engine export`, or move %s away and run `engine setup` for a fresh checkout.' % dst)
-    print('engine sources are up to date: %d patch(es) applied' % len(missing))
-    return len(missing)
-
-
-def engine_export(a):
-    m = meta()
-    dst = P.ENGINE_SRC
-    code, out = git('status', '--porcelain', '--untracked-files=no', cwd=dst)      # only commits are exported: untracked files (build leftovers) do not matter
-    if out.strip():
-        raise SystemExit('the engine checkout has uncommitted changes to tracked files (commit them in %s first, then run this again; `git -C %s status` lists them):\n%s' % (dst, dst, out))
-    for f in glob.glob(os.path.join(PATCHES, '*.patch')):
-        os.remove(f)
-    os.makedirs(PATCHES, exist_ok=True)
-    run(['git', 'format-patch', '--no-stat', '-N', '--zero-commit', '--no-signature', m['base'] + '..HEAD', '-o', PATCHES], cwd=dst, stdout=subprocess.DEVNULL)
-    n = len(glob.glob(os.path.join(PATCHES, '*.patch')))
-    print('wrote %d patches to engine/patches (commit them in this repository)' % n)
-    return 0
+        raise SystemExit('the engine checkout cannot fast-forward to the pinned commit %s (it has commits of its own that the pin lacks). Merge by hand in %s.' % (pinned[:9], dst))
+    run(['git', 'submodule', 'update', '--init', '--recursive', '--depth', '1'], cwd=dst, check=False)
+    print('engine sources: moved to the pinned commit %s' % pinned[:9])
+    return 1
 
 
 VERSION_FILE = os.path.join(P.ROOT, 'editor', 'VERSION')
@@ -418,37 +251,40 @@ def cmd_version(a):
     return 0
 
 
+def engine_exe():
+    return os.path.join(P.ENGINE_SRC, BUILD_SUBDIR, 'src', ENGINE_EXE_NAME + '.exe')
+
+
 def engine_build(a):
-    vc = find_vcvars()
-    dx = find_dxsdk()
-    if not vc:
-        raise SystemExit('Visual Studio with the C++ tools not found (set FAF_STUDIO_VCVARS to vcvars64.bat)')
-    if not dx:
-        raise SystemExit('the June 2010 DirectX SDK not found (set FAF_STUDIO_DXSDK, e.g. C:\\Program Files (x86)\\Microsoft DirectX SDK (June 2010))')
-    P.need(os.path.join(P.SDK, 'main_ed.vcxproj'), 'engine sources', 'python scripts/studio.py engine setup')
+    cmake = find_cmake()
+    if not cmake:
+        raise SystemExit('cmake and ninja not found: install Visual Studio with the C++ CMake tools, or put CMake 3.25+ and Ninja on PATH')
+    if not find_llvm():
+        raise SystemExit('LLVM (clang-cl) not found in C:\\Program Files\\LLVM: set LLVM_ROOT (the engine builds with clang-cl)')
+    P.need(os.path.join(P.SDK, 'CMakeLists.txt'), 'engine sources', 'python scripts/studio.py engine setup')
     engine_sync(a)
-    if cmd_deps(a) != 0:
-        print('\nThe engine cannot be built until the libraries above are in place; nothing was compiled.')
-        return 1
+    run([sys.executable, os.path.join(HERE, 'gen_gpu_shaders.py')], check=False)                 # the GPU kernels -> EdGpuShaders.generated.h (a tracked file of the engine: commit it when it changes)
+    build_dir = os.path.join(P.ENGINE_SRC, BUILD_SUBDIR)
+    if not os.path.isfile(os.path.join(build_dir, 'CMakeCache.txt')):
+        run([cmake, '--preset', 'clang-x64-release', '-B', BUILD_SUBDIR.replace(os.sep, '/'), '-DFAF_EDITOR=ON', '-DFAF_OUTPUT_NAME=' + ENGINE_EXE_NAME, '-DFAF_X64_LARGE_ADDRESS=heap'], cwd=P.ENGINE_SRC)
     log = os.path.join(P.ENGINE_DIR, 'build.log')
     os.makedirs(P.ENGINE_DIR, exist_ok=True)
-    bat = os.path.join(P.ENGINE_DIR, '_build.bat')
-    with open(bat, 'w') as f:
-        f.write('@echo off\r\ncall "%s" >nul 2>&1\r\ncd /d "%s"\r\n' % (vc, P.SDK))
-        f.write('msbuild main_ed.vcxproj /nologo /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 "/p:DirectXInclude=%s\\Include" '
-                '"/p:DirectXLibX64=%s\\Lib\\x64" /p:ContinueOnError=true "/flp:logfile=%s;verbosity=minimal;encoding=UTF-8" /p:CL_MPCount=8 /p:FafX64LargeAddress=heap\r\n' % (dx, dx, log))
-        f.write('exit /b %ERRORLEVEL%\r\n')
     started = time.time()
-    r = run(['cmd', '/c', bat], check=False)
-    errors = 0
-    if os.path.isfile(log):
-        errors = sum(1 for line in open(log, encoding='utf-8', errors='replace') if ' error ' in line)
+    with open(log, 'w', encoding='utf-8', errors='replace') as f:
+        r = run([cmake, '--build', BUILD_SUBDIR.replace(os.sep, '/')], cwd=P.ENGINE_SRC, check=False, stdout=f, stderr=subprocess.STDOUT)
+    errors = sum(1 for line in open(log, encoding='utf-8', errors='replace') if ' error' in line and 'error:' in line)
     print('build exit %d, %d error lines (log: %s)' % (r.returncode, errors, log))
-    if r.returncode != 0 or errors:
+    if r.returncode != 0:
+        for line in open(log, encoding='utf-8', errors='replace'):
+            if 'error:' in line:
+                print('  ' + line.strip()[:200])
+                errors -= 1
+                if errors < -12:
+                    break
         return 1
-    exe = os.path.join(P.ENGINE_SRC, 'output', 'main', 'x64', 'Release', 'main_x64_la.exe')
-    if not os.path.isfile(exe) or os.path.getmtime(exe) < started - 2:
-        print('MSBuild reported success but %s was not rebuilt (its time is older than this build). Nothing was staged: the exe in %s stays the old one.' % (exe, P.ENGINE_BIN))
+    exe = engine_exe()
+    if not os.path.isfile(exe) or os.path.getmtime(exe) < started - 2 and not os.path.getsize(log) < 400:
+        print('the build reported success but %s was not rebuilt. Nothing was staged: the exe in %s stays the old one.' % (exe, P.ENGINE_BIN))
         return 1
     print('built %s (%s, %d bytes)' % (exe, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(exe))), os.path.getsize(exe)))
     # a build that compiled is a new version: the number is raised before the exe is staged, so the exe's properties and the editor's start screen carry it
@@ -471,8 +307,8 @@ def stamp(path):
 
 
 def engine_stage(a):
-    out = os.path.join(P.ENGINE_SRC, 'output', 'main', 'x64', 'Release')
-    exe = P.need(os.path.join(out, 'main_x64_la.exe'), 'the built engine', 'python scripts/studio.py engine build')
+    exe = P.need(engine_exe(), 'the built engine', 'python scripts/studio.py engine build')
+    out = os.path.dirname(exe)
     os.makedirs(P.ENGINE_BIN, exist_ok=True)
     locked = []
 
@@ -490,8 +326,11 @@ def engine_stage(a):
         os.replace(target, os.path.join(P.ENGINE_BIN, 'main_x64_la_p2_prev%d.exe' % n))      # a running instance keeps its hard link; the old build stays for a rollback
     copy(exe, target)
     copy(exe, os.path.join(P.ENGINE_BIN, 'main_x64_la.exe'))
-    for dll in glob.glob(os.path.join(out, '*.dll')):
+    for dll in glob.glob(os.path.join(out, '*.dll')):          # dxcompiler.dll and dxil.dll (Direct3D 12 / Vulkan shader compiler); FFmpeg is linked in
         copy(dll, P.ENGINE_BIN)
+    hooks = os.path.join(out, 'fafengine')                       # the engine's own Lua hooks (the Graphics API option), mounted next to the exe
+    if os.path.isdir(hooks):
+        shutil.copytree(hooks, os.path.join(P.ENGINE_BIN, 'fafengine'), dirs_exist_ok=True)
     edtext = os.path.join(P.ROOT, 'editor', 'edtext', 'build', 'windows', 'x64', 'release', 'edtext.dll')
     if os.path.isfile(edtext):
         copy(edtext, P.ENGINE_BIN)
@@ -530,7 +369,7 @@ def engine_stage(a):
 
 
 def cmd_engine(a):
-    return {'setup': engine_setup, 'sync': lambda x: engine_sync(x) and 0, 'build': engine_build, 'stage': engine_stage, 'export': engine_export}[a.what](a)
+    return {'setup': engine_setup, 'sync': lambda x: engine_sync(x) and 0, 'build': engine_build, 'stage': engine_stage}[a.what](a)
 
 
 # ---- edtext, generate, check ----------------------------------------------------------------------------------------------------------------
@@ -590,12 +429,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='c', required=True)
     sub.add_parser('doctor').set_defaults(f=cmd_doctor)
-    sub.add_parser('deps').set_defaults(f=cmd_deps)
     p = sub.add_parser('build')
     p.add_argument('--no-bump', action='store_true', help='keep the version number (a build normally raises the patch number of editor/VERSION)')
     p.set_defaults(f=engine_build)
     p = sub.add_parser('engine')
-    p.add_argument('what', choices=['setup', 'sync', 'build', 'stage', 'export'])
+    p.add_argument('what', choices=['setup', 'sync', 'build', 'stage'])
     p.add_argument('--no-bump', action='store_true', help='with build: keep the version number')
     p.set_defaults(f=cmd_engine)
     p = sub.add_parser('version', help='show or change the version (editor/VERSION)')

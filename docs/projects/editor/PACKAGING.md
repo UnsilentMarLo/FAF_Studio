@@ -12,7 +12,7 @@ out the build is the owner's decision, see "What may be shipped"). The version n
 ```
 FAFStudio/
   README.txt  CHANGELOG.txt (from git)  VERSION.txt  MANIFEST.txt (sha256 of every file)
-  bin/                     FAFStudio.exe + the DLLs it imports (ffmpeg libraries, edtext.dll) + init_editor.lua
+  bin/                     FAFStudio.exe + the DLLs it imports (edtext.dll; dxcompiler.dll and dxil.dll for the Direct3D 12 / Vulkan shader compiler) + the fafengine hook folder + init_editor.lua
   editor/                  the Lua tree (lua/ schook/ mods/ override/ brushes/ branding/ maps/ = blank templates), help/ is in docs/help
   docs/                    help topics as text (docs/help), PACKAGING.md        tools/pack_map.py        samples/
   mapout/ modproj/         empty; the editor writes autosave, test runs and mod projects here (a sample map is put into mapout/)
@@ -30,7 +30,7 @@ The engine is the Forged Alliance executable the editor was built from. At start
 Alliance install, `custom_vault_path` = the user's `My Games\...\Supreme Commander Forged Alliance` folder with their maps and mods, `GameVersion`, ...) and mounts: from the Forged Alliance install the
 `gamedata/*.scd`, `movies`, `sounds`, `maps`, `fonts`; from `../gamedata/*.nx2` (the folder one level above `bin`) FAF's patch files; the user's vault. `cache`, `movies`, `sounds` and `themes` next to `gamedata`
 are FAF's own folder layout, which the engine expects as well. The editor adds its own tree (`init_editor.lua`: `../editor`, `../mapout/*`, `../modproj/*`). Nothing of the game data is in the package. There is **no launcher script**: `bin\FAFStudio.exe` is double-clicked, and the exe sets itself up before the engine starts
-(`moho/editor/EdBootstrap.cpp`, called first in `WinMain`; engine patch 0034; the module and its test are described in the header of `EdBootstrap.h`):
+(`moho/editor/EdBootstrap.cpp`, called first in `WinMain`; engine commit "Editor build: ... pop-out windows"; the module and its test are described in the header of `EdBootstrap.h`):
 
 0. the process becomes DPI aware (see DPI.md) and its working folder becomes `bin\` (Lua reads and writes `editor_boot.txt`, `editor_mods.txt` ... relative to it), whatever started it;
 
@@ -54,7 +54,7 @@ see 5.
 - Game data: **no**. The exe links the user's own FAForever folders; `init_faf.lua`, `SupComDataPath.lua` and `fa_path.lua` are copied from the user's install, not from us.
 - Run time requirements outside the package: Windows 10 / 11 64 bit, the Microsoft DirectX End-User Runtime libraries the exe imports (`d3dx9_43`, `d3dx10`, `x3daudio1_7`; Forged Alliance installs them), the
   Visual C++ runtime (`vcruntime140`, `msvcp140`, installed by the FAForever client).
-- `bin\*.dll`: the ffmpeg libraries (`avcodec-61` ...) are LGPL / GPL builds: when the package is given away, their license texts and source offer have to travel with it (not added yet, listed under open items).
+- FFmpeg is compiled into the exe (LGPL since the CMake engine; there are no ffmpeg DLLs any more): when the package is given away, its license texts and source offer have to travel with it (not added yet, listed under open items).
 - `FAFStudio.exe` is built from the engine reconstruction in `engine_decomp/`; whether and where to distribute it is a decision for the owner, which is why the script writes only to the ignored `dist/`.
 
 ## 2. User data (`userdata.lua`, `persist.lua`)
@@ -127,7 +127,7 @@ with the file's size and time, mounts the folder as `/edthumbs`; one map per fra
 
 ## Open items
 
-- ffmpeg license texts for the DLLs in `bin` (see "What may be shipped"); an installer (`.msi` / Inno Setup) instead of a zip; code signing (SmartScreen will warn about an unsigned exe).
+- the FFmpeg license texts for the exe (see "What may be shipped"); an installer (`.msi` / Inno Setup) instead of a zip; code signing (SmartScreen will warn about an unsigned exe).
 - The crash notice at the next start cannot say *what* crashed; the dump files are for the developers.
 - The main window's size and position are chosen at start (90 % of the work area), not remembered.
 - Help topics are English only, ASCII only (the in-game font set).

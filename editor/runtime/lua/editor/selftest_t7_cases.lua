@@ -1,5 +1,5 @@
 -- Golden cases of the stage T7 ops (docs/projects/editor/TERRAIN_GEN_DESIGN.md, section T7). One line per case: label | op[@extra] | params | inputs | checksum.
--- Shared by the native test (engine/faf-re/src/sdk/moho/editor/tests/EdT7Test.cpp: builds and checks these with 1, 2, 3, 5 and 8 threads, rewrites the checksums with --update) and the in-editor
+-- Shared by the native test (engine/faf-re/src/moho/editor/tests/EdT7Test.cpp: builds and checks these with 1, 2, 3, 5 and 8 threads, rewrites the checksums with --update) and the in-editor
 -- self test (selftest_t7.lua: the same cases through the ed_field_* natives). op@name checks the extra output `name` of an op with several results.
 -- params: k=v,k=v with v a number, a word, or a list x:y;x:y (flattened). inputs: name=Fixture,... with the fixtures (65 x 65 samples)
 --   A = perlin seed=7,scale=20,octaves=3        H = affine(A, mul=30, add=20) (gentle heights)       G = affine(A, mul=3, add=20)

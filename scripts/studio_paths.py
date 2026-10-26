@@ -5,7 +5,7 @@ environment variable.
     MAIN          the first worktree of the repository: the engine checkout, the staged engine and the test instances are shared by all worktrees and live there
     ENGINE_SRC    the engine sources: a checkout of the reconstructed Forged Alliance engine with our `editor` patch series applied
                   (default MAIN/engine/faf-re, made by `python scripts/studio.py engine setup`)     env FAF_STUDIO_ENGINE_SRC
-    SDK           ENGINE_SRC/src/sdk
+    SDK           ENGINE_SRC/src
     ENGINE_RUN    the staged engine: bin/ (exe, DLLs, init files) and fa_path.lua     (default MAIN/engine/run)                         env FAF_STUDIO_ENGINE_RUN
     ENGINE_BIN    ENGINE_RUN/bin
     RUNS          the test instances (scripts/editor_inst.py)                                                   (default MAIN/.runs)  env FAF_STUDIO_RUNS
@@ -43,7 +43,7 @@ def _env_path(name, default):
 MAIN = main_checkout()
 ENGINE_DIR = os.path.join(MAIN, 'engine')
 ENGINE_SRC = _env_path('FAF_STUDIO_ENGINE_SRC', os.path.join(ENGINE_DIR, 'faf-re'))
-SDK = os.path.join(ENGINE_SRC, 'src', 'sdk')
+SDK = os.path.join(ENGINE_SRC, 'src')
 ENGINE_RUN = _env_path('FAF_STUDIO_ENGINE_RUN', os.path.join(ENGINE_DIR, 'run'))
 ENGINE_BIN = os.path.join(ENGINE_RUN, 'bin')
 RUNS = _env_path('FAF_STUDIO_RUNS', os.path.join(MAIN, '.runs'))

@@ -14,24 +14,23 @@ The editor needs the FAForever client installed (its game data, `init_faf.lua`, 
 ## Quick start
 
 ```
-git clone <this repository> FAF_Studio
+git clone --recurse-submodules <this repository> FAF_Studio       # the engine (engine/faf-re) is a submodule: our fork of the reconstructed engine
 cd FAF_Studio
 python scripts/studio.py doctor                # what is installed, what is missing
-python scripts/studio.py engine setup          # first time only: clone the reconstructed engine, apply engine/patches
-python scripts/studio.py build                 # THE command after every pull: applies new engine patches, builds the engine (Visual Studio C++ tools, DirectX SDK June 2010),
+python scripts/studio.py build                 # THE command after every pull: moves the engine to the pinned commit, builds it (CMake + clang-cl, DirectX SDK June 2010 for d3dx9),
                                                # builds edtext.dll (xmake), stages into engine/run and brands FAFStudio.exe; prints what was updated and what could not be
 python scripts/studio.py generate              # git-ignored generated assets (icons, cursors, layer textures, blank maps)
 python scripts/editor_inst.py new dev          # a test instance
 python scripts/editor_inst.py start dev        # starts the editor (window 1280x720; --size 1920x1080)
 ```
 
-The engine's third-party libraries (boost 1.34.1, wxWindows 2.4.2, LuaPlus 1081, zlib 1.2.3, WildMagic 3.8, FFmpeg 7.1) are **not in git**: `studio.py build` first runs `studio.py deps`, which links them
-into `engine/faf-re/dependencies` from an earlier engine checkout of yours (`FAF_STUDIO_DEPS` = that `dependencies` folder; the old `SupCom_Dev_Workspace\engine_decomp\faf-re-upstream\dependencies` is
-found by itself when it lies next to this checkout) and downloads FFmpeg if that is all that is missing. `studio.py doctor` lists what is missing.
+The engine is [UnsilentMarLo/faf-re](https://github.com/UnsilentMarLo/faf-re), a fork of [Draiget/faf-re](https://github.com/Draiget/faf-re) (the reconstruction of the Moho engine). The branch `editor` is
+upstream plus the editor: `src/moho/editor` and a few changes in engine files, ordinary commits (remote `upstream` = Draiget). This repository pins the commit it builds with (`git add engine/faf-re`
+records a new one). CMake brings the engine's third-party libraries itself (boost, wxWidgets, DXC are downloaded and patched at configure; the rest are submodules of the engine): nothing is
+kept outside git by hand any more. The editor is built with `-DFAF_EDITOR=ON` (`src/CMakeLists.txt` of the engine), output `build/editor-x64/src/main_ed_x64.exe` inside `engine/faf-re`.
 
-`git pull` adds patch files to `engine/patches` but never touches your `engine/faf-re` checkout: only `studio.py build` (or `engine sync`) applies them. A build that skips that step
-compiles the old engine and the exe does not change. The exe is updated when `studio.py build` ends with the list of staged files and no "NOT UPDATED" line (a running FAF Studio or
-main_x64_la process locks the exe: close it first).
+`git pull` moves the pin of `engine/faf-re` but not the checkout: `studio.py build` (or `engine sync`) fast-forwards it. The exe is updated when `studio.py build` ends with the list of staged
+files and no "NOT UPDATED" line (a running FAF Studio or main_x64_la process locks the exe: close it first).
 
 Without a build environment, take a staged engine (`engine/run`) from a teammate or use a packaged build (`python scripts/package_editor.py`): the Lua side
 (`editor/runtime`) runs on any staged engine, so most work (panels, tools, tests) needs no compiler.
@@ -43,7 +42,7 @@ Without a build environment, take a staged engine (`engine/run`) from a teammate
 | `editor/runtime/` | The editor itself, as Lua: `lua/editor/` (model, tools, panels, `gui/`), `schook/` (hooks into the game's Lua), `override/` (shaders), `mods/`, `branding/` |
 | `editor/core/`, `editor/edtext/`, `editor/tools/` | Engine-independent C++ core (formats), the DirectWrite text DLL, asset generators |
 | `editor/help/`, `editor/packaging/`, `editor/samples/` | In-app help topics, the package README, sample maps |
-| `engine/` | `BASE.json` (which engine commit we build on) and `patches/` (our commits, the native `Ed*.cpp` code) |
+| `engine/` | `faf-re/` (git submodule: our fork of the reconstructed engine, branch `editor`: the native editor code in `src/moho/editor`), `run/` (staged, ignored) |
 | `scripts/` | `studio.py` (set-up), `editor_inst.py` (test instances), `editor_merge.py` (parallel feature branches), `editor_nightly.py` (QA), `package_editor.py`, generators |
 | `docs/` | Design, QA reports, packaging, release, parallel-work docs: start with `docs/REPOSITORY.md` |
 

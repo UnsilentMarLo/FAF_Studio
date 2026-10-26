@@ -1,5 +1,5 @@
 -- Golden cases of the Supreme Commander ops (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T6). One line per case: label | op | params | inputs | checksum.
--- Shared by the native test (engine/faf-re/src/sdk/moho/editor/tests/EdScTest.cpp: builds and checks these with 1, 2, 3, 5 and 8 threads, and rewrites the checksums with
+-- Shared by the native test (engine/faf-re/src/moho/editor/tests/EdScTest.cpp: builds and checks these with 1, 2, 3, 5 and 8 threads, and rewrites the checksums with
 -- --update) and the in-editor self test (selftest_sctools.lua: the same cases through the ed_field_* natives). Same format as selftest_fields_cases.lua.
 -- params: k=v,k=v with v a number, a word, or a list x:y;x:y (flattened). inputs: name=Fixture,... with the fixtures
 --   A = perlin width=65,height=65,seed=7,scale=20,octaves=3      H = affine(A, mul=30, add=20) (a steep height field)      G = affine(A, mul=3, add=20) (gentle ground)

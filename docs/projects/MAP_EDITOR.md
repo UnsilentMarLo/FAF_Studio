@@ -318,7 +318,7 @@ CRI. The old local snapshot (`faf-re-master`) is superseded.
   **transpose** of the rotation `Load` read, so a map saved by the engine came back rotated the other way round; `Save`
   is now the exact inverse. Check: `python scripts/ed_prop_roundtrip.py` (Python writes 4 props with rotation,
   non-uniform and negative scale; the engine loads, saves untouched and edited; the Python reader compares position,
-  rotation vectors and scale: PASS). Not checked by eye: the draw scale of the sim entity.
+  rotation vectors and scale: PASS). Since the move to the CMake engine (2026-10-26) `Load` / `Save` use the binary's own `MatrixToQuat` / `VAxes3`: the engine's heading `h` is the file rows of `rot_y(-h)` (Python's `rot_y(a)`), the round trip itself stays exact. Not checked by eye: the draw scale of the sim entity.
   **M1 core (2026-10-17): `MapDocument`, command stack, commit path** (`moho/editor/MapDocument.*`, `EditorDocument.*`,
   natives `ed_doc_*` / `ed_cmd_*`). The document owns the height words; every edit is a command (`Do`, `Undo`, `Redo`,
   `TryMerge`, `Seal`, label, bounds). A brush stroke is one command: per-dab deltas merge into sparse 32x32 tile deltas

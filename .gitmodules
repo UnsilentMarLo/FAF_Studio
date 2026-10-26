@@ -1,0 +1,4 @@
+[submodule "engine/faf-re"]
+	path = engine/faf-re
+	url = https://github.com/UnsilentMarLo/faf-re.git
+	branch = editor

@@ -1,5 +1,0 @@
-{
-  "upstream": "https://github.com/Draiget/faf-re.git",
-  "base": "13ce9e55de5675567f1952a87fb870c106e052e8",
-  "note": "The reconstructed Forged Alliance engine (FAF build). engine/patches/*.patch are our commits on top of `base` (git format-patch); scripts/studio.py engine setup clones upstream, checks out `base` as the branch `editor` and applies them with git am."
-}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Builds and runs the test of the exe's own start-up (engine/faf-re/src/sdk/moho/editor/tests/EdBootstrapTest.cpp: arguments, folders, copies, links, messages)
+"""Builds and runs the test of the exe's own start-up (engine/faf-re/src/moho/editor/tests/EdBootstrapTest.cpp: arguments, folders, copies, links, messages)
 without the engine.
 
     python scripts/edbootstrap_test.py

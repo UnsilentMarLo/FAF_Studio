@@ -26,4 +26,4 @@ Read `README.md` and `docs/REPOSITORY.md` first. These rules are mandatory for w
 
 ## Engine
 
-The native code is `engine/patches/*.patch` (applied by `studio.py engine setup`). Change it in `engine/faf-re`, commit there, run `studio.py engine export`.
+The native code is the git submodule `engine/faf-re` (fork UnsilentMarLo/faf-re, branch `editor`; `src/moho/editor`). Change it there, commit, push, then commit the new pin here (`git add engine/faf-re`); build with `studio.py build`.

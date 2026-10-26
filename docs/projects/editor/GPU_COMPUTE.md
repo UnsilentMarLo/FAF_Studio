@@ -23,7 +23,7 @@ Foundation (agent GP1, 2026-10): a Direct3D 11 compute backend next to the game'
                                       ---- hlsl_cpp_shim.h (the same text compiled as C++ by the tests)
 ```
 
-Files (engine, `src/sdk/moho/editor`):
+Files (engine, `src/moho/editor`):
 
 | File | Role |
 |---|---|
@@ -142,7 +142,7 @@ Example: a point filter `smoothstep` (CPU op exists in `EdFieldCore.cpp`).
    Only register an op that is worth it: upload + download of a 4096 x 4096 field is ~128 MB over the bus (tens of ms), so a point filter is slower on the GPU than on the CPU. Good candidates: iterated ops (erosion, thermal), large stencils (blur), noise with many octaves.
 5. **Test the op against the CPU op** (copy `TestBlurKernelsDirect`): set `SetBackendForTest(&emuBackend)`, `Install()`, `GetPolicy().minCells = 0`, `selfTestFirst = false`, run `field::RunOp` and `field::RunOpCpu` with the same `OpArgs`, compare with a tolerance, check `OpStats` shows a GPU call. Add a case for every `Unsupported` branch and for non multiple of 16 sizes and 1 x N / N x 1 fields.
 6. **Optional**: add a part to `RunSelfTest` (EdGpuOps.cpp) when the kernel uses a feature the existing parts do not exercise (a new intrinsic, atomics, a texture format).
-7. **Run**: `g++ -std=c++20 -O2 -ffp-contract=off -I src/sdk src/sdk/moho/editor/tests/EdGpuTest.cpp src/sdk/moho/editor/EdFieldCore.cpp src/sdk/moho/editor/EdGpuOps.cpp src/sdk/moho/editor/EdGpu.cpp -pthread -o EdGpuTest && ./EdGpuTest` (Linux), or `python scripts/ed_native_tests.py` (MSVC; also tries the real device). `-ffp-contract=off` matters: a fused multiply-add breaks bit equality with the CPU.
+7. **Run**: `g++ -std=c++20 -O2 -ffp-contract=off -I src src/moho/editor/tests/EdGpuTest.cpp src/moho/editor/EdFieldCore.cpp src/moho/editor/EdGpuOps.cpp src/moho/editor/EdGpu.cpp -pthread -o EdGpuTest && ./EdGpuTest` (Linux), or `python scripts/ed_native_tests.py` (MSVC; also tries the real device). `-ffp-contract=off` matters: a fused multiply-add breaks bit equality with the CPU.
 
 ### Iterated kernels (erosion): `RunIterations`
 

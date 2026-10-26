@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Turns the GPU compute kernels (engine: src/sdk/moho/editor/gpu/*.hlsl) into the header the editor compiles in (EdGpuShaders.generated.h), and lints them.
+"""Turns the GPU compute kernels (engine: src/moho/editor/gpu/*.hlsl) into the header the editor compiles in (EdGpuShaders.generated.h), and lints them.
 
     python scripts/gen_gpu_shaders.py            # write moho/editor/EdGpuShaders.generated.h
     python scripts/gen_gpu_shaders.py --check    # exit 1 if the header is stale or a kernel breaks the language rules (studio.py check runs this)
     python scripts/gen_gpu_shaders.py --lint     # only the language rules
-    python scripts/gen_gpu_shaders.py --sdk DIR  # another engine src/sdk folder (default: studio_paths.SDK)
+    python scripts/gen_gpu_shaders.py --sdk DIR  # another engine src folder (default: studio_paths.SDK)
 
 What it does (docs/projects/editor/GPU_COMPUTE.md):
   * every gpu/<name>.hlsl is a kernel: hlsl_prelude.hlsli (the HLSL side of the kernel macros) + the file with its `#include "x.hlsli"` lines inlined = the source D3DCompile gets;

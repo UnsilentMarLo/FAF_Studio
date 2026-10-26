@@ -5,7 +5,7 @@ checks it. This page covers the structure side; mobile units are in `MAP_EDITOR_
 
 User request: "For structures add a slider for the most common skirt sizes, don't do it per blueprint."
 
-## What the engine checks (read from the reconstructed engine, `src/sdk/moho/sim/STIMap.cpp`, `RUnitBlueprint.cpp`)
+## What the engine checks (read from the reconstructed engine, `src/moho/sim/STIMap.cpp`, `RUnitBlueprint.cpp`)
 
 `OCCUPY_Check` (0x005652E0) for a structure takes the skirt rect from `RUnitBlueprint::GetSkirtRect(pos)`:
 

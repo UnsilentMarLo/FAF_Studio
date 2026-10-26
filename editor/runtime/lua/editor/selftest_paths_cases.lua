@@ -1,5 +1,5 @@
 -- Golden cases of the path ops (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T4). One line per case: label | op | params | inputs | checksum.
--- Shared by the native test (engine/faf-re/src/sdk/moho/editor/tests/EdPathTest.cpp: builds and checks these with 1, 2, 3, 5 and 8 threads, and rewrites the checksums with
+-- Shared by the native test (engine/faf-re/src/moho/editor/tests/EdPathTest.cpp: builds and checks these with 1, 2, 3, 5 and 8 threads, and rewrites the checksums with
 -- --update) and the in-editor self test (selftest_paths.lua: the same cases through the ed_field_* natives). Same format as selftest_fields_cases.lua.
 -- pts = 8 numbers per point: x, z, y, w, f, bank, off, s. params: k=v,k=v with v a number, a word, or a list x:y;x:y (flattened). inputs: name=Fixture,... with the fixtures
 --   A = perlin width=65,height=65,seed=7,scale=20,octaves=3      H = affine(A, mul=30, add=20) (a height field)      L = const width=65,height=65,value=20

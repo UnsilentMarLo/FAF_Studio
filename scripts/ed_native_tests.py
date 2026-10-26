@@ -14,7 +14,7 @@ SDK = P.SDK
 OUT = os.path.join(P.ENGINE_DIR, "native_tests")
 VCVARS = r"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
 
-# test name -> engine sources it links (paths under src/sdk)
+# test name -> engine sources it links (paths under src)
 TESTS = {"MapDocumentTest": ["moho/editor/MapDocument.cpp"], "EdFieldTest": ["moho/editor/EdFieldCore.cpp"],
          "EdSymTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldSc.cpp"],
          "EdErosionTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdErosion.cpp"],

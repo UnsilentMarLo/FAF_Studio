@@ -1,5 +1,5 @@
 -- Golden cases of the erosion suite (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T3). One line per case: label | op | params | inputs | checksum.
--- Shared by the native test (engine/faf-re/src/sdk/moho/editor/tests/EdErosionTest.cpp: runs these with 1, 2, 3, 5 and 8 threads and rewrites the checksums with --update) and the
+-- Shared by the native test (engine/faf-re/src/moho/editor/tests/EdErosionTest.cpp: runs these with 1, 2, 3, 5 and 8 threads and rewrites the checksums with --update) and the
 -- in-editor self test (selftest_erosion.lua: the same cases through the ed_field_* natives). Fixtures: H = mountain field 65 x 65 = add(affine(ridged seed=11 scale=26 octaves=3 persistence=0.4, mul=55), affine(perlin seed=111 scale=13 octaves=3, mul=8)),
 -- R = perlin 65 x 65 seed=4 scale=14 octaves=3 (0..1 erodibility), F = const 33 x 33 value=10. The checksum is FNV-1a over the float32 bit patterns (ed_field_checksum), valid for the editor build (MSVC x64, no FMA contraction).
 
