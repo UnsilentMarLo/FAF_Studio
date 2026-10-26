@@ -147,6 +147,29 @@ Panels.Register{
             end
             Pn:Refresh()
         end)
+        Pn.bDetail = Btn('Detail pass', 90, function()
+            local Detail = import('/lua/editor/detail.lua')
+            local summary, total = Detail.Run{}
+            if summary then
+                local parts = {}
+                for _, r in summary do table.insert(parts, r.placed .. ' ' .. r.id) end
+                state.text = 'detail pass: ' .. total .. ' placed (' .. table.concat(parts, ', ') .. '); one undo step per class'
+            else
+                state.text = 'detail pass failed: ' .. tostring(total)
+            end
+            Say(state.text)
+            Pn:Refresh()
+        end, { tip = 'Small rocks on gentle ground, big rocks on cliffs, crevice, patch and cliff decals: five classes by size and slope, in clusters, for the environment of the current texture set (the measured density of Operation Citadel). Each class is one undo step.' })
+        Pn.bDetailDensity = Btn('Detail density: 1x', 130, function(self)
+            local Detail = import('/lua/editor/detail.lua')
+            local order = { 0.5, 1, 2 }
+            local nextScale = 1
+            for i, v in order do
+                if Detail.Scale == v then nextScale = order[math.mod(i, 3) + 1] end
+            end
+            Detail.Scale = nextScale
+            self:SetText('Detail density: ' .. nextScale .. 'x')
+        end, { tip = 'How many things the detail pass places: half, the measured density, or twice.' })
         Pn.bScatter = Btn('Scatter', 70, function()
             local n, report = Scatter.Apply()
             if n == 0 then
@@ -210,7 +233,7 @@ Panels.Register{
             Flow({ self.bHeading, self.bExisting, self.bWater, self.bMask, self.bDecals, self.bNormals })
             W.Place(self.symLabel, group, pad, y)
             y = y + Skin.S(22)
-            Flow({ self.bCount, self.bScatter })
+            Flow({ self.bCount, self.bScatter, self.bDetail, self.bDetailDensity })
             W.Place(self.status, group, pad, y)
             self:Refresh()
         end

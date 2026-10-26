@@ -149,3 +149,21 @@ Map folder `Documents/My Games/.../Maps/Operation_Citadel.v0001`, read with `scr
 * **Props by slope** (mean slope under the prop; the terrain's mean is 8.6 degrees): small rocks (CrysSmRock01..05, CrystalRock01..02, 8,300 props) 4.2 degrees, crystals (cryscrystal01..08, 2,000 props) 3.8 to 4.2,
   with the large ones (06 .. 08) on the flattest ground, the big cliff rocks (georock02 / 03, 1,850 props) 16 degrees with 27 to 31 percent of them on ground steeper than 20 degrees. One scatter class per size, driven by
   slope: small things on gentle ground, big rocks on the cliffs.
+
+### Layered textures and the detail pass (2026-10-27)
+
+Built from the Citadel numbers above; the terrain shape stays the Gaea one (the reference for playability), Citadel is the reference for the paint and the small things on top.
+
+* **Layered textures** (`texsets.lua` `Variants`, `LayeredLayout`, `ApplyLayered`; button **Layered textures** in the Stratum recipes panel): the painted layers get several textures of one kind of ground. 8 painted layers: grass 2, rock 1, dirt 1,
+  rock 2, wet 1, dirt 2, rock 3, wet 2 (7 layers without rock 3; the side-mapped layers 3 and 4 of the B shaders are rock; four painted layers: refused). `Variants[theme][role]` lists the other textures of a kind (Evergreen, Evergreen 2,
+  Desert, Tropical); the recipe knows the kind of every layer from `Recipes.State.layerRoles` (written by `AssignLayered`, dropped when a layer's texture changes), because the colour detection can take a rock variant for dirt.
+* **Recipe style Layered** and two new knobs: `mix` (how much of a kind a second texture of it takes, 0.55 = as before) and `soft` (blend width between kinds: every visible weight is blurred, the weights still add up to 1, more layers
+  show at one texel). Style values: mix 0.8, soft 4, patch 36, rock from 20 / cliff 40 degrees, dirt 0.4.
+* **Result on the imported Gaea terrain** (`scripts/mask_analysis.lua`; Terrain shader TTerrainXP, valley set): mean 2.46 to 2.75 layers blended per texel (Citadel 2.68; the natural style 1.51), 3 or more layers on 44 to 56 percent of the map
+  (Citadel 54), masks softer than Citadel's (detail at one cell 0.00 to 0.01 against 0.05 to 0.09), rock follows the slope (0.8 to 0.9 correlation).
+* **Detail pass** (`detail.lua`, button **Detail pass** in the Props scatter panel, `selftest_detail.lua`): five classes through the props scatter, each one undo step, each with the clustering noise of its own: small rocks (slope 0 to 14, 9.8 per 1,000 square
+  units, minimum distance 6), big rocks (slope 6 to 55, 1.8), crevice and patch decals (slope 0 to 12, 0.7, 25 units), rock ground decals (slope 8 to 35, 0.17, 36 units), cliff face decals (slope 30 to 85, 0.25). Entries per environment: props are found in the
+  props catalog by environment and name (they lie in subfolders such as /env/evergreen/props/rocks: `DiskGetFileInfo` does not see blueprints), decals are files. Density multiplier 0.5 / 1 / 2 (`Detail.Scale`, button). On the Gaea terrain
+  (1025 map): 10,769 things in 3 s; the small rocks stand on 4.4 degrees of slope under them (Citadel 4.2, the terrain 8.6), the big ones on 32 to 36 degrees (the terrain is bimodal: flat or vertical; Citadel 16).
+* **Not done**: the detail pass is not a graph node yet (the graph's own `Output: scatter props` still does one class); the flow, wear and deposit masks of Gaea are not mixed into the layered recipe; the Terrain2xx shaders (Citadel's family) show the
+  recipe wrongly in the texture lab (a flat green picture: the lab does not make the roughness / height atlas they blend with), so the check was made with TTerrainXP.

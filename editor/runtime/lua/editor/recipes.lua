@@ -66,8 +66,8 @@ local function Rule(type, values, op, invert)
 end
 
 
-Knobs = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, seed = 1 }
-KnobDefaults = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, seed = 1 }
+Knobs = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, mix = 0.55, soft = 0, seed = 1 }
+KnobDefaults = { cliff = 52, rock = 34, snow = 0.08, high = 0.5, beach = 3, wet = 1.5, dirt = 0.38, dark = 0.5, breakup = 0.5, patch = 50, crisp = 0.45, fine = 0.35, mix = 0.55, soft = 0, seed = 1 }
 
 KnobInfo = {
     { key = 'cliff', label = 'Cliff slope from (degrees)', min = 20, max = 85, step = 1, fmt = '%d' },
@@ -82,10 +82,12 @@ KnobInfo = {
     { key = 'patch', label = 'Patch size (units)', min = 8, max = 300, step = 2, fmt = '%d' },
     { key = 'crisp', label = 'Edge crispness (0 soft, 1 sharp)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
     { key = 'fine', label = 'Fine grain (variation at texture size)', min = 0, max = 1, step = 0.05, fmt = '%.2f' },
+    { key = 'mix', label = 'Variant mix (how much of a kind a second texture of it takes)', min = 0.1, max = 0.95, step = 0.05, fmt = '%.2f' },
+    { key = 'soft', label = 'Blend width between kinds (units, 0 = as resolved)', min = 0, max = 20, step = 0.5, fmt = '%.1f' },
     { key = 'seed', label = 'Seed', min = 0, max = 9999, step = 1, fmt = '%d' },
 }
 
-ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', 'breakup', 'patch', 'crisp', 'fine', 'seed' }
+ALL_KNOBS = { 'cliff', 'rock', 'snow', 'high', 'beach', 'wet', 'dirt', 'dark', 'breakup', 'patch', 'crisp', 'fine', 'mix', 'soft', 'seed' }
 
 --- The styles. `knobs` replaces the settings when the style is chosen (SelectPreset); `off` lists roles the style does not paint.
 Presets = {
@@ -96,6 +98,10 @@ Presets = {
     { id = 'rocky', name = 'Rocky (cliffs, dark rock, little grass)', uses = ALL_KNOBS, knobs = { cliff = 44, rock = 26, dirt = 0.5, dark = 0.8, high = 0.4, snow = 0.05, crisp = 0.55 }, off = {} },
     { id = 'valley', name = 'Open valley (bare plains, green ridges, rock on the steep)', uses = ALL_KNOBS, knobs = { dirt = 0.5, snow = 0, high = 0.7, beach = 3, wet = 1.5, dark = 0.5, crisp = 0.7, fine = 0.5, breakup = 0.7, patch = 70, rock = 30, cliff = 48 },
       off = { snow = true }, relief = true },
+    -- the paint of Operation Citadel (docs/projects/editor/GRAPH_TEXTURING.md): three to five textures of one kind side by side, wide soft transitions, 2.7 layers blended per texel; use it with the
+    -- layered textures (Layered textures button, texsets.ApplyLayered): several textures of one kind of ground. Without them it is the Natural style with softer edges.
+    { id = 'layered', name = 'Layered (many textures blended softly)', uses = ALL_KNOBS, knobs = { mix = 0.8, soft = 4, patch = 36, crisp = 0.3, breakup = 0.7, fine = 0.55, dirt = 0.4, rock = 20, cliff = 40, wet = 3, dark = 0.5, snow = 0 },
+      off = { snow = true }, layered = true },
     { id = 'coast', name = 'Coast and wetland (wide beach, wet ground)', uses = ALL_KNOBS, knobs = { beach = 6, wet = 3, dirt = 0.36, snow = 0, rock = 38, cliff = 56, crisp = 0.3 }, off = { snow = true } },
 }
 
@@ -527,11 +533,45 @@ function Plan()
             end
         end
     end
+    -- the layered textures (texsets.ApplyLayered) put several textures of one kind of ground on different layers: the kind of every layer is what that call recorded, as long as the layer still has the
+    -- texture it was given (the colour detection can take a rock variant for dirt)
+    local lr = State.layerRoles
+    if lr and not plan.manual then
+        local valid = true
+        for l, path in lr.paths do
+            local info = plan.info[l]
+            if not info or string.lower(tostring(info.albedo or '')) ~= string.lower(path) then valid = false end
+        end
+        if valid then
+            plan.byRole, plan.has, plan.base, plan.layered = {}, {}, nil, true
+            taken = {}
+            for l = 0, cap do
+                local role = lr.roles[l]
+                if role and plan.info[l] then Add(l, role) end
+            end
+        else
+            State.layerRoles = nil
+        end
+    end
     for _, list in plan.byRole do table.sort(list) end
     for _, id in Order do
         if not plan.has[id] then table.insert(plan.missing, id) end
     end
     return plan
+end
+
+--- Layered textures: several textures of one kind of ground on the painted layers (texsets.ApplyLayered), the recipe style Layered chosen. -> layers set, text.
+function AssignLayered()
+    local TS = import('/lua/editor/texsets.lua')
+    local n, roles, paths = TS.ApplyLayered(TS.Theme)
+    if not n then return 0, tostring(roles) end
+    State.layerRoles = { roles = roles, paths = paths }
+    State.layers = nil
+    for i, pr in Presets do
+        if pr.layered then SelectPreset(i) end
+    end
+    Invalidate()
+    return n, n .. ' layers: several textures of rock, wet ground, dirt and grass; recipe style Layered'
 end
 
 --- What the role rules need to know about the layers: the role of the base layer and the roles present.
@@ -690,7 +730,7 @@ local function PatchField(c, k, st, id, n)
     for i, rid in Order do
         if rid == id then seed = seed + i * 7 end
     end
-    local m, err = MaskGen.Evaluate(c, { rules = { Mix(seed, size, 0.3, 0.85), AtMost(0.55), Blur(3) } })
+    local m, err = MaskGen.Evaluate(c, { rules = { Mix(seed, size, 0.3, 0.85), AtMost(k.mix or 0.55), Blur(3) } })
     if not m then error(err or 'patch noise failed') end
     return m
 end
@@ -751,6 +791,11 @@ local function Resolve(S, c, plan, sel, groups, k, st)
             end
             target[g[1]] = left
         end
+    end
+    -- wide transitions between the kinds: every visible weight is blurred (the weights add up to 1, so do the blurred ones): more layers show at one texel
+    local soft = k.soft or 0
+    if soft > 0.4 then
+        for l, w in target do target[l] = S:Op('blur', { a = w, radius = soft }) end
     end
     return target, groups, region
 end

@@ -86,6 +86,44 @@ Themes = {
 }
 ThemeOrder = { 'temperate', 'valley', 'desert', 'tropical', 'tundra', 'lava', 'swamp', 'geothermal' }
 
+-- ---- layered sets: several textures of one kind of ground (docs/projects/editor/GRAPH_TEXTURING.md, "Operation Citadel") -------------------------------------------------------------
+-- A map that looks rich has three to five textures of the same kind side by side: Operation Citadel paints three kinds of rock and three of wet ground, every texel blends 2.7 layers on average.
+-- Variants[theme][role] lists the other textures of a kind of ground (the first existing ones; the theme's own texture is variant 1). ApplyLayered gives the eight painted layers the
+-- LAYERED layout (kinds repeated, each with its own variant); the recipe knows which layer is which kind from Recipes.State.layerRoles (the colour detection can mistake a rock variant for dirt).
+Variants = {
+    temperate = {
+        grass = { '/env/Evergreen/layers/grass000_albedo.dds', '/env/Evergreen2/Layers/EvGrass006_albedo.dds', '/env/Evergreen2/Layers/EvGrass008_albedo.dds' },
+        rock = { '/env/Evergreen/layers/RockLight_albedo.dds', '/env/Evergreen/layers/SandRock_albedo.dds', '/env/Evergreen2/Layers/EvRock002_albedo.dds' },
+        dirt = { '/env/Evergreen2/Layers/Eg_Gravel01_albedo.dds', '/env/Evergreen2/Layers/Eg_Dirt002_albedo.dds' },
+        wet = { '/env/Evergreen2/Layers/Eg_Dirt003_albedo.dds', '/env/Evergreen2/Layers/Eg_Dirt001_albedo.dds' },
+    },
+    valley = {
+        grass = { '/env/Evergreen2/Layers/EG_Grass001_albedo.dds', '/env/Evergreen2/Layers/EvGrass006_albedo.dds', '/env/Evergreen2/Layers/EvGrass008_albedo.dds' },
+        rock = { '/env/Evergreen2/Layers/EG_Rock_albedo.dds', '/env/Evergreen2/Layers/EvRock002_albedo.dds', '/env/Evergreen2/Layers/EvRock007_albedo.dds' },
+        dirt = { '/env/Evergreen2/Layers/Eg_Gravel01_albedo.dds', '/env/Evergreen2/Layers/Eg_Gravel003_albedo.dds', '/env/Evergreen2/Layers/Eg_Dirt002_albedo.dds' },
+        wet = { '/env/Evergreen2/Layers/Eg_Dirt001_albedo.dds', '/env/Evergreen2/Layers/Eg_Gravel004_albedo.dds' },
+    },
+    desert = {
+        grass = { '/env/Desert/Layers/Des_SandMed01_albedo.dds', '/env/Desert/Layers/Des_SandMed_albedo.dds' },
+        rock = { '/env/Desert/Layers/Des_Rock01_albedo.dds', '/env/Desert/Layers/Des_Rock02_albedo.dds', '/env/Desert/Layers/Des_Rock04_albedo.dds' },
+        dirt = { '/env/Desert/Layers/Des_Gravel01_albedo.dds', '/env/Desert/Layers/Des_SandDark02_albedo.dds' },
+        wet = { '/env/Desert/Layers/Des_SandDark_albedo.dds', '/env/Desert/Layers/Des_SandWet_albedo.dds' },
+    },
+    tropical = {
+        grass = { '/env/Tropical/Layers/TrGrass003_albedo.dds', '/env/Tropical/Layers/TrGrass004_albedo.dds', '/env/Tropical/Layers/Trop_Grass_albedo.dds' },
+        rock = { '/env/Tropical/Layers/TrRock003_albedo.dds', '/env/Tropical/Layers/TrRock006_albedo.dds', '/env/Tropical/Layers/TrRock007_albedo.dds' },
+        dirt = { '/env/Tropical/Layers/TrRawGround01_albedo.dds', '/env/Tropical/Layers/Trop_Dirt_albedo.dds' },
+        wet = { '/env/Tropical/Layers/WetSand001_albedo.dds', '/env/Tropical/Layers/WetSand002_albedo.dds' },
+    },
+}
+
+-- the layered layout per shader: { role, variant } for painted layer 1, 2, ... (variant 1 = the theme's own texture, n = Variants[theme][role][n - 1]). The B shaders draw layers 3 and 4 from the side only: rock there.
+local LAYERED_8 = { { 'grass', 2 }, { 'rock', 1 }, { 'dirt', 1 }, { 'rock', 2 }, { 'wet', 1 }, { 'dirt', 2 }, { 'rock', 3 }, { 'wet', 2 } }
+local LAYERED_7_BIPLANAR = { { 'grass', 2 }, { 'dirt', 1 }, { 'rock', 1 }, { 'rock', 2 }, { 'wet', 1 }, { 'dirt', 2 }, { 'wet', 2 } }
+local LAYERED_7 = { { 'grass', 2 }, { 'rock', 1 }, { 'dirt', 1 }, { 'rock', 2 }, { 'wet', 1 }, { 'dirt', 2 }, { 'rock', 3 } }
+
+
+
 -- The sets measured on a set of reference maps (scripts/map_texture_stats.py, map_texture_presets.py -> mapsets.lua): Themes of the same shape (they have a `family`), MapFamilies = { { family,
 -- label, ids } } for the menu, and the recipe style of each family (`style`, an id of recipes.lua Presets).
 MapFamilies = {}
@@ -168,6 +206,70 @@ function Apply(themeId)
     if UpperIsOverlay() then Set(9, theme.upper, 1, true) end
     Theme = themeId
     return n
+end
+
+--- The layered layout for the map's shader: { { role, variant }, ... } per painted layer (index = layer), or nil when the shader has too few layers for it (4 painted layers).
+function LayeredLayout(profile)
+    if profile == nil then
+        local ok, p = pcall(function() return Strata_().Profile() end)
+        profile = ok and p or nil
+    end
+    local cap = (profile and profile.painted) or 8
+    if cap >= 8 then return LAYERED_8 end
+    if cap >= 7 then return (profile and profile.biplanar) and LAYERED_7_BIPLANAR or LAYERED_7 end
+    return nil
+end
+
+--- The path of variant n of a role in a theme: n = 1 the theme's own texture, n > 1 the (n - 1)th of Variants (the first that exists; the previous variant when none does).
+local function VariantPath(theme, themeId, role, n)
+    local own = FirstExisting(theme[role]) or FirstExisting(Themes[DEFAULT][role])
+    if n <= 1 then return own end
+    local list = Variants[themeId] and Variants[themeId][role]
+    if list and list[n - 1] and Exists(list[n - 1]) then return list[n - 1] end
+    if list then
+        for i = n - 1, 1, -1 do
+            if list[i] and Exists(list[i]) then return list[i] end
+        end
+    end
+    return own
+end
+
+--- Gives the layers the textures of the LAYERED layout (several textures of one kind of ground, see Variants): the base and the upper layer as Apply does, painted layer l the variant the layout
+--- says. -> number of layers set, { [layer] = role } (what the recipe has to know: Recipes.State.layerRoles) | nil, message.
+function ApplyLayered(themeId)
+    themeId = themeId or Theme
+    local theme = Themes[themeId]
+    if not theme or not rawget(_G, 'ed_stratum_layer') then return nil, 'no texture set' end
+    local layout = LayeredLayout()
+    if not layout then return nil, 'this shader has only four painted layers: layered textures need seven or eight' end
+    local Strata = Strata_()
+    local TS = TexScale_()
+    local n, roles, paths = 0, {}, {}
+    local baseTile
+    local function Set(layer, path, macro)
+        if not path then return end
+        local tile
+        if macro then tile = TS.MacroTile(baseTile) else tile = TileOf(path, theme, layer == 0 and 2 or 1) end
+        if layer == 0 then baseTile = tile end
+        if Strata.SetTexture(layer, path, '', tile, tile) then
+            n = n + 1
+            paths[layer] = path
+        end
+    end
+    Set(0, FirstExisting(theme.base))
+    baseTile = baseTile or TileOf(nil, theme, 2)
+    roles[0] = 'grass'
+    for layer, entry in layout do
+        local role, variant = entry[1], entry[2]
+        local path = VariantPath(theme, themeId, role, variant)
+        if path then
+            Set(layer, path)
+            roles[layer] = role
+        end
+    end
+    if UpperIsOverlay() then Set(9, FirstExisting(theme.upper), true) end
+    Theme = themeId
+    return n, roles, paths
 end
 
 --- One painted layer gets the texture of a role (its mask is not touched), at the Optimal tile size of the texture.

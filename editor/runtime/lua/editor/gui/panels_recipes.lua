@@ -156,6 +156,13 @@ Panels.Register{
             Fresh()
             Pn:Refresh()
         end, { tip = 'Give empty layers the textures of the kinds of ground the map lacks, from the current texture set. Layers that have a texture are not touched.' })
+        Pn.bLayered = Btn('Layered textures', 130, function()
+            local n, text = Recipes.AssignLayered()
+            state.text = text
+            Say(text)
+            Fresh()
+            Pn:Refresh()
+        end, { tip = 'Give the painted layers several textures of one kind of ground (three rocks, two wet grounds, two dirts, two grasses from the current texture set) and choose the Layered recipe style: the rich, softly blended paint of a mission map. Replaces the textures of the painted layers.' })
         Pn.bMeasure = Btn('Measure', 70, function()
             state.cov = Recipes.Coverage() or false
             state.text = state.cov and 'coverage measured from the masks on the map' or 'no masks to measure'
@@ -323,7 +330,7 @@ Panels.Register{
                 end
                 y = y + Skin.S(26)
             end
-            Flow({ self.bHide, self.bDetect, self.bAssign, self.bMeasure })
+            Flow({ self.bHide, self.bDetect, self.bAssign, self.bLayered, self.bMeasure })
             W.Place(self.note, group, pad, y)
             y = y + Skin.S(22)
             W.Place(self.knobsLabel, group, pad, y)
