@@ -343,3 +343,36 @@ No editor, no MSVC, no GPU, no profiler. Not run or compiled: every engine chang
 ## GPU compute (field ops)
 
 Heavy field ops (blur and box today; erosion and generators planned) can run on a separate Direct3D 11 compute device with a CPU fall-back for every failure. Design, kernel language, how to add a kernel, threading rules and the steps to verify it on a machine: [GPU_COMPUTE.md](GPU_COMPUTE.md). The perf report prints `field ops: gpu: N ops ...` (which backend ran how many field ops, and how long); `dev.gpu` shows the adapter and runs the self test. Nothing of it has been run on a GPU yet.
+
+## Measured on the desktop and hybrid-laptop work (2026-10-26)
+
+First measurements with the editor running (AMD Radeon RX 7900 XTX desktop, 100 Hz monitor, blank 2049 map, Ultra graphics; `ed_perf_loop`, `ed_perf_threads`, `/perf`):
+
+| What | Measured |
+|---|---|
+| An idle scene | 230-240 frames/s although vsync was on (the driver did not block in Present), frame 4.2 ms of which Present 3.4 ms; main thread 22-27 % of one core, `Sim` thread 1 %, Prefetcher 1-3 %, one driver thread 6 % |
+| CPU per frame | editor logic 0.2 ms (UI tick 0.07, overlay 0.06), recording the frame 0.45-0.55 ms: the CPU is not the limit, the GPU's work for a still picture drawn 230 times a second is |
+| Whole-map height commit, 2049 x 2049 | 267 ms (undo 187 ms); the normal map already runs on the pool |
+| Start to ready (blank map, process start included) | 13 s on a 1025 map, 18 s on a 4097 map |
+
+What follows from it: for an editor the GPU cost is frames nobody needs, not missing threads. Changes (`engine/faf-re`, branch `editor`):
+
+* **Frame cap follows the monitor** (`ed_fps_refresh`, default 1): the active cap is the refresh rate of the monitor the window is on + 5 percent, so a driver that does not block in Present (hybrid laptops, vsync off) cannot draw frames nobody sees. The 5 percent keeps the cap from beating against vsync.
+* **Idle cap 60** after 3 s without input (`ed_fps_idle` 60, `ed_idle_seconds` 3; both were off / 10 s). Water and clouds still move at 60; the first key or mouse event lifts the cap at once. A 144 Hz laptop panel at Ultra settings drew 2.4 times as many pictures for a still scene.
+* **No device Reset for nothing** (`SyncSupComFrameClientSizeAndViewport`): nothing happens while the window is minimized, and maximizing or restoring a window whose back buffer already has the size no longer releases and recreates every render target, shadow map and dynamic texture. Hypothesis (from reading the code, not yet confirmed on the laptop): on an NVIDIA + Intel laptop that Reset also rebuilds the cross-adapter copy to the display, which is where "seconds of flicker, invisible UI" after minimize / maximize come from. On the desktop a minimize / restore cycle now makes no Reset (it made one when the window had been maximized); a real size change makes one of 20-60 ms.
+* **Device loss handled in the editor's own Paint**: no present of an unrendered back buffer after a Reset (black or stale frame), a failed Reset is retried every 100 ms (before it waited for the next window message and `mInitialized` stayed 0), a lost device is polled ~100 times a second instead of as fast as the loop runs.
+* **Logging**: every Reset logs `EDITOR device reset: WxH, release, IDirect3DDevice9::Reset, resources, viewport init and UI relayout, total ms`; loss and recovery log `EDITOR device: lost` / `back after N ms`.
+* **Build grid budget scales with the screen** (`EdOverlay.cpp`): the quadtree's leaf cap (20,000) and segment cap grow with the viewport area above 1920 x 1080. A 2560 x 1600 view needs ~27,000 leaves; when the cap ran out the far ground stayed coarse and the border moved with every camera step ("the grid switches resolution").
+* **`SC_CameraScaleLOD` clamps its index** (a damaged saved `level_of_detail` outside 0..2 read past the table: a random level-of-detail scale all session).
+* **Display report** (File > Settings > Display report) now also prints: engine build stamp next to the Lua revision, monitor refresh, the frame cap, the renderer adapter / driver / swap chain (proof which GPU draws), the level-of-detail scale, field of view, zoom and view size, and whether the grid is native or the Lua fallback with its leaf count. New native `ed_engine_info()`.
+
+Not found as a cause by the code audit: DPI scaling (the process is system DPI aware, everything runs in physical pixels), frame time, GPU read-backs. The camera-distance symptoms (units fading early, icons late, grid flipping) have two code candidates left, the grid budget above and a wrong level-of-detail scale; the Display report on the laptop separates them (lod scale 0.9 / 1.0 / 1.2 expected, grid leaves near the cap).
+
+### Threads: where the editor stands and what is worth doing
+
+Already off the main thread: the sim (`Sim`, `Issue`), the map loader, the prefetcher, the field pool (generation, erosion, normal map, up to 16 threads), GPU compute on a second D3D11 device, brush dabs native. Main thread only: UI Lua (one state), D3D9 rendering (one device), wx messages. What would be worth doing next, ordered by expected value, not done yet:
+
+1. **Per-tier parallel `UpdateErrorKernel`** (twice per commit; a 2049 whole-map commit is 267 ms, est. 100 ms saved on 8 cores).
+2. **Autosave on a worker** (copy the height words and props, write the .scmap on a thread): removes a 50-500 ms hitch every 5 minutes on big maps.
+3. **Blueprint load / startup** (13-18 s): serial Lua in one state. Only a persistent parsed set or reading the .bp files ahead on workers helps; high risk.
+4. **A render thread** (record on one thread, submit on another): not realistic for this engine (one D3D9 device, UI Lua draws during the frame); no.

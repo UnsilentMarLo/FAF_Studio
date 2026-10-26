@@ -81,8 +81,36 @@ function Report()
     if okG and type(g) == 'table' and g.adapter and g.adapter ~= '' then
         table.insert(out, string.format('graphics adapter for the field operations: %s (%d MB)', g.adapter, g.vramMB or 0))
     end
+    -- which exe and which adapter draw (a package can carry newer Lua than its exe), the frame rate bound taken from the monitor, the level of detail numbers, the grid mode
+    local okE, e = pcall(function() return rawget(_G, 'ed_engine_info') and ed_engine_info() or nil end)
+    local okB, Build = pcall(function() return import('/lua/editor/buildinfo.lua') end)
+    if okE and type(e) == 'table' then
+        table.insert(out, string.format('engine built %s; editor Lua %s (revision %s)', tostring(e.built), okB and tostring(Build.Build) or '?', okB and tostring(Build.Revision) or '?'))
+        table.insert(out, string.format('monitor %.0f Hz; the active frame cap is %.0f per second (follows the monitor: %s)', e.refreshHz or 0, e.cap or 0, tostring(e.followRefresh)))
+        for line in string.gfind(tostring(e.renderInfo or ''), '[^\n]+') do
+            if string.find(line, 'backend', 1, true) or string.find(line, 'adapter', 1, true) or string.find(line, 'video memory', 1, true) or string.find(line, 'swap', 1, true) then
+                table.insert(out, 'renderer: ' .. string.gsub(line, '^%s+', ''))
+            end
+        end
+    else
+        table.insert(out, 'this engine is older than the editor Lua: it has no ed_engine_info (the editor Lua is revision ' .. (okB and tostring(Build.Revision) or '?') .. ')')
+    end
+    local okL, lod = pcall(function() return rawget(_G, 'ed_lod_info') and ed_lod_info() or nil end)
+    if okL and type(lod) == 'table' then
+        table.insert(out, string.format('level of detail: scale %.2f (0.9 high, 1.0 medium, 1.2 low), field of view %.2f, zoom %.1f, eye distance %.1f, view %d x %d, plane %.3f %.3f %.3f %.1f',
+            lod.lodScale or 0, lod.fov or 0, lod.zoom or 0, lod.eyeDistance or 0, lod.viewportW or 0, lod.viewportH or 0, lod.lodRowA or 0, lod.lodRowB or 0, lod.lodRowC or 0, lod.lodRowD or 0))
+    else
+        table.insert(out, 'level of detail: ed_lod_info is missing (an older engine)')
+    end
+    local nativeGrid = rawget(_G, 'ed_overlay_grid') ~= nil
+    local okO, perf = pcall(function() return { ed_overlay_perf() } end)
+    if okO and type(perf) == 'table' and perf[15] then
+        table.insert(out, string.format('build grid: %s; leaves %d, segments %d (the budget grows with the screen), %.2f ms', nativeGrid and 'native quadtree' or 'Lua fallback', perf[15] or 0, perf[16] or 0, perf[14] or 0))
+    else
+        table.insert(out, 'build grid: ' .. (nativeGrid and 'native quadtree' or 'Lua fallback (an older engine)'))
+    end
     -- the engine prints the value of a console variable when it is typed without one (the Console panel and the log show it)
-    for _, name in { 'sc_FrameTimeClamp', 'SC_VerticalSync', 'SC_CameraScaleLOD', 'ren_MeshDissolve', 'ren_MeshDissolveCutoff', 'ren_ShadowLOD', 'ui_AlwaysRenderStrategicIcons', 'SC_PrimaryAdapter' } do
+    for _, name in { 'sc_FrameTimeClamp', 'SC_VerticalSync', 'cam_DefaultLOD', 'cam_HighLOD', 'cam_MediumLOD', 'cam_LowLOD', 'ren_MeshDissolve', 'ren_MeshDissolveCutoff', 'ren_ShadowLOD', 'ui_AlwaysRenderStrategicIcons', 'SC_PrimaryAdapter' } do
         pcall(ConExecute, name)
     end
     table.insert(out, 'live console values (frame limit, vertical sync, level of detail ...): in the log')
