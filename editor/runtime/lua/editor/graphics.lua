@@ -18,12 +18,20 @@ local UserData = import('/lua/editor/userdata.lua')
 
 local function Con(name) return function(v) ConExecute(name .. ' ' .. tostring(v)) end end
 
+--- The anti-aliasing options are the engine's packed modes: (sample type << 5) | quality level (GetAntiAliasingOptions; the FAF client stores 256 for 8x). The text names the
+--- sample count; a mode with a quality level (the NVIDIA coverage modes) says so.
+local function AALabel(n)
+    local samples, quality = math.floor(n / 32), math.mod(n, 32)
+    if quality == 0 then return tostring(samples) .. 'x' end
+    return string.format('%dx (coverage %d)', samples, quality)
+end
+
 local function AAStates()
     local list = { { 'Off', 0 } }
     local ok, options = pcall(function() return GetAntiAliasingOptions() end)
     if ok and options then
         for _, n in options do
-            if n > 0 then table.insert(list, { tostring(n) .. 'x', n }) end
+            if n > 0 then table.insert(list, { AALabel(n), n }) end
         end
     end
     return list
@@ -78,7 +86,17 @@ function Default(key)
 end
 
 function Get(key)
-    return UserData.Get('gfx_' .. key, Default(key))
+    local value = UserData.Get('gfx_' .. key, Default(key))
+    -- A saved anti-aliasing mode the adapter does not offer (an older editor saved the sample count, 8, where the engine wants the packed mode, 256; another adapter) is "Off":
+    -- asking the graphics device for it made its reset fail (and hang on a hybrid laptop GPU).
+    if key == 'antialiasing' and value ~= 0 then
+        local offered = false
+        for _, st in AAStates() do
+            if st[2] == value then offered = true end
+        end
+        if not offered then return 0 end
+    end
+    return value
 end
 
 function Set(key, value)
