@@ -26,6 +26,14 @@ local function AALabel(n)
     return string.format('%dx (coverage %d)', samples, quality)
 end
 
+--- Vertical sync is on or off with a reset of the graphics device while the editor runs; with an NVIDIA adapter installed (hybrid laptops) such a reset never came back, so the
+--- setting stays On there.
+local function VSyncStates()
+    local ok, info = pcall(function() return rawget(_G, 'ed_engine_info') and ed_engine_info() or nil end)
+    if ok and type(info) == 'table' and info.nvidia then return { { 'On', 1 } } end
+    return { { 'Off', 0 }, { 'On', 1 } }
+end
+
 local function AAStates()
     local list = { { 'Off', 0 } }
     local ok, options = pcall(function() return GetAntiAliasingOptions() end)
@@ -50,7 +58,7 @@ Defs = {
     { key = 'antialiasing', tip = 'Smooths jagged edges by drawing each pixel several times. Applies at once; the window may flicker for a moment.', label = 'Anti-aliasing', states = AAStates, apply = Con('SC_AntiAliasingSamples'), device = true },
     { key = 'gpu_compute', tip = 'Runs heavy terrain operations (blur, and later erosion and noise) on the graphics card with Direct3D 11 compute shaders, where a GPU version exists. On any problem the editor uses the processor instead. Off: always the processor.', label = 'GPU compute', states = { { 'Off', 0 }, { 'On', 1 } },
       apply = function(v) local f = rawget(_G, 'ed_gpu_enable') if f then f(v == 1) end end },
-    { key = 'vsync', tip = 'Wait for the monitor before showing a frame: no tearing, and the card draws at most one frame per refresh. Off, the editor draws as many frames as the card can make (hundreds per second: a heavy load for a still scene).', label = 'Vertical sync', states = { { 'Off', 0 }, { 'On', 1 } }, apply = Con('SC_VerticalSync'), device = true },
+    { key = 'vsync', tip = 'Wait for the monitor before showing a frame: no tearing, and the card draws at most one frame per refresh. Off, the editor draws as many frames as the card can make (hundreds per second: a heavy load for a still scene).', label = 'Vertical sync', states = VSyncStates, apply = Con('SC_VerticalSync'), device = true },
 }
 
 Presets = {
@@ -89,6 +97,13 @@ function Get(key)
     local value = UserData.Get('gfx_' .. key, Default(key))
     -- A saved anti-aliasing mode the adapter does not offer (an older editor saved the sample count, 8, where the engine wants the packed mode, 256; another adapter) is "Off":
     -- asking the graphics device for it made its reset fail (and hang on a hybrid laptop GPU).
+    if key == 'vsync' and value ~= 1 then
+        local offered = false
+        for _, st in VSyncStates() do
+            if st[2] == value then offered = true end
+        end
+        if not offered then return 1 end
+    end
     if key == 'antialiasing' and value ~= 0 then
         local offered = false
         for _, st in AAStates() do
