@@ -10,7 +10,7 @@ confirmed there. The next step is to debug on the laptop itself.
 git clone --recurse-submodules https://github.com/UnsilentMarLo/FAF_Studio.git
 cd FAF_Studio
 python scripts/studio.py doctor            # lists what is missing
-python scripts/studio.py engine --no-bump build     # CMake + clang-cl; --no-bump keeps VERSION at 0.5.0
+python scripts/studio.py engine --no-bump build     # CMake + clang-cl; --no-bump keeps VERSION unchanged
 python scripts/studio.py engine --no-bump stage
 python scripts/editor_inst.py new dev
 python scripts/editor_inst.py start dev --map editor_blank
