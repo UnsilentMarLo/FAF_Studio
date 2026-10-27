@@ -87,11 +87,11 @@ higher height wins where two overlap), the x1 / x2 variants and Terrain001 / 051
   (the masks are crisp, so few pixels are in a transition); the numbers are the point: rock 0.69, high rock 0.73, snow 0.60, sand 0.50, dirt 0.45, grass 0.38, wet 0.30; roughness 0.50 wet .. 0.86 rock.
 * **Base alpha** (`alphagen.FitBase`): a shader with `profile.baseAlpha == 'opacity'` gets a copy of the base albedo with alpha 0 (colours bit for bit, `texconv.Alpha`); a shader without it gets the original
   back. `BaseAlpha(src, opacity)` writes any opacity for a deliberate macrotexture.
-* **Specularity alpha** (`alphagen.SpecAlpha(src, role, matte)`): the alpha of an albedo for TTerrainXP / 0xx / TTerrain from the kind of ground (wet 0.85 .. grass 0.18) and the detail. Not wired into a
-  node or a conversion yet.
-* Not done: a real height from the normal map (integration needs a Poisson / FFT solver); per-pixel alpha (the shaders have no use for it); the atlas from the graph's own masks.
+* **Specularity alpha** (`alphagen.SpecAlpha(src, role, matte, o)`, `ApplyLayerAlpha(o)`): the alpha of the albedo layers for TTerrainXP / 0xx / TTerrain from the kind of ground (wet 0.85 .. grass 0.18) and the detail. `mode` generate (new alpha), adjust (the texture's own alpha pulled towards the kind of ground by `amount`), off (originals back, `RestoreLayerAlpha`); always from the originals, one undo entry, colours bit for bit. Shaders that ignore the alpha get a message and nothing changes.
+* **Graph nodes** (2026-10-27): `Output: texture alpha` (`out_texalpha`: mode, detail, amount, base opacity for the x1 / x2 shaders and Terrain001 / 051) and four settings on `Output: roughness / height atlas` (height contrast, height step between the kinds of ground, relief of the normal map, roughness from the detail). Both run in `graphrun.BuildPaintTextures`. The atlas holds one tile per layer, so it cannot follow the map-wide masks: the transitions are shaped by these settings and the SpecularColor softness / contrast of the shader.
+* Not done: a real height from the normal map (integration needs a Poisson / FFT solver); per-pixel alpha (the shaders have no use for it).
 
-Tests: `selftest_alphagen.lua` (12 checks), `selftest_oversample.lua` (20).
+Tests: `selftest_alphagen.lua` (23 checks), `selftest_oversample.lua` (20); the pipeline lab runs `out_texalpha` for every shader (`--from-map` starts from the open map's heights, e.g. Operation Citadel).
 
 ## Why the selftests failed (2026-10-27)
 

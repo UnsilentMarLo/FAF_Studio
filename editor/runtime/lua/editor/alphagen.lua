@@ -12,7 +12,10 @@
 --                                           -> vfs, report | nil, message      o.cavity (0..1, how much the relief of the normal map counts, default 0.35)
 --   BaseAlpha(src, opacity)                 a copy of the base layer's albedo whose alpha is `opacity` (the macrotexture variants: 0 = off, the editor's default)
 --   SpecAlpha(src, role)                    a copy of an albedo whose alpha is the specularity of its kind of ground with the detail of the texture (TTerrainXP, 0xx; TTerrain: pass matte = true)
---   Stats(vfs)                              nil
+--   ApplyLayerAlpha(o)                      the albedo alpha of the layers made for the shader (TTerrain / TTerrainXP / 0xx read it as specularity): o.mode 'generate' (the specularity of the kind
+--                                           of ground with the detail of the texture) | 'adjust' (the texture's own alpha pulled towards the kind of ground by o.amount) | 'off' (the originals
+--                                           back); o.detail (0..0.6). Returns an undo entry | nil, a one line report, the number of layers.
+--   RestoreLayerAlpha()                     puts the original textures back on the layers ApplyLayerAlpha changed
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn), no `...`.
 
@@ -118,16 +121,17 @@ end
 
 --- height and roughness lists (0..1) of one layer: detail normalised to HEIGHT_SPREAD, relief from the normal map, bias by the kind of ground.
 local function Tile(albedo, normal, role, o)
-    local key = tostring(albedo) .. '|' .. tostring(normal) .. '|' .. tostring(role) .. '|' .. string.format('%.2f', o.cavity)
+    local key = tostring(albedo) .. '|' .. tostring(normal) .. '|' .. tostring(role) .. '|' .. string.format('%.2f|%.2f|%.2f|%.2f', o.cavity, o.spread, o.biasScale, o.roughDetail)
     if cache[key] then return cache[key] end
     local lum, cav, haveNormal = Detail(albedo, normal)
     if not lum then return nil, cav end
     local lm, ls = MeanSd(lum)
     local cm, cs = MeanSd(cav)
     local wc = haveNormal and o.cavity or 0
-    local gl = ls > 0.002 and (HEIGHT_SPREAD / ls) or 0
-    local gc = cs > 0.0005 and (HEIGHT_SPREAD / cs) or 0
-    local bias = ROLE_HEIGHT[role or ''] or 0
+    local spread = HEIGHT_SPREAD * o.spread
+    local gl = ls > 0.002 and (spread / ls) or 0
+    local gc = cs > 0.0005 and (spread / cs) or 0
+    local bias = (ROLE_HEIGHT[role or ''] or 0) * o.biasScale
     local baseRough = ROLE_ROUGH[role or ''] or 0.65
     local height, rough = {}, {}
     for i = 1, SIZE * SIZE do
@@ -136,7 +140,7 @@ local function Tile(albedo, normal, role, o)
         local hv = 0.5 + bias + (1 - wc) * l + wc * c
         if hv < 0.05 then hv = 0.05 elseif hv > 0.95 then hv = 0.95 end
         height[i] = hv
-        local rv = baseRough - ROUGH_DETAIL * l * 2
+        local rv = baseRough - ROUGH_DETAIL * o.roughDetail * l * 2
         if rv < ROUGH_MIN then rv = ROUGH_MIN elseif rv > ROUGH_MAX then rv = ROUGH_MAX end
         rough[i] = rv
     end
@@ -169,6 +173,9 @@ end
 function Atlas(paths, normals, roles, size, o)
     o = o or {}
     o.cavity = o.cavity or 0.35
+    o.spread = o.spread or 1                    -- x HEIGHT_SPREAD: the contrast of the heights the splatting compares
+    o.biasScale = o.biasScale or 1              -- x the height step between the kinds of ground (rock above grass above wet ground)
+    o.roughDetail = o.roughDetail or 1          -- x ROUGH_DETAIL: how much the bright / dark spots of a texture move its roughness
     if not rawget(_G, 'ed_dds_fields') or not rawget(_G, 'ed_dds_read') or not rawget(_G, 'ed_tex_atlas') then return nil, 'this editor build cannot make the atlas (ed_dds_fields is missing)' end
     local TexConv = import('/lua/editor/texconv.lua')
     local tiles = {}
@@ -186,7 +193,7 @@ function Atlas(paths, normals, roles, size, o)
             local rm, rs = MeanSd(tile.rough)
             stats[k] = string.format('%s height %.2f+-%.2f rough %.2f+-%.2f', tostring(role), hm, hs, rm, rs)
         else
-            tiles[k] = { rough = { from = 'const', value = TexConv.ROUGH_NEUTRAL }, height = { from = 'const', value = 0.5 + (ROLE_HEIGHT[role or ''] or 0) } }
+            tiles[k] = { rough = { from = 'const', value = TexConv.ROUGH_NEUTRAL }, height = { from = 'const', value = 0.5 + (ROLE_HEIGHT[role or ''] or 0) * o.biasScale } }
         end
     end
     local spec = { size = size or 1024, rough = TexConv.ROUGH_NEUTRAL, height = 0.5, tiles = tiles }
@@ -207,10 +214,20 @@ function BaseAlpha(src, opacity)
 end
 
 --- A copy of an albedo whose alpha is the specularity of its kind of ground, moved by the detail of the texture (bright spots shinier). matte = true for TTerrain (it reads 1 - alpha).
-function SpecAlpha(src, role, matte)
+--- o.detail: how much the detail moves it (0 .. 0.6, default 0.35); o.adjust = weight 0..1 of the kind of ground against the texture's own alpha (pulled towards it instead of replaced).
+function SpecAlpha(src, role, matte, o)
+    o = o or {}
     local base = ROLE_SPEC[role or ''] or 0.3
-    local c = { from = 'lum', center = true, scale = 0.35, bias = base - 0.5, lo = 0.02, hi = 0.98 }
-    if matte then c = { from = 'lum', center = true, scale = -0.35, bias = (1 - base) - 0.5, lo = 0.02, hi = 0.98 } end
+    local detail = o.detail or 0.35
+    local c
+    if o.adjust then
+        local w = o.adjust
+        c = { from = 'a', scale = 1 - w, bias = w * (matte and (1 - base) or base), lo = 0.02, hi = 0.98 }
+    elseif matte then
+        c = { from = 'lum', center = true, scale = -detail, bias = (1 - base) - 0.5, lo = 0.02, hi = 0.98 }
+    else
+        c = { from = 'lum', center = true, scale = detail, bias = base - 0.5, lo = 0.02, hi = 0.98 }
+    end
     return import('/lua/editor/texconv.lua').Alpha(src, c)
 end
 
@@ -229,9 +246,9 @@ function FitBase(opacity)
     local TexConv = import('/lua/editor/texconv.lua')
     if not TexConv.IsTexture(path) then return nil end
     if profile.baseAlpha == 'opacity' then
-        opacity = opacity or 0
         local key = string.lower(path)
         local known = baseOrigin[key]
+        opacity = opacity or (known and known.opacity) or 0      -- no value: what is set stays
         if known and known.opacity == opacity then return nil end
         local origin = known and known.origin or path
         local vfs, lossless = BaseAlpha(origin, opacity)
@@ -248,4 +265,63 @@ function FitBase(opacity)
     return nil
 end
 
-function Forget() cache = {} baseOrigin = {} end
+local layerOrigin = {}             -- [lower(vfs of a specularity copy)] = { origin = the albedo it was made from, layer }
+
+--- Puts the original albedo back on the layers ApplyLayerAlpha made copies for. Returns how many.
+function RestoreLayerAlpha()
+    local Strata = import('/lua/editor/strata.lua')
+    local n = 0
+    for layer = 0, 8 do
+        local path, size = ed_stratum_layer(layer)
+        local known = path and layerOrigin[string.lower(path)]
+        if known then
+            local normal, nsize = ed_stratum_layer(layer + 10)
+            Strata.SetTexture(layer, known.origin, normal, size, nsize)
+            n = n + 1
+        end
+    end
+    return n
+end
+
+--- The albedo alpha of the layers for the map's shader (see the header). Read as specularity by profile.alpha = 'spec' (TTerrainXP, 0xx) or as 1 - specularity by 'matte' (TTerrain). The other
+--- shaders ignore it (Terrain1xx / 2xx take roughness and height from the Upper atlas, see Atlas): nil and a message. One undo entry (MT.Apply, pushed unless o.noPush).
+function ApplyLayerAlpha(o)
+    o = o or {}
+    local Strata = import('/lua/editor/strata.lua')
+    local TexConv = import('/lua/editor/texconv.lua')
+    local profile = Strata.Profile()
+    if not profile or not rawget(_G, 'ed_stratum_layer') then return nil, 'no terrain' end
+    local mode = o.mode or 'generate'
+    if mode == 'off' then
+        local n = RestoreLayerAlpha()
+        return nil, n > 0 and ('the original alpha of ' .. n .. ' layers is back') or 'the layers have their own alpha already', n
+    end
+    if profile.alpha ~= 'spec' and profile.alpha ~= 'matte' then
+        return nil, (rawget(_G, 'ed_stratum_shader') and ed_stratum_shader() or 'this shader') .. ' does not read the alpha of the layer textures as specularity (TTerrain, TTerrainXP and the 0xx shaders do).'
+    end
+    if not TexConv.Available() then return nil, 'this editor build cannot make textures (ed_tex_convert is missing)' end
+    RestoreLayerAlpha()                                   -- always from the originals: the same settings give the same files
+    local det = import('/lua/editor/roledetect.lua').Layers(7)
+    local writes, kinds = {}, {}
+    local painted = profile.painted or 7
+    if painted > 8 then painted = 8 end
+    for layer = 0, painted do
+        local path, size = ed_stratum_layer(layer)
+        if TexConv.IsTexture(path) then
+            local role = det[layer] and det[layer].role or nil
+            local vfs = SpecAlpha(path, role, profile.alpha == 'matte', { detail = o.detail, adjust = mode == 'adjust' and (o.amount or 0.6) or nil })
+            if vfs then
+                layerOrigin[string.lower(vfs)] = { origin = path, layer = layer }
+                table.insert(writes, { layer = layer, path = vfs, size = size or 4 })
+                table.insert(kinds, tostring(role))
+            end
+        end
+    end
+    if not writes[1] then return nil, 'no layer has a texture' end
+    local entry, why = MT.Apply('texture alpha', writes, o)
+    if not entry then return nil, why end
+    -- Apply loads the albedo only: the layer's normal map stays as it was (it is a separate layer slot)
+    return entry, table.getn(writes) .. ' layers: alpha = ' .. (profile.alpha == 'matte' and '1 - ' or '') .. 'specularity by the kind of ground (' .. table.concat(kinds, ', ') .. ')', table.getn(writes)
+end
+
+function Forget() cache = {} baseOrigin = {} layerOrigin = {} end

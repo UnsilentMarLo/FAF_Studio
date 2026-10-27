@@ -93,6 +93,45 @@ function Run()
     local aw, ar = vfs and MeanAlpha(vfs), vfs2 and MeanAlpha(vfs2)
     check('the specularity of wet ground is above that of rock', aw and ar and aw > ar + 0.3, tostring(aw) .. ' ' .. tostring(ar))
 
+    -- the atlas settings move the heights the splatting compares
+    Shaders.Set('Terrain202B')
+    TS.Apply('temperate')
+    import('/lua/editor/recipes.lua').Invalidate()
+    local function RockMinusGrass(o)
+        o.size = 1024
+        MT.GenerateAtlas(o)
+        local st = MT.State.atlasStats
+        if not (st and st[4] and st[1]) then return nil end
+        return (Num(st[4], 'height')) - (Num(st[1], 'height'))
+    end
+    local wide, flat = RockMinusGrass({ biasScale = 2 }), RockMinusGrass({ biasScale = 0 })
+    check('the height step between the kinds of ground follows its setting', wide and flat and wide > flat + 0.2, tostring(wide) .. ' ' .. tostring(flat))
+    RockMinusGrass({ spread = 2 })
+    local _, sdWide = Num(MT.State.atlasStats[4], 'height')
+    RockMinusGrass({ spread = 0.5 })
+    local _, sdNarrow = Num(MT.State.atlasStats[4], 'height')
+    check('the height contrast inside a texture follows its setting', sdWide and sdNarrow and sdWide > sdNarrow * 1.5, tostring(sdWide) .. ' ' .. tostring(sdNarrow))
+
+    -- the specularity alpha of the layers (TTerrainXP reads it; Terrain202 does not)
+    Shaders.Set('TTerrainXP')
+    TS.Apply('temperate')
+    import('/lua/editor/recipes.lua').Invalidate()
+    local own = ed_stratum_layer(4)
+    local own1 = ed_stratum_layer(6)
+    local entry2, report, n = AG.ApplyLayerAlpha({ mode = 'generate', noPush = true })
+    check('Generate gives the layers a copy with the specularity alpha', entry2 ~= nil and n and n >= 4, tostring(report))
+    local gen = ed_stratum_layer(4)
+    check('the layer now uses a new file', gen ~= own and string.find(gen, 'edmaptex', 1, true) ~= nil, tostring(gen))
+    local ag = MeanAlpha(gen)
+    check('the specularity alpha is a middle value (not the 0 of the macrotexture fix)', ag ~= nil and ag > 0.05 and ag < 0.95, tostring(ag))
+    local e3, r3, n3 = AG.ApplyLayerAlpha({ mode = 'adjust', amount = 0.9, noPush = true })
+    check('Adjust works from the original textures', e3 ~= nil and ed_stratum_layer(4) ~= gen, tostring(r3))
+    AG.ApplyLayerAlpha({ mode = 'off', noPush = true })
+    check('Off puts the original textures back', ed_stratum_layer(4) == own and ed_stratum_layer(6) == own1, tostring(ed_stratum_layer(4)))
+    Shaders.Set('Terrain202B')
+    local e4, r4 = AG.ApplyLayerAlpha({ mode = 'generate', noPush = true })
+    check('a shader that ignores the alpha (Terrain202B) says so and changes nothing', e4 == nil and r4 and string.find(r4, 'does not read', 1, true) ~= nil, tostring(r4))
+
     Shaders.Set(shader0 or 'TTerrainXP')
     return Done()
 end

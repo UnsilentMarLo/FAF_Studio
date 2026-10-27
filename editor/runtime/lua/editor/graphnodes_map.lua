@@ -121,9 +121,19 @@ function Install(Kit, Covers)
         eval = function(E, v, ins) return { view = E:Const(0) } end })
 
     Def('out_atlas', { label = 'Output: roughness / height atlas', cat = 'outputs', kw = 'output atlas roughness height pbr upper layer splat terrain1xx terrain2xx shader write dds texture',
-        desc = 'Build makes the roughness / height atlas of the Upper layer from the layer textures and the kind of ground of each (rock stands above grass above wet ground, so the 2xx splatting lets the right layer win). The Terrain1xx and Terrain2xx shaders read it.',
+        desc = 'Build makes the roughness / height atlas of the Upper layer from the layer textures and the kind of ground of each (rock stands above grass above wet ground, so the 2xx splatting lets the right layer win). The Terrain1xx and Terrain2xx shaders read it. The atlas holds one tile per layer, so it follows the textures and the kind of ground, not the masks: shape the transitions with the settings below and the softness / contrast of the shader.',
         outputs = { Out('view', 'mask', true) }, output = 'mapatlas', mapTexture = 'atlas',
-        params = { C('size', 'Texture size (pixels)', { '512', '1024' }, { '512', '1024' }, '1024') },
+        params = { C('size', 'Texture size (pixels)', { '512', '1024' }, { '512', '1024' }, '1024'),
+                   N('spread', 'Height contrast inside a texture', 0.25, 2.5, 0.05, '%.2f', 1), N('biasScale', 'Height step between the kinds of ground', 0, 2.5, 0.05, '%.2f', 1),
+                   N('cavity', 'Relief of the normal map in the heights', 0, 1, 0.05, '%.2f', 0.35), N('roughDetail', 'Roughness from the detail of the texture', 0, 2, 0.05, '%.2f', 1) },
+        eval = function(E, v, ins) return { view = E:Const(0) } end })
+
+    Def('out_texalpha', { label = 'Output: texture alpha', cat = 'outputs', kw = 'output texture alpha specularity albedo layers shiny matte opacity macrotexture base terrain ttterrainxp terrain0xx terrain1xx terrain2xx shader write dds',
+        desc = 'Build gives the layer textures the alpha their shader reads. TTerrain, TTerrainXP and the 0xx shaders read it as specularity (TTerrain as 1 - specularity): Generate makes it from the kind of ground (wet ground and snow shiny, rock and dirt dull) with the detail of the texture, Adjust pulls the alpha the texture has towards the kind of ground, Off puts the original textures back. The shaders whose name ends in 1 or 2 (Terrain1x1, 2x2 ..., 001, 051) lay the base texture over the map by its alpha, so there the base layer gets the macrotexture opacity below (0 = none). Terrain1xx and 2xx take roughness and height from the atlas instead (Output: roughness / height atlas). New texture files: the colours are copied bit for bit.',
+        outputs = { Out('view', 'mask', true) }, output = 'texalpha',
+        params = { C('mode', 'Specularity alpha', { 'generate', 'adjust', 'off' }, { 'Generate from the kind of ground', 'Adjust the alpha the texture has', 'Off (original textures)' }, 'generate'),
+                   N('detail', 'Detail of the texture in the alpha', 0, 0.6, 0.05, '%.2f', 0.35), N('amount', 'Adjust: pull towards the kind of ground', 0, 1, 0.05, '%.2f', 0.6),
+                   N('baseOpacity', 'Base texture as macrotexture (Terrain x1 / x2)', 0, 0.9, 0.05, '%.2f', 0) },
         eval = function(E, v, ins) return { view = E:Const(0) } end })
 
     Def('out_roughness', { label = 'Output: roughness mask', cat = 'outputs', kw = 'output roughness multiplier layer 8 mask pbr terrain1xx terrain2xx shiny rough wet shader write',

@@ -908,6 +908,24 @@ function BuildPaintTextures(run, graph, result)
             end
         end
     end
+    for _, node in OutputNodes(graph, 'texalpha') do
+        local ag = import('/lua/editor/alphagen.lua')
+        local profile = import('/lua/editor/strata.lua').Profile() or {}
+        local o = { mode = V(run, node, 'mode'), detail = V(run, node, 'detail'), amount = V(run, node, 'amount') }
+        local did = false
+        if profile.baseAlpha == 'opacity' then
+            local note = ag.FitBase(V(run, node, 'baseOpacity'))
+            did = note ~= nil
+        else
+            local entry, msg, n = ag.ApplyLayerAlpha(o)
+            if entry then did = true
+            elseif o.mode ~= 'off' and msg and not string.find(msg, 'already', 1, true) then
+                result.warnings = result.warnings or {}
+                table.insert(result.warnings, { text = 'Texture alpha not applied: ' .. msg, code = 'shader', node = node.id })
+            end
+        end
+        if did then result.maptextures = (result.maptextures or 0) + 1 end
+    end
     for _, node in OutputNodes(graph, 'roughness') do
         local p = import('/lua/editor/strata.lua').Profile()
         if not p or p.l8 ~= 'rough' then

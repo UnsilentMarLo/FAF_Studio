@@ -76,6 +76,7 @@ C(ovs, 'out', lt, 'a') C(lt, 'shadow', olt, 'shadow') C(lt, 'ao', olt, 'ao') C(o
 A('out_atlas', 1320, 750, { size = '1024' })
 A('out_macro', 1320, 850, { size = '1024' })
 A('out_specular', 1320, 950, { size = '1024' })
+A('out_texalpha', 1320, 1050, {})
 say('graph_ms_setup', string.format('%.0f', (GetSystemTimeSeconds() - t0) * 1000))
 
 -- 3. water, then build

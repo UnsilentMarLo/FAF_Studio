@@ -562,7 +562,7 @@ function GenerateAtlas(o)
         for layer = 0, 7 do normals[layer] = ed_stratum_layer(layer + 10) end
         local ag = import('/lua/editor/alphagen.lua')
         local stats
-        vfs, report, stats = ag.Atlas(paths, normals, roles, tonumber(o.size) or 1024, { cavity = o.cavity })
+        vfs, report, stats = ag.Atlas(paths, normals, roles, tonumber(o.size) or 1024, { cavity = o.cavity, spread = o.spread, biasScale = o.biasScale, roughDetail = o.roughDetail })
         if not vfs then Say('atlas from the detail failed (' .. tostring(report) .. '), made the plain way') end
         State.atlasStats = stats
     end
