@@ -121,11 +121,14 @@ function Install(Kit, Covers)
         eval = function(E, v, ins) return { view = E:Const(0) } end })
 
     Def('out_atlas', { label = 'Output: roughness / height atlas', cat = 'outputs', kw = 'output atlas roughness height pbr upper layer splat terrain1xx terrain2xx shader write dds texture',
-        desc = 'Build makes the roughness / height atlas of the Upper layer from the layer textures and the kind of ground of each (rock stands above grass above wet ground, so the 2xx splatting lets the right layer win). The Terrain1xx and Terrain2xx shaders read it. The atlas holds one tile per layer, so it follows the textures and the kind of ground, not the masks: shape the transitions with the settings below and the softness / contrast of the shader.',
+        desc = 'Build makes the roughness / height atlas of the Upper layer from the layer textures and the kind of ground of each (rock stands above grass above wet ground, so the 2xx splatting lets the right layer win). The Terrain1xx and Terrain2xx shaders read it. The atlas holds one tile per layer, so it follows the textures and the kind of ground, not the masks: shape the transitions with the style or the settings, and with the softness / contrast the Terrain2xx shaders read from the lighting of the map (the last two settings write them; 0 leaves them as they are).',
         outputs = { Out('view', 'mask', true) }, output = 'mapatlas', mapTexture = 'atlas',
         params = { C('size', 'Texture size (pixels)', { '512', '1024' }, { '512', '1024' }, '1024'),
+                   C('style', 'Style of the blending', { 'default', 'soft', 'patchy', 'custom' }, { 'Default', 'Soft: smooth, no kind wins', 'Patchy: rock takes the transitions', 'Custom: the settings below' }, 'default',
+                     'A named combination of the height settings below and of the splat softness / contrast of the shader. Custom uses the numbers as they are.'),
                    N('spread', 'Height contrast inside a texture', 0.25, 2.5, 0.05, '%.2f', 1), N('biasScale', 'Height step between the kinds of ground', 0, 2.5, 0.05, '%.2f', 1),
-                   N('cavity', 'Relief of the normal map in the heights', 0, 1, 0.05, '%.2f', 0.35), N('roughDetail', 'Roughness from the detail of the texture', 0, 2, 0.05, '%.2f', 1) },
+                   N('cavity', 'Relief of the normal map in the heights', 0, 1, 0.05, '%.2f', 0.35), N('roughDetail', 'Roughness from the detail of the texture', 0, 2, 0.05, '%.2f', 1),
+                   N('splatSoft', 'Splat softness of the shader (0 = leave)', 0, 2, 0.05, '%.2f', 0), N('splatContrast', 'Splat height contrast of the shader (0 = leave)', 0, 3, 0.05, '%.2f', 0) },
         eval = function(E, v, ins) return { view = E:Const(0) } end })
 
     Def('out_texalpha', { label = 'Output: texture alpha', cat = 'outputs', kw = 'output texture alpha specularity albedo layers shiny matte opacity macrotexture base terrain ttterrainxp terrain0xx terrain1xx terrain2xx shader write dds',

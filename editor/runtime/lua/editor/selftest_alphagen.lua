@@ -153,6 +153,20 @@ function Run()
     local e4, r4 = AG.ApplyLayerAlpha({ mode = 'generate', noPush = true })
     check('a shader that ignores the alpha (Terrain202B) says so and changes nothing', e4 == nil and r4 and string.find(r4, 'does not read', 1, true) ~= nil, tostring(r4))
 
+    -- the styles of the atlas node and the splat settings of the shader
+    local o1 = AG.ApplyStyle({ style = 'patchy', spread = 1 })
+    local o2 = AG.ApplyStyle({ style = 'custom', spread = 0.7 })
+    check('a style fills the settings, custom keeps the numbers', o1.spread == AG.PRESETS.patchy.spread and o1.splatContrast == 1.5 and o2.spread == 0.7 and o2.splatSoft == nil)
+    Shaders.Set('Terrain202B')
+    local note = AG.SetSplat(0.33, 1.2)
+    local spec = Shaders.SpecColor()
+    check('SetSplat writes the softness and the contrast of a Terrain2xx map', note ~= nil and math.abs(spec.spec_r - 0.33) < 0.001 and math.abs(spec.spec_g - 1.2) < 0.001, tostring(note))
+    AG.SetSplat(0, 0.9)
+    check('0 leaves a lane as it is', math.abs(Shaders.SpecColor().spec_r - 0.33) < 0.001 and math.abs(Shaders.SpecColor().spec_g - 0.9) < 0.001)
+    Shaders.Set('TTerrainXP')
+    local note2, why2 = AG.SetSplat(0.5, 0.5)
+    check('another shader keeps its specular colour and says why', note2 == nil and why2 ~= nil and string.find(why2, 'Terrain2xx', 1, true) ~= nil, tostring(why2))
+
     Shaders.Set(shader0 or 'TTerrainXP')
     return Done()
 end

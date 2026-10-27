@@ -15,6 +15,8 @@
 --   ApplyLayerAlpha(o)                      the albedo alpha of the layers made for the shader (TTerrain / TTerrainXP / 0xx read it as specularity): o.mode 'generate' (the specularity of the kind
 --                                           of ground with the detail of the texture) | 'adjust' (the texture's own alpha pulled towards the kind of ground by o.amount) | 'off' (the originals
 --                                           back); o.detail (0..0.6). Returns an undo entry | nil, a one line report, the number of layers.
+--   PRESETS, ApplyStyle(o)                  the named combinations of the atlas settings (default | soft | patchy; 'custom' = the numbers as given) and of the splat settings of the shader; ApplyStyle fills o
+--   SetSplat(soft, contrast)                sets the Terrain2xx blending settings of the map's SpecularColor (softness .r, height contrast .g; 0 = leave as it is). Returns a note | nil, message
 --   RestoreLayerAlpha()                     puts the original textures back on the layers ApplyLayerAlpha changed
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn), no `...`.
@@ -32,6 +34,42 @@ ROLE_SPEC = { grass = 0.18, dirt = 0.15, wet = 0.85, sand = 0.30, rock = 0.25, d
 ROUGH_DETAIL = 0.30
 HEIGHT_SPREAD = 0.16                -- the standard deviation of a tile's detail height (0..1): every texture gets the same contrast, a flat texture is not flat in the splat
 ROLE_HEIGHT = { rock = 0.20, highrock = 0.24, darkrock = 0.16, snow = 0.10, sand = 0.0, dirt = -0.05, grass = -0.12, wet = -0.20 }
+
+-- named combinations of the atlas settings (spread = height contrast inside a texture, biasScale = step between the kinds of ground, cavity = weight of the normal map's relief, roughDetail) and
+-- of the splat settings the Terrain2xx shaders take from SpecularColor (splatSoft = .r, splatContrast = .g; absent = leave the map's). soft: transitions blend smoothly, no kind wins; patchy: the
+-- higher kind (rock) takes the transition in sharp islands.
+PRESETS = {
+    default = { spread = 1, biasScale = 1, cavity = 0.35, roughDetail = 1 },
+    soft = { spread = 0.5, biasScale = 0.3, cavity = 0.35, roughDetail = 1, splatSoft = 0.7, splatContrast = 0.8 },
+    patchy = { spread = 2.0, biasScale = 2.0, cavity = 0.35, roughDetail = 1, splatSoft = 0.3, splatContrast = 1.5 },
+}
+
+--- Fills the atlas and splat settings of o from the named style (o.style); 'custom' or none keeps the numbers in o. Returns o.
+function ApplyStyle(o)
+    local preset = o and o.style and PRESETS[o.style]
+    if preset then
+        for k, v in preset do o[k] = v end
+    end
+    return o
+end
+
+--- Terrain2xx read their blending from the map's SpecularColor: .r = softness of the transitions, .g = contrast of the heights (docs/projects/editor/LAYER_CONVERSION.md). soft / contrast 0 or nil
+--- leave the lane as it is. Other shaders use that colour as the specular highlight: nothing is changed there (nil and a message).
+function SetSplat(soft, contrast)
+    soft, contrast = tonumber(soft) or 0, tonumber(contrast) or 0
+    if soft <= 0 and contrast <= 0 then return nil end
+    local profile = import('/lua/editor/strata.lua').Profile()
+    if not profile or profile.class ~= 'splat' then
+        return nil, 'the splat softness and contrast are read by the Terrain2xx shaders only (SpecularColor is the specular highlight of the others)'
+    end
+    local Shaders = import('/lua/editor/shaders.lua')
+    local t = Shaders.SpecColor()
+    if not t then return nil, 'no map lighting' end
+    if soft > 0 then t.spec_r = soft end
+    if contrast > 0 then t.spec_g = contrast end
+    Shaders.SetSpecColor(t)
+    return string.format('splat softness %.2f, height contrast %.2f', t.spec_r, t.spec_g)
+end
 
 local cache = {}                    -- [albedo .. '|' .. normal] = { height = number[], rough = number[], w, h } at SIZE x SIZE
 

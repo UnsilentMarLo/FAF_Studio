@@ -902,9 +902,17 @@ function BuildPaintTextures(run, graph, result)
             else
                 local o = {}
                 for _, p in Nodes.Defs[node.type].params do o[p.key] = V(run, node, p.key) end
+                if kind == 'atlas' then import('/lua/editor/alphagen.lua').ApplyStyle(o) end
                 local entry, err = MT.Generate(kind, o)
                 if not entry then return MT.Kinds[kind].label .. ': ' .. tostring(err) end
                 result.maptextures = (result.maptextures or 0) + 1
+                if kind == 'atlas' then
+                    local note, why = import('/lua/editor/alphagen.lua').SetSplat(o.splatSoft, o.splatContrast)
+                    if why then
+                        result.warnings = result.warnings or {}
+                        table.insert(result.warnings, { text = 'Splat settings not applied: ' .. why, code = 'shader', kind = kind, node = node.id })
+                    end
+                end
             end
         end
     end
