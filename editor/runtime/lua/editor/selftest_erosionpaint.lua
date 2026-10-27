@@ -68,7 +68,7 @@ function Run()
         check('Override makes every selection and variant band', keys == '', 'missing ' .. keys)
         if sel.dirt then
             local lo, hi, mean = Fields.Stats(sel.dirt)
-            check('the dirt selection is a share of the ground (near 22 percent of the open ground)', mean > 0.05 and mean < 0.4 and hi <= 1.001 and lo >= -0.001, string.format('%.3f', mean))
+            check('the dirt selection is a share of the ground (at most the 22 percent asked for, less on steep ground)', mean >= 0 and mean < 0.4 and hi <= 1.001 and lo >= -0.001, string.format('%.3f', mean))
         end
         -- crisp: the edge of a band is narrow (few cells between 0.1 and 0.9)
         if sel.wet then

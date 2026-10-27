@@ -104,6 +104,7 @@ SetOf = { temperate = 'evergreen', valley = 'evergreen', desert = 'desert', redb
 -- size (units at 100 percent), the clustering: noise of `size` units whose top `share` of the map takes the density (things lie in groups along the ground, not evenly)
 Defs = {
     { id = 'small', label = 'Small rocks (gentle ground, in clusters)', mode = 'props', slopeMin = 0, slopeMax = 14, per1000 = 9.8, minDist = 6, scaleMin = 60, scaleMax = 130, cluster = { size = 70, share = 0.5 } },
+    { id = 'stones', label = 'Stones along the water (channels and banks)', mode = 'props', slopeMin = 0, slopeMax = 25, per1000 = 3.5, minDist = 3, scaleMin = 60, scaleMax = 150, cluster = { size = 40, share = 0.8, flow = { 0.42, 0.55 } } },
     { id = 'big', label = 'Big rocks (steep ground, cliffs)', mode = 'props', slopeMin = 6, slopeMax = 55, per1000 = 1.8, minDist = 10, scaleMin = 90, scaleMax = 150, cluster = { size = 50, share = 0.85 } },
     { id = 'crack', label = 'Crevice and patch decals (gentle ground)', mode = 'decals', slopeMin = 0, slopeMax = 12, per1000 = 0.7, minDist = 14, scaleMin = 60, scaleMax = 160, decalSize = 25, cluster = { size = 90, share = 0.6 } },
     { id = 'ground', label = 'Rock ground decals (steeper ground)', mode = 'decals', slopeMin = 8, slopeMax = 35, per1000 = 0.17, minDist = 25, scaleMin = 70, scaleMax = 140, decalSize = 36, cluster = { size = 110, share = 0.6 } },
@@ -137,8 +138,9 @@ function Classes(themeId)
         local c = {}
         for k, v in d do c[k] = v end
         c.entries = {}
-        if set.scale and set.scale[d.id] then c.scaleMin, c.scaleMax = set.scale[d.id][1], set.scale[d.id][2] end
-        for _, p in set[d.id] or {} do
+        local entryKey = (d.id == 'stones') and 'small' or d.id
+        if set.scale and set.scale[entryKey] then c.scaleMin, c.scaleMax = set.scale[entryKey][1], set.scale[entryKey][2] end
+        for _, p in set[entryKey] or {} do
             if d.mode == 'props' then
                 local path = PropPath(set.group, p)
                 if path then table.insert(c.entries, path) end
@@ -163,6 +165,12 @@ end
 local function DensityRules(c, seed)
     local cl = c.cluster
     if not cl then return {} end
+    -- along the water: stones collect in the channels and on their banks (the pebble lines of an eroded map): the drainage network (maskgen's flow rule), widened a little, thinned by the noise
+    if cl.flow then
+        local noise = Recipes.NoiseAt(5, seed, cl.size, 4, 1 - cl.share)
+        return { Rule('flow', { range = 600, from = cl.flow[1], to = cl.flow[2] }), Rule('grow', { distance = 2, soft = 2 }),
+                 Rule('noise', { kind = 5, seed = seed, size = cl.size, octaves = 4, from = noise, to = math.min(0.99, noise + 0.12) }, 'and') }
+    end
     local size = cl.size
     local from = Recipes.NoiseAt(5, seed, size, 4, 1 - cl.share)
     local to = Recipes.NoiseAt(5, seed, size, 4, math.min(0.98, 1 - cl.share + 0.3))
@@ -235,8 +243,12 @@ function Run(opts)
                 for _, p in c.entries do table.insert(list, { bp = p, weight = 1 }) end
                 if c.mode == 'decals' then Scatter.DecalEntries = list else Scatter.Entries = list end
                 Scatter.Density = { rules = DensityRules(c, 700 + i * 31 + seed) }
-                local n, report = Scatter.Apply()
-                table.insert(summary, { id = c.id, label = c.label, placed = n or 0, note = (not n) and tostring(report) or nil })
+                local t0 = GetSystemTimeSeconds()
+                local plan, report = Scatter.Plan()
+                local t1 = GetSystemTimeSeconds()
+                local n = plan and Scatter.Place(plan, 'detail pass: ' .. c.id) or nil
+                local t2 = GetSystemTimeSeconds()
+                table.insert(summary, { id = c.id, label = c.label, placed = n or 0, note = (not n) and tostring(report) or nil, planSeconds = t1 - t0, placeSeconds = t2 - t1 })
                 total = total + (n or 0)
             end
         end
