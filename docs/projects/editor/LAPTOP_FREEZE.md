@@ -68,3 +68,5 @@ The retail swap chain MSAA ("SAA") is a D3D9 feature; upstream faf-re now has D3
 sensible. The editor's natives (EdGpuLua, EdMeshDraw, EdPopout) cast the GAL device to `DeviceD3D9`, so the editor runs on D3D9 only (`CScApp.cpp` RendererAttemptOrder). A
 post process FXAA / SMAA pass in the editor's own render path would give every adapter smooth edges without a multisampled back buffer and make the swap chain MSAA (and
 the NVIDIA special case) unnecessary.
+
+**Done 2026-10-27 (branch `fxaa`): FXAA** is a state of the Anti-aliasing setting (`ed_fxaa`), one full-screen pass on every adapter, UI unfiltered, no device Reset to switch it. See FXAA.md. It still has to be tried on this laptop.

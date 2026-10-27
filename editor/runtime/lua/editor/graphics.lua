@@ -34,8 +34,12 @@ local function VSyncStates()
     return { { 'Off', 0 }, { 'On', 1 } }
 end
 
+--- The 'FXAA' state is not an engine mode: it is the post-process anti-aliasing pass (console variable ed_fxaa, EdFxaa.cpp), which works on every adapter and needs no multisampled
+--- swap chain. It is stored as -1, which the packed engine modes (0 and (type << 5) | quality) never are.
+FXAA = -1
+
 local function AAStates()
-    local list = { { 'Off', 0 } }
+    local list = { { 'Off', 0 }, { 'FXAA', FXAA } }
     local ok, options = pcall(function() return GetAntiAliasingOptions() end)
     if ok and options then
         for _, n in options do
@@ -43,6 +47,17 @@ local function AAStates()
         end
     end
     return list
+end
+
+--- Applies the anti-aliasing choice: FXAA is the post-process pass with the swap chain's anti-aliasing off; every other state switches the pass off and is the engine mode.
+local function ApplyAA(value)
+    if value == FXAA then
+        ConExecute('ed_fxaa 1')
+        ConExecute('SC_AntiAliasingSamples 0')
+    else
+        ConExecute('ed_fxaa 0')
+        ConExecute('SC_AntiAliasingSamples ' .. tostring(value))
+    end
 end
 
 Defs = {
@@ -55,7 +70,7 @@ Defs = {
     { key = 'texture_level', tip = 'The size of the textures the editor loads. High shows the full resolution.', label = 'Texture detail', states = { { 'Low', 2 }, { 'Medium', 1 }, { 'High', 0 } }, apply = Con('ren_MipSkipLevels') },
     { key = 'level_of_detail', tip = 'How long models keep their detailed meshes as the camera moves away.', label = 'Model detail', states = { { 'Low', 0 }, { 'Medium', 1 }, { 'High', 2 } }, apply = Con('SC_CameraScaleLOD') },
     { key = 'bloom_render', tip = 'A soft glow around bright areas.', label = 'Bloom', states = { { 'Off', 0 }, { 'On', 1 } }, apply = Con('ren_bloom') },
-    { key = 'antialiasing', tip = 'Smooths jagged edges by drawing each pixel several times. Applies at once; the window may flicker for a moment.', label = 'Anti-aliasing', states = AAStates, apply = Con('SC_AntiAliasingSamples'), device = true },
+    { key = 'antialiasing', tip = 'Smooths jagged edges. FXAA is a filter over the finished picture: it works on every graphics card, costs a fraction of a millisecond and leaves text and panels sharp. The other entries draw each pixel several times (not offered on every card); they apply at once and the window may flicker for a moment.', label = 'Anti-aliasing', states = AAStates, apply = ApplyAA, device = true },
     { key = 'gpu_compute', tip = 'Runs heavy terrain operations (blur, and later erosion and noise) on the graphics card with Direct3D 11 compute shaders, where a GPU version exists. On any problem the editor uses the processor instead. Off: always the processor.', label = 'GPU compute', states = { { 'Off', 0 }, { 'On', 1 } },
       apply = function(v) local f = rawget(_G, 'ed_gpu_enable') if f then f(v == 1) end end },
     { key = 'vsync', tip = 'Wait for the monitor before showing a frame: no tearing, and the card draws at most one frame per refresh. Off, the editor draws as many frames as the card can make (hundreds per second: a heavy load for a still scene).', label = 'Vertical sync', states = VSyncStates, apply = Con('SC_VerticalSync'), device = true },
