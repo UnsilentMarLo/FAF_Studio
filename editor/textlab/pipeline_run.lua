@@ -37,7 +37,7 @@ R.State.layers = nil
 local spec = Shaders.SpecColor()
 if spec then say('spec', string.format('%.3f,%.3f,%.3f,%.3f', spec.spec_r, spec.spec_g, spec.spec_b, spec.spec_a)) end
 
-World.Change({ water_on = 1, water_elev = 38, water_deep = 26, water_abyss = 8 }, { refresh = true })
+if not PL.fromMap then World.Change({ water_on = 1, water_elev = 38, water_deep = 26, water_abyss = 8 }, { refresh = true }) end
 
 -- 2. the graph
 Graph.New('pipeline ' .. PL.shader)
@@ -46,13 +46,19 @@ local function A(t, x, y, p) return Graph.Add(t, x, y, p) end
 local function C(a, ap, b, bp)
     if not Graph.Connect(a.id, ap, b.id, bp) then say('CONNECT_FAILED', a.type .. '.' .. ap .. '->' .. b.type .. '.' .. bp) end
 end
-local sim = A('simplex', 0, 0, { scale = 150, octaves = 5, persistence = 0.5, seed = 1 })
-local bil = A('billow', 0, 150, { scale = 90, octaves = 4, persistence = 0.5, seed = 1 })
-local mix = A('blend', 220, 0, { mode = 'normal', opacity = 0.35 })
-local rng = A('range', 440, 0, { lo = 20, hi = 95 })
+local src
+if PL.fromMap then
+    src = A('terrain', 0, 0, {})                       -- the open map's own heights are the rough start
+else
+    local sim = A('simplex', 0, 0, { scale = 150, octaves = 5, persistence = 0.5, seed = 1 })
+    local bil = A('billow', 0, 150, { scale = 90, octaves = 4, persistence = 0.5, seed = 1 })
+    local mix = A('blend', 220, 0, { mode = 'normal', opacity = 0.35 })
+    src = A('range', 440, 0, { lo = 20, hi = 95 })
+    C(sim, 'out', mix, 'a') C(bil, 'out', mix, 'b') C(mix, 'out', src, 'a')
+end
 local ero = A('erode_hydraulic', 660, 0, { iterations = 60 })
 local ovs = A('oversample', 880, 0, { factor = PL.k or 2, rerun = true })
-C(sim, 'out', mix, 'a') C(bil, 'out', mix, 'b') C(mix, 'out', rng, 'a') C(rng, 'out', ero, 'a') C(ero, 'out', ovs, 'a')
+C(src, 'out', ero, 'a') C(ero, 'out', ovs, 'a')
 local kinds = A('ground_kinds', 1100, 0, { style = PL.style or 'erosion' })
 C(ovs, 'out', kinds, 'a') C(ovs, 'wear', kinds, 'wear') C(ovs, 'deposit', kinds, 'deposit') C(ovs, 'flow', kinds, 'flow')
 local okind = A('out_kinds', 1320, 0, {})

@@ -9,6 +9,10 @@ if not rawget(_G, 'LAB_UI_HIDDEN') then
     pcall(function() sh.S.main.root:Hide() end)
     pcall(function() sh.S.bar:Hide() end)
     pcall(function() sh.S.status:Hide() end)
+    pcall(function()          -- a map with markers (resources, areas, paths): none drawn over the terrain
+        local MF = import('/lua/editor/markerfilter.lua')
+        for _, c in MF.CATEGORIES do if not MF.Hidden[c] then MF.Toggle(c) end end
+    end)
 end
 local cam = GetCamera('WorldCamera')
 local y = ed_terrain_get(math.floor(c[1]), math.floor(c[2])) or 0

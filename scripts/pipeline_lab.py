@@ -156,6 +156,7 @@ def main():
     ap.add_argument('--shots', default='')
     ap.add_argument('--keep', action='store_true')
     ap.add_argument('--theme', default='temperate')
+    ap.add_argument('--from-map', action='store_true', help='start from the heights of the open map instead of generated noise (use with --map PATH)')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     inst = EI.inst_dir(a.tag)
@@ -172,7 +173,7 @@ def main():
     results = {}
     for shader in shaders:
         t0 = time.time()
-        text = run_lua(a.tag, "PL = { shader = '%s', k = %d, theme = '%s' }\n%s" % (shader, a.k, a.theme, body))
+        text = run_lua(a.tag, "PL = { shader = '%s', k = %d, theme = '%s', fromMap = %s }\n%s" % (shader, a.k, a.theme, 'true' if a.from_map else 'false', body))
         res = parse(text)
         cls = res.get('class', '?')
         res['notes'] = verdict(res, shader, cls, inst)
