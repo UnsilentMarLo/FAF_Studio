@@ -796,6 +796,10 @@ local function Resolve(S, c, plan, sel, groups, k, st)
             for gi = 2, table.getn(g) do
                 -- a variant field of the selection (erosion paint: a band of the wear / deposit / flow mask) decides, noise only when there is none
                 local vf = sel[id .. '#' .. (gi - 1)]
+                if vf then
+                    local _, vmax = Fields.Stats(vf)
+                    if vmax <= 0.0001 then vf = nil end          -- an empty band (a wired port with no band behind it): noise patches
+                end
                 local t = S:Op('mul', { a = left, b = vf or PatchField(c, k, st, id, gi - 1) })
                 left = S:Op('sub', { a = left, b = t })
                 target[g[gi]] = t

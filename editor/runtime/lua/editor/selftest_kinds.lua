@@ -36,8 +36,8 @@ function Run()
 
     check('the nodes exist', Nodes.Defs.terrain_shader and Nodes.Defs.ground_kinds and Nodes.Defs.surface_roughness and Nodes.Defs.out_kinds)
     local gk = Nodes.Defs.ground_kinds
-    check('Ground kinds has the eight kinds as outputs and the style and the knobs as settings', table.getn(gk.outputs) == 8 and table.getn(gk.params) == 2 + table.getn(Recipes.KnobInfo))
-    check('Output: ground kinds is an output node with the eight kinds as inputs', Nodes.Defs.out_kinds.output == 'kinds' and table.getn(Nodes.Defs.out_kinds.inputs) == 8)
+    check('Ground kinds has the eight kinds and the five variant bands as outputs and the style and the knobs as settings', table.getn(gk.outputs) == 13 and table.getn(gk.params) == 2 + table.getn(Recipes.KnobInfo))
+    check('Output: ground kinds is an output node with the eight kinds and the five variant bands as inputs', Nodes.Defs.out_kinds.output == 'kinds' and table.getn(Nodes.Defs.out_kinds.inputs) == 13)
 
     local w, h = nil, nil
     if rawget(_G, 'ed_terrain_info') then w, h = ed_terrain_info() end

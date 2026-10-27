@@ -114,7 +114,7 @@ function Install(Kit, Covers)
             for _, id in ROLES do
                 out[id] = sel[id] or E:Const((plan.base == id) and 1 or 0)
             end
-            for _, vr in VARIANTS do out[vr[1]] = sel[vr[2]] end
+            for _, vr in VARIANTS do out[vr[1]] = sel[vr[2]] or E:Const(0) end        -- (no band: zero, the recipe then splits the kind by noise patches)
             return out
         end })
 
