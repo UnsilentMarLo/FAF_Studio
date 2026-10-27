@@ -382,3 +382,22 @@ Already off the main thread: the sim (`Sim`, `Issue`), the map loader, the prefe
 Clicking Anti-aliasing froze the laptop editor for good. Cause: the recovered `GetAntiAliasingOptions` packed a mode as `type | quality << 5`, while everything that reads it back (and the FAF client, which stores 256 for 8x) uses `(type << 5) | quality`. The editor therefore asked `IDirect3DDevice9::Reset` for MultiSampleType NONE with a quality level: AMD answers D3DERR_INVALIDCALL (the old code then never retried: a dead window), the NVIDIA driver never returned. Also `SC_AntiAliasingSamples <n>` forwarded token 0 (its own name), so the value was always 0. Fixed: the packing, the token, a guard in `GetHeadParameters` (only a mode the adapter offers is requested), `graphics.lua` (labels decode the packed mode; a saved value the adapter does not offer is Off), a retry of a failed Reset while the device still answers, and a watchdog that writes the crash report (all thread stacks) if one Reset takes longer than 15 s. AA 2x / 4x / 8x now really changes the swap chain (it never did before); verified on the AMD desktop, not yet on the laptop.
 
 **Update (the crash report of the frozen laptop):** with the packing fixed, the saved 8x was finally applied at start and the editor froze about 3 s later: the main thread waited inside `nvd3dumx.dll` (the NVIDIA D3D9 driver) while a worker thread waited on the D3D9 device lock behind it. So real swap chain MSAA hangs the D3D9 device of the hybrid NVIDIA laptop (the cause is inside the driver; the mode list and the engine's use of the multisampled back buffer are the only inputs we have). The editor build therefore offers no anti-aliasing mode on NVIDIA adapters (`D3D9Interfaces.cpp`, `FAF_STUDIO_EDITOR`; the list stays empty, `GetHeadParameters` asks for none, saved modes become "Off"); `FAFSTUDIO_NVIDIA_AA=1` restores the list for testing. AMD and Intel adapters keep their modes. Open: a post process anti-aliasing (FXAA / SMAA) would give every adapter a smoother picture without a multisampled back buffer.
+
+## Paint, detail pass and a big mission map (2026-10-27)
+
+Measured on the desktop (RX 7900 XTX), 2049 x 2049 map, ridged noise terrain, shader TTerrainXP:
+
+| What | Time |
+|---|---|
+| noise heights written to the map | 0.45 s |
+| Layered textures (8 layers) | 0.03 s |
+| recipe Apply, style Natural / Layered / Erosion paint | 2.1 / 1.7 / 3.2 s (1025 map: 0.5 / 0.5 / 0.8 s) |
+| detail pass, 28,000 props and decals (3 prop classes + 3 decal classes) | 3.9 s |
+
+The detail pass took 27.8 s before: `ed_decal_count` counted the map decals with `NthMapDecal` (which walks the decal list from its start), quadratic, and `ed_decal_add` called it once per decal (20 to 34 ms per decal at 900 to 1000 decals). One pass counting
+(`CountMapDecals`, `EditorLua.cpp`) made it 7 times faster; props were never the cost (3,300 props placed in 0.02 s, the dart throwing of a class plans in 0.7 to 0.9 s).
+
+Operation Citadel (1025 map, 12,625 props, 971 decals, 8 strata): 22 s from process start to a ready editor; 60 frames per second at the idle cap, render CPU 6 ms per frame (835 draw calls, 3.9 million vertices); the marker overlay is 2.7 ms of it (15,700 quads: 1,000 mission
+markers and their labels), the largest single item that could still be trimmed.
+
+FXAA (branch merged from `fxaa`, off by default): 0.057 ms GPU per frame at 1080p (docs/projects/editor/FXAA.md).
