@@ -243,11 +243,18 @@ local function NewEnv(run, node, wanted, graph)
     function E:Units(units)
         return math.max(1, math.floor(units / self.cell + 0.5))
     end
+    --- A field of the run's grid brought onto the grid this node works on (finer after an Oversample node: see Run:Conform).
+    function E:Fit(f)
+        local w = Fields.Info(f)
+        local tw = Fields.Info(self.like)
+        if w and tw and w ~= tw then return self:Op('upsample', { a = f, like = self.like }) end
+        return f
+    end
     function E:Base()
-        return self:Add(Fields.Op('affine', { a = run:BaseHere(), mul = 1, add = 0 }))      -- a copy: the entry must not alias the shared base
+        return self:Fit(self:Add(Fields.Op('affine', { a = run:BaseHere(), mul = 1, add = 0 })))      -- a copy: the entry must not alias the shared base
     end
     function E:Stratum(layer)
-        return self:Add(Fields.Stratum(layer))
+        return self:Fit(self:Add(Fields.Stratum(layer)))
     end
     return E
 end
@@ -334,6 +341,57 @@ function Run:Evaluate()
     return report
 end
 
+--- A node works on one grid: the run's, or the finest one among its inputs (an Oversample node made it). The other inputs are brought onto it (smooth upsampling, a tent filter downwards), E.like / E.cell /
+--- E.step follow it, so a node placed after an Oversample node simply runs at the higher resolution (an erosion node scales its settings by E.step). The nodes that write into the map's own grids (the
+--- outputs of the heights, the paint and the terrain types) get their inputs on the run's grid again, averaged, which is what makes the oversampled masks crisp; only the map-wide textures (def.fineOk)
+--- keep the fine grid. Changes `ins`; the converted fields belong to E.
+function Run:Conform(node, def, ins, E)
+    local baseW, _, baseCell = Fields.Info(self.like)
+    local finest, finestW = nil, baseW
+    local used = {}
+    for _, p in Nodes.Inputs(node.type) do
+        local val = ins[p.name]
+        if val ~= nil then
+            if (p.type == 'height' or p.type == 'mask') and type(val) == 'number' then
+                local w = Fields.Info(val)
+                if w and w > finestW then finest, finestW = val, w end
+                table.insert(used, p)
+            elseif p.type == 'color' and type(val) == 'table' then
+                for _, k in GraphColor.CHANNELS do
+                    local w = Fields.Info(val[k])
+                    if w and w > finestW then finest, finestW = val[k], w end
+                end
+                table.insert(used, p)
+            end
+        end
+    end
+    if not finest then return end
+    local target = finest
+    if def.output and not def.fineOk then target = self.like end
+    local tw, _, tcell = Fields.Info(target)
+    local function Fit(val, linear)
+        local w = Fields.Info(val)
+        if w == tw then return val end
+        if w < tw then return E:Op('upsample', { a = val, like = target, linear = linear and 1 or 0 }) end
+        return E:Op('downsample', { a = val, like = target })
+    end
+    for _, p in used do
+        local val = ins[p.name]
+        if p.type == 'color' then
+            local c = {}
+            for _, k in GraphColor.CHANNELS do c[k] = Fit(val[k], true) end
+            ins[p.name] = c
+        else
+            ins[p.name] = Fit(val, p.type == 'mask')
+        end
+    end
+    if target ~= self.like then
+        E.like = target
+        E.cell = tcell
+        E.step = self.step * (baseW - 1) / (tw - 1)
+    end
+end
+
 function Run:EvaluateNode(graph, node, wanted, report, live, baseKey)
     local def = Nodes.Defs[node.type]
     local id = node.id
@@ -390,6 +448,12 @@ function Run:EvaluateNode(graph, node, wanted, report, live, baseKey)
     -- run it
     if entry then self:FreeEntry(entry) end
     local E = NewEnv(self, node, wanted, graph)
+    local okConform, errConform = pcall(self.Conform, self, node, def, ins, E)
+    if not okConform then
+        for h, _ in E.tmp do Fields.Free(h) end
+        self:SetError(node, Strip(errConform), report)
+        return
+    end
     local t0 = Clock()
     local ok, res
     if node.off then
@@ -896,7 +960,7 @@ function BuildMapTextures(run, graph, result)
     end
     for _, node in OutputNodes(graph, 'maplight') do
         local shadow = run:Value(node.id, 'view')
-        if shadow and not fail then fail = Make('light', 'map lighting', node, { shadow = shadow, ao = run:Value(node.id, 'occlusion') }) end
+        if shadow and not fail then fail = Make('light', 'map lighting', node, { shadow = shadow, ao = run:Value(node.id, 'occlusion'), height = run:Value(node.id, 'terrain') }) end
     end
     if fail then return fail end
     if result.maptextures then

@@ -279,11 +279,41 @@ function MapPrepare(size, W)
     return Prepare, function() Fields.Free(like) end
 end
 
-function TextureSize(choice, W)
+--- The largest texture the graph can write: 8192 with the native writer (ed_dds_fields reads the fields directly), 2048 through Lua tables.
+function MaxTextureSize()
+    return rawget(_G, 'ed_dds_fields') and 8192 or 2048
+end
+
+--- The size in pixels of a texture: a number, 'grid' (as fine as the finest field: one pixel per sample of an oversampled field; `grid` = its samples a side) or anything else = the map's size at most 1024.
+function TextureSize(choice, W, grid)
     local s = tonumber(choice)
+    if choice == 'grid' and grid then s = grid end
     if not s or s <= 0 then s = math.min(W or 512, 1024) end
-    s = math.max(64, math.min(2048, math.floor(s)))
+    s = math.max(64, math.min(MaxTextureSize(), math.floor(s)))
     return s
+end
+
+--- Writes four channels of fields of the map (world units, vertices at whole numbers) as a size x size DXT5 DDS with mip maps, sampled at the centres of the squares over the map. With the native
+--- writer no pixel goes through Lua (no 2048 limit, no memory of tables); without it `prepare` (MapPrepare) and WriteChannels do the same. Returns true, or nil and a message.
+function WriteMapChannels(chan, path, size, W, prepare)
+    if rawget(_G, 'ed_dds_fields') then
+        local bytes, err = ed_dds_fields(path, size, W, chan.r, chan.g, chan.b, chan.a)
+        if not bytes then return nil, tostring(err) end
+        return true
+    end
+    return WriteChannels(chan, path, size, prepare)
+end
+
+--- The samples a side of the finest field among `pieces` (a table of field handles), or nil.
+function FinestGrid(pieces)
+    local best = nil
+    for _, f in pieces do
+        if type(f) == 'number' then
+            local w = Fields.Info(f)
+            if w and (not best or w - 1 > best) then best = w - 1 end
+        end
+    end
+    return best
 end
 
 -- ---- the generators (shared by the graph nodes and the panel) ---------------------------------------------------------------------------------------
@@ -632,10 +662,11 @@ function Generate(kind, o)
             if kind == 'macro' then chan = MacroChannels(S, h, o)
             elseif kind == 'specular' then chan = SpecularChannels(S, h, o)
             else chan = Channels(pack, f, env, h) end
-            local prepare, done = MapPrepare(size, W)
+            local prepare, done = nil, function() end
+            if not rawget(_G, 'ed_dds_fields') then prepare, done = MapPrepare(size, W) end
             local wrote, werr = pcall(function()
                 vfs, disk = StageFile(kind, function(path)
-                    local r, e = WriteChannels(chan, path, size, prepare)
+                    local r, e = WriteMapChannels(chan, path, size, W, prepare)
                     return r, e
                 end)
             end)
@@ -723,7 +754,7 @@ function FromGraph(kind, pieces, o)
         kind = slot.shared
         slot = Slot(kind)
     end
-    local size = TextureSize(o.size, W)
+    local size = TextureSize(o.size, W, FinestGrid(pieces))
     local vfs, disk
     local ok, err = pcall(function()
         Fields.Run(function(S)
@@ -733,14 +764,16 @@ function FromGraph(kind, pieces, o)
             for k, v in pieces do f[k] = v end
             local pack = slot.pack
             if (pack == 'light301') and not f.nx then
-                f.nx, f.ny, f.nz = NormalFields(env, h, {})
+                f.nx, f.ny, f.nz = NormalFields(env, f.height or h, {})
             end
-            if pack == 'info7' or pack == 'light301' then f.depth = WaterDepth(env, h) end
+            if pack == 'info7' or pack == 'light301' then f.depth = WaterDepth(env, f.height or h) end
+            if f.height then h = f.height end          -- the constants of the missing channels take the grid of the fine heights
             local chan = Channels(pack, f, env, h)
-            local prepare, done = MapPrepare(size, W)
+            local prepare, done = nil, function() end
+            if not rawget(_G, 'ed_dds_fields') then prepare, done = MapPrepare(size, W) end
             local wrote, werr = pcall(function()
                 vfs, disk = StageFile(kind, function(path)
-                    local r, e = WriteChannels(chan, path, size, prepare)
+                    local r, e = WriteMapChannels(chan, path, size, W, prepare)
                     return r, e
                 end)
             end)

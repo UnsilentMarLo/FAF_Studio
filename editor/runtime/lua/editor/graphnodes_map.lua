@@ -16,8 +16,8 @@ function Install(Kit, Covers)
 
     Covers['normal_map'] = true
 
-    local SIZE_IDS = { 'auto', '256', '512', '1024', '2048' }
-    local SIZE_LABELS = { 'Map size (at most 1024)', '256', '512', '1024', '2048 (slow, big)' }
+    local SIZE_IDS = { 'auto', '256', '512', '1024', '2048', '4096', '8192', 'grid' }
+    local SIZE_LABELS = { 'Map size (at most 1024)', '256', '512', '1024', '2048 (big)', '4096 (very big)', '8192 (huge)', 'As fine as the finest input (an Oversample node)' }
 
     local function EnvOf(E)
         return { Op = function(name, p) return E:Op(name, p) end, Add = function(f) return E:Add(f) end }
@@ -101,7 +101,7 @@ function Install(Kit, Covers)
 
     Def('out_normalmap', { label = 'Output: map normal map', cat = 'outputs', kw = 'output map wide normal map shader terrain write dds bump texture',
         desc = 'Build gives the whole map this normal map: it is written as a DDS and put where the shader reads the map-wide normal map (layer 8 normal map; Terrain000 and later shaders). The ground is lit by it instead of by normals computed from the heights, so make it again after changing the heights. One undo step with the rest of the build. With Use it on the map off, only the file is written.',
-        inputs = { In('normal', 'color') }, outputs = { Out('view', 'color', true) }, output = 'mapnormal', mapTexture = 'normal',
+        inputs = { In('normal', 'color') }, outputs = { Out('view', 'color', true) }, output = 'mapnormal', mapTexture = 'normal', fineOk = true,
         params = { C('size', 'Texture size (pixels)', SIZE_IDS, SIZE_LABELS, 'auto'), B('assign', 'Use it on the map', true) },
         eval = function(E, v, ins) return { view = ins.normal } end })
 
@@ -134,7 +134,7 @@ function Install(Kit, Covers)
 
     Def('out_maplight', { label = 'Output: map lighting', cat = 'outputs', kw = 'output map wide lighting shadow baked ambient occlusion shader terrain write dds texture info',
         desc = 'Build gives the whole map this baked lighting: shadow (1 = sun, 0 = shadow), optional ambient occlusion and the water depth are written as a DDS and put where the shader reads it (layer 8 albedo; Terrain000 and later shaders). Wire the shadow of Lighting texture here, not its light output: the shader applies the surface angle itself. One undo step with the rest of the build. With Use it on the map off, only the file is written.',
-        inputs = { In('shadow', 'mask'), In('ao', 'mask', true) }, outputs = { Out('view', 'mask', true), Out('occlusion', 'mask', true) }, output = 'maplight', mapTexture = 'light',
+        inputs = { In('shadow', 'mask'), In('ao', 'mask', true), In('height', 'height', true) }, outputs = { Out('view', 'mask', true), Out('occlusion', 'mask', true), Out('terrain', 'height', true) }, output = 'maplight', mapTexture = 'light', fineOk = true,
         params = { C('size', 'Texture size (pixels)', SIZE_IDS, SIZE_LABELS, 'auto'), B('assign', 'Use it on the map', true) },
-        eval = function(E, v, ins) return { view = ins.shadow, occlusion = ins.ao } end })
+        eval = function(E, v, ins) return { view = ins.shadow, occlusion = ins.ao, terrain = ins.height } end })
 end

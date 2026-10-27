@@ -453,7 +453,7 @@ function Run(verbose)
     Fields.OpMulti = realMulti
     used.erode_hydraulic, used.erode_droplet, used.erode_stream = true, true, true
     local dishonest = {}
-    local exempt = { crop = true, path_paste = true, resize = true, amplitude = true, keep_side = true, terrain_mix = true }
+    local exempt = { crop = true, path_paste = true, resize = true, amplitude = true, keep_side = true, terrain_mix = true, downsample = true }      -- downsample: graphrun.lua Run:Conform (a node that writes into the map's grid gets the oversampled fields averaged down)
     for op, _ in Nodes.Covers do
         if not used[op] and not exempt[op] then table.insert(dishonest, op) end
     end

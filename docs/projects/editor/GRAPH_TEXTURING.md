@@ -181,3 +181,9 @@ The user's World Machine / Gaea projects build the paint from erosion masks at h
   (`external_erosion`: imported masks) and `Eroded hills painted by the water` (`eroded_hills`: the hydraulic erosion node's own masks). Use **Layered textures** first so every kind has several textures to split between.
 * **Cost** (1025 map, this PC): Apply of the Erosion paint style 0.8 s, Layered 0.5 s, Natural 0.5 s. Detail pass on 1025: 3.0 s for 10,700 props and decals.
 * **Test**: `selftest_erosionpaint.lua` (thresholds find their share, variants and selections exist, edges narrow, the node ports). Visual check on the imported Gaea terrain: worn rock along the cliff tops, sediment streaks and the dendritic channel network as the wet layer.
+
+### Oversample (2026-10-27)
+
+The **Oversample** node gives the graph a finer grid (factor 1 to 8 times the map's) so the normal map, the lighting texture and the erosion masks can be made at a multiple of the map's resolution;
+after an erosion node it runs the erosion again at the fine grid. Details, measurements and tests: MAP_TEXTURES.md ("Oversample"). For the erosion paint style the fine `wear` / `deposit` /
+`flow` masks go through the Output nodes averaged down to the paint grid, so the bands are crisp.

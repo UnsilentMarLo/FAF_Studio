@@ -22,7 +22,7 @@ live = {}
 --- Module level (the controls come and go).
 state = { size = 'auto', strength = 1, soft = 1, reach = 400, ao = 0, status = '', macroContrast = 0.25, macroOpacity = 0.35, macroScale = 180, macroCavity = 0.3, specStrength = 0.8 }
 
-SIZES = { 'auto', 256, 512, 1024, 2048 }
+SIZES = { 'auto', 256, 512, 1024, 2048, 4096, 8192 }
 
 FILTER = 'Pictures (*.dds;*.png;*.tga;*.jpg;*.bmp;*.tif)|*.dds;*.png;*.tga;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff|All files|*.*'
 

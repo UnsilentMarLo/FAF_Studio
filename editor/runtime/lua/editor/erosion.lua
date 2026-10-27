@@ -221,6 +221,21 @@ function OpParams(solver, values, step, seed)
             p.creep = (p.creep or 2) * 1.5 / step        -- smoothing passes of a coarse cell reach step times farther (the density scaling above already gives 1 / (1.5 step) of the passes)
         end
         if solver ~= 'stream' then p.smooth_passes = (step >= 4) and 0 or math.max(0, p.smooth_passes - 1) end
+    elseif step < 1 then
+        -- a finer grid than the one the settings were made for (an Oversample node: step = 1 / factor): the cell is `1 / step` times smaller, so water and droplets need that many more cells
+        -- to travel the same ground, and every cell gets that much less of the rain, the sediment and the droplets. The cost grows with the square of the factor and more.
+        if solver == 'hydraulic' then
+            p.iterations = math.min(8000, math.floor(p.iterations / step + 0.5))
+            p.rain = p.rain * step
+            p.erosion = p.erosion * step
+            p.deposition = p.deposition * step
+        elseif solver == 'droplet' then
+            p.lifetime = math.floor(p.lifetime / step + 0.5)
+            p.radius = math.max(1, math.floor(p.radius / step + 0.5))
+            p.density = math.max(0.02, p.density * step)
+            p.thermal_steps = math.floor(p.thermal_steps / step + 0.5)
+            p.creep = (p.creep or 2) / step
+        end
     end
     if seed then p.seed = seed end
     return p
