@@ -72,7 +72,7 @@ local function Box(w, h, fn)
 end
 
 --- The detail of a layer texture as SIZE x SIZE lists: lum (0..1 brightness) and cav (the divergence of the normal map: positive in pits and at the foot of bumps; all 0 without a normal map).
-local function Detail(albedo, normal)
+local function Detail(albedo, normal, integrate)
     local px, w, h = Read(albedo)
     if not px then return nil, w end
     local lum = Box(w, h, function(x, z)
@@ -83,6 +83,7 @@ local function Detail(albedo, normal)
     local cav = {}
     for i = 1, SIZE * SIZE do cav[i] = 0 end
     local haveNormal = false
+    local heightN = nil
     if normal then
         local np, nw, nh = Read(normal)
         if np then
@@ -91,6 +92,29 @@ local function Detail(albedo, normal)
             local nx = Box(nw, nh, function(x, z) return np[(z * nw + x) * 4 + 1] / 127.5 - 1 end)
             local ny = Box(nw, nh, function(x, z) return np[(z * nw + x) * 4 + 2] / 127.5 - 1 end)
             np = nil
+            -- the height the normal map describes (the Poisson solve of its slopes, native height_from_gradient; the textures tile, so periodic); nil when the editor build has no such op
+            if integrate then
+                local okI, hv = pcall(function()
+                    local list
+                    Fields.Run(function(S)
+                        local sx, sz = {}, {}
+                        for i = 1, SIZE * SIZE do
+                            local x, y = nx[i], ny[i]
+                            local zz = 1 - x * x - y * y
+                            if zz < 0.04 then zz = 0.04 end
+                            local inv = 1 / math.sqrt(zz)
+                            sx[i] = -x * inv                              -- n = -grad(h): the same convention as the divergence below (pits positive)
+                            sz[i] = -y * inv
+                        end
+                        local fx = S:Table(SIZE, SIZE, sx, 1, 0, 0)
+                        local fz = S:Table(SIZE, SIZE, sz, 1, 0, 0)
+                        local h = S:Op('height_from_gradient', { dx = fx, dz = fz, periodic = 1 })
+                        list = Fields.Read(h, 0, 0, SIZE - 1, SIZE - 1)
+                    end)
+                    return list
+                end)
+                if okI and type(hv) == 'table' and hv[1] then heightN = hv end
+            end
             for gz = 0, SIZE - 1 do
                 local zm, zp = math.mod(gz + SIZE - 1, SIZE), math.mod(gz + 1, SIZE)
                 for gx = 0, SIZE - 1 do
@@ -102,8 +126,11 @@ local function Detail(albedo, normal)
             end
         end
     end
-    return lum, cav, haveNormal
+    return lum, cav, haveNormal, heightN
 end
+
+--- The detail of a texture for tests and tools: lum, cav, haveNormal, heightN (SIZE x SIZE lists; heightN is the integrated relief of the normal map, nil without the native op).
+function Relief(albedo, normal) return Detail(albedo, normal, true) end
 
 --- Mean and standard deviation of a list.
 local function MeanSd(list)
@@ -121,22 +148,25 @@ end
 
 --- height and roughness lists (0..1) of one layer: detail normalised to HEIGHT_SPREAD, relief from the normal map, bias by the kind of ground.
 local function Tile(albedo, normal, role, o)
-    local key = tostring(albedo) .. '|' .. tostring(normal) .. '|' .. tostring(role) .. '|' .. string.format('%.2f|%.2f|%.2f|%.2f', o.cavity, o.spread, o.biasScale, o.roughDetail)
+    local key = tostring(albedo) .. '|' .. tostring(normal) .. '|' .. tostring(role) .. '|' .. string.format('%.2f|%.2f|%.2f|%.2f|%s', o.cavity, o.spread, o.biasScale, o.roughDetail, tostring(o.integrate ~= false))
     if cache[key] then return cache[key] end
-    local lum, cav, haveNormal = Detail(albedo, normal)
+    local lum, cav, haveNormal, heightN = Detail(albedo, normal, o.integrate ~= false)
     if not lum then return nil, cav end
     local lm, ls = MeanSd(lum)
     local cm, cs = MeanSd(cav)
+    local hm, hs = 0, 0
+    if heightN then hm, hs = MeanSd(heightN) end
     local wc = haveNormal and o.cavity or 0
     local spread = HEIGHT_SPREAD * o.spread
     local gl = ls > 0.002 and (spread / ls) or 0
     local gc = cs > 0.0005 and (spread / cs) or 0
+    local gh = hs > 1.0e-6 and (spread / hs) or 0
     local bias = (ROLE_HEIGHT[role or ''] or 0) * o.biasScale
     local baseRough = ROLE_ROUGH[role or ''] or 0.65
     local height, rough = {}, {}
     for i = 1, SIZE * SIZE do
         local l = (lum[i] - lm) * gl                      -- standard deviation HEIGHT_SPREAD
-        local c = -(cav[i] - cm) * gc                     -- pits are low
+        local c = heightN and (heightN[i] - hm) * gh or -(cav[i] - cm) * gc      -- the integrated relief of the normal map; without it the divergence (pits are low)
         local hv = 0.5 + bias + (1 - wc) * l + wc * c
         if hv < 0.05 then hv = 0.05 elseif hv > 0.95 then hv = 0.95 end
         height[i] = hv

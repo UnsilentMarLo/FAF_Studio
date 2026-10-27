@@ -93,6 +93,27 @@ function Run()
     local aw, ar = vfs and MeanAlpha(vfs), vfs2 and MeanAlpha(vfs2)
     check('the specularity of wet ground is above that of rock', aw and ar and aw > ar + 0.3, tostring(aw) .. ' ' .. tostring(ar))
 
+    -- the height the normal map describes (native height_from_gradient)
+    local rockA, rockN = ed_stratum_layer(3), ed_stratum_layer(13)
+    local lum, cav, haveN, hn = AG.Relief(rockA, rockN)
+    check('the normal map of a texture is integrated to a height (the native Poisson solve)', haveN and hn ~= nil and table.getn(hn) == AG.SIZE * AG.SIZE, tostring(hn ~= nil))
+    if hn then
+        local function Corr(x, y)
+            local n = table.getn(x)
+            local mx, my = 0, 0
+            for i = 1, n do mx = mx + x[i] my = my + y[i] end
+            mx, my = mx / n, my / n
+            local sxy, sxx, syy = 0, 0, 0
+            for i = 1, n do
+                local dx, dy = x[i] - mx, y[i] - my
+                sxy, sxx, syy = sxy + dx * dy, sxx + dx * dx, syy + dy * dy
+            end
+            return sxy / math.sqrt(sxx * syy + 1e-12)
+        end
+        check('a rock texture: the integrated height is brighter where it is higher (the normal map convention is right)', Corr(hn, lum) > 0.3, string.format('%.2f', Corr(hn, lum)))
+        check('and its pits (positive divergence of the normal) are low', Corr(hn, cav) < -0.3, string.format('%.2f', Corr(hn, cav)))
+    end
+
     -- the atlas settings move the heights the splatting compares
     Shaders.Set('Terrain202B')
     TS.Apply('temperate')
