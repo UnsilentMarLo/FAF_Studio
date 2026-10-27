@@ -247,7 +247,7 @@ Two things the engine already does well (checked, no action): the terrain mesh a
 | Texture detail (`ren_MipSkipLevels`) | 0 | full mip chains | no (VRAM, not time) |
 | Model detail (`SC_CameraScaleLOD`) | 2 | longest LOD distances | no |
 | Bloom (`ren_bloom`) | **off in all four presets** | nothing: `DoBloom` is skipped (when on: a blit to half size, 4 blur passes at half size, one additive full screen pass) | n/a |
-| Anti-aliasing (`SC_AntiAliasingSamples`) | 0 (off) | nothing | n/a |
+| Anti-aliasing (`SC_AntiAliasingSamples`, or the state FXAA = `ed_fxaa`) | 0 (off) | nothing; FXAA: the frame goes into an off-screen target, one copy + one full-screen pass before the UI, 0.057 ms GPU at 1080p (FXAA.md) | n/a |
 | Vertical sync (`SC_VerticalSync`) | on | the swap chain paces the loop at the monitor rate | the right default; the pacing is EC's section |
 
 ### Cost centres
