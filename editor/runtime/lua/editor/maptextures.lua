@@ -555,7 +555,20 @@ function GenerateAtlas(o)
         paths[layer] = ed_stratum_layer(layer)
         roles[layer] = det[layer] and det[layer].role or nil
     end
-    local vfs, report = TexConv.Atlas(paths, nil, tonumber(o.size) or 1024, roles)
+    -- the heights and the roughness from the detail and the relief of the textures and the kind of ground (alphagen.lua); the plain way (luminance, one roughness for all) when that cannot run
+    local vfs, report
+    if o.generated ~= false and rawget(_G, 'ed_dds_fields') and rawget(_G, 'ed_dds_read') then
+        local normals = {}
+        for layer = 0, 7 do normals[layer] = ed_stratum_layer(layer + 10) end
+        local ag = import('/lua/editor/alphagen.lua')
+        local stats
+        vfs, report, stats = ag.Atlas(paths, normals, roles, tonumber(o.size) or 1024, { cavity = o.cavity })
+        if not vfs then Say('atlas from the detail failed (' .. tostring(report) .. '), made the plain way') end
+        State.atlasStats = stats
+    end
+    if not vfs then
+        vfs, report = TexConv.Atlas(paths, nil, tonumber(o.size) or 1024, roles)
+    end
     if not vfs then return nil, tostring(report) end
     return Assign('atlas', slot, vfs, o)
 end

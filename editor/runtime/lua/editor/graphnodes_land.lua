@@ -33,7 +33,7 @@ function Install(Kit, Covers)
             end
             -- where the hills are: a large noise cut at the level that leaves `coverage` of the map above it (perlin fitted 0.25 .. 0.75 is about normal around 0.5, sigma 0.16)
             local n = Fit01(E:Op('perlin', { like = E.like, seed = E:Seed(v.seed), scale = v.size, octaves = 4, persistence = 0.5, rotate = 1 }), 0.25, 0.75)
-            local t = 0.5 - 0.16 * Z(v.coverage)
+            local t = 0.5 + 0.16 * Z(v.coverage)          -- (Z is the distance above the middle that a share `coverage` lies above: coverage 0.4 cuts above the middle; with a minus the hills covered 1 - coverage, 0.58 for 0.4)
             local cut = E:Op('smoothstep', { a = n, edge0 = t - 0.012, edge1 = t + 0.012 })
             local mask = E:Op('blur', { a = cut, radius = E:Units(math.max(2, v.edge * 0.5)) })
             -- tops: a power of the softened mask (small exponent = plateaus, large = peaks)

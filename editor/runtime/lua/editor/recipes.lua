@@ -244,7 +244,8 @@ function Stats()
     local got = false
     if size and Fields.IsAvailable() then
         local ok, r = pcall(Fields.Run, function(S)
-            local H = S:Height(size > 1100 and 8 or 4)
+            -- at most 255 samples a side: ed_field_read gives 65536 values at most (a 1025 map at step 4 is 257 x 257 and the read failed, so the recipes worked from a made up range of 0 .. 100)
+            local H = S:Height(size > 513 and math.ceil((size - 1) / 254) or 4)
             local w, h = Fields.Info(H)
             local mn, mx = Fields.Stats(H)
             return { vals = Fields.Read(H, 0, 0, w - 1, h - 1), lo = mn, hi = mx }

@@ -334,6 +334,7 @@ function Set(id, quiet)
     ed_stratum_shader(id)
     NoteSwitch(old, id)
     if not quiet and ClassOf(id) == 'splat' then SplatLighting('fix') end
+    if not quiet then pcall(function() import('/lua/editor/alphagen.lua').FitBase() end) end          -- the base layer's alpha is an opacity in the macrotexture variants
     return true
 end
 

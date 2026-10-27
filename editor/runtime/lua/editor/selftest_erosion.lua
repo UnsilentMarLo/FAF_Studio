@@ -61,6 +61,7 @@ local function CaseChecksum(S, fix, case)
             p[string.sub(kv, 1, eq - 1)] = fix[string.sub(kv, eq + 1)]
         end
     end
+    if (case[2] == 'erode_hydraulic' or case[2] == 'erode_droplet') and p.cpu_only == nil then p.cpu_only = 1 end      -- the goldens are CPU results; the fixtures are big enough for the GPU solver, which is not bit identical
     local f, err = Fields.TryOp(case[2], p)
     if not f then return nil, err end
     S:Add(f)

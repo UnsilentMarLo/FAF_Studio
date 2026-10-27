@@ -936,6 +936,7 @@ end
 --- Build is near the upvalue limit.
 function BuildMapTextures(run, graph, result)
     local MT = import('/lua/editor/maptextures.lua')
+    pcall(function() import('/lua/editor/alphagen.lua').FitBase() end)
     local notes = {}
     local function Make(kind, noun, node, pieces)
         local opts = { size = V(run, node, 'size'), assign = V(run, node, 'assign') }

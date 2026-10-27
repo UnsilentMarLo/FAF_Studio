@@ -218,6 +218,7 @@ function Apply(themeId)
     end
     if UpperIsOverlay() then Set(9, theme.upper, 1, true) end
     Theme = themeId
+    pcall(function() import('/lua/editor/alphagen.lua').FitBase() end)          -- the base alpha of the macrotexture variants
     return n
 end
 
@@ -282,6 +283,7 @@ function ApplyLayered(themeId)
     end
     if UpperIsOverlay() then Set(9, FirstExisting(theme.upper), true) end
     Theme = themeId
+    pcall(function() import('/lua/editor/alphagen.lua').FitBase() end)
     return n, roles, paths
 end
 
