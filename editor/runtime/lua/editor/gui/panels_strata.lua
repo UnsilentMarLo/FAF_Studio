@@ -364,11 +364,11 @@ Panels.Register{
             local items = {}
             for _, n in Strata.MaskSizes() do
                 local size = n
-                local note = (size == minW) and '  (half the map, what the shipped exe uses)' or ''
+                local note = (size == minW) and '  (half the map: safe for every game)' or '  (unpatched games downsample to ' .. minW .. ')'
                 table.insert(items, { title = size .. ' x ' .. size .. note, checked = (size == w), run = function()
                     local ok, why = Strata.SetMaskSize(size)
                     if ok then
-                        Say('paint masks ' .. size .. ' x ' .. size .. (size > minW and ' (the shipped exe shows them at ' .. minW .. '); undo history cleared' or '; undo history cleared'))
+                        Say('paint masks ' .. size .. ' x ' .. size .. (size > minW and ' - WARNING: an unpatched game downsamples them to ' .. minW .. ' x ' .. minW .. ' when it loads the map; undo history cleared' or '; undo history cleared'))
                     else
                         Say('paint mask size: ' .. tostring(why))
                     end
@@ -376,7 +376,7 @@ Panels.Register{
                 end })
             end
             Menu.Show(GetFrame(0), P.maskSize.Left(), P.maskSize.Bottom(), items)
-        end, { tip = 'The resolution of the paint masks (the eight layer masks, two textures). The shipped exe resamples them to half the map\'s size on load; an exe that keeps the resolution (the FAF Studio engine) draws the finer mask. Bigger is more memory (2048: 32 MB, 4096: 128 MB, 8192: 512 MB) and a finer brush edge. The paint is resampled and the undo history is cleared.' })
+        end, { tip = 'The resolution of the paint masks (the eight layer masks, two textures). WARNING: an unpatched game downsamples the masks to half the map\'s size when it loads the map; only an engine that keeps the resolution (the FAF Studio engine, patched exes) draws the finer mask. Bigger is more memory (2048: 32 MB, 4096: 128 MB, 8192: 512 MB) and a finer brush edge. The paint is resampled and the undo history is cleared.' })
 
         -- A plain shader switch only changes the technique: when the new shader reads a mask byte in another range than the masks were written in (shaders.lua Mismatch), a warning
         -- stands at the top of the panel with a button that opens the Convert layers dialog for the map's shader.
@@ -389,11 +389,24 @@ Panels.Register{
                 P:Refresh()
             end)
         end, { tip = 'Open the Convert layers dialog for the shader of the map: the paint masks are re-encoded from the range they were made in to the range this shader reads, so the picture stays the same. One undo step.' })
-        local function WarnText()
+        local function MismatchText()
             local mis = Shaders.Mismatch()
             if not mis then return '' end
             return 'The paint masks are in the ' .. mis.range .. ' range (made for ' .. tostring(mis.shader) .. '), but ' .. tostring(mis.current) .. ' reads the ' .. mis.now ..
                    ' range: the paint looks different. Convert the masks to keep the picture.'
+        end
+        -- masks finer than half the map: the shipped game resamples them to half the map's size when it loads the map (only an engine that keeps the resolution shows them)
+        local function MaskText()
+            local w = ed_stratum_info()
+            local minW = Strata.MaskLimits()
+            if not w or not minW or w <= minW then return '' end
+            return 'The paint masks are ' .. w .. ' x ' .. w .. ', finer than half the map (' .. minW .. ' x ' .. minW .. '). An unpatched game downsamples them to ' .. minW .. ' x ' .. minW ..
+                   ' when it loads the map: the finer paint only shows in an engine that keeps the resolution.'
+        end
+        local function WarnText()
+            local a, b = MismatchText(), MaskText()
+            if a ~= '' and b ~= '' then return a .. ' ' .. b end
+            return a .. b
         end
 
         --- Picks a texture for the selected layer.
@@ -587,9 +600,14 @@ Panels.Register{
             if P.warnShown ~= '' then
                 local labels, endY = W.Paragraph(group, P.warnShown, pad, top, w - 2 * pad, { color = Skin.color.warn, size = 'small' })
                 P.warnParas = labels
-                W.Place(P.warnBtn, group, pad, endY + Skin.S(4), Skin.S(150), Skin.S(24))
-                W.Center(P.warnBtn.label, P.warnBtn, 0, 0, Skin.S(150), Skin.S(24))
-                top = endY + Skin.S(36)
+                if MismatchText() ~= '' then
+                    W.Place(P.warnBtn, group, pad, endY + Skin.S(4), Skin.S(150), Skin.S(24))
+                    W.Center(P.warnBtn.label, P.warnBtn, 0, 0, Skin.S(150), Skin.S(24))
+                    top = endY + Skin.S(36)
+                else
+                    W.Place(P.warnBtn, group, -4000, 0, Skin.S(150), Skin.S(24))
+                    top = endY + Skin.S(8)
+                end
             else
                 W.Place(P.warnBtn, group, -4000, 0, Skin.S(150), Skin.S(24))
             end

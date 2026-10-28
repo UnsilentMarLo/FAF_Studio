@@ -768,7 +768,7 @@ local TextureRoleIds, TextureRoleLabels = import('/lua/editor/texsets.lua').Role
 
 Def('out_layer', { label = 'Output: texture layer', cat = 'outputs', kw = 'output layer stratum texture paint mask write',
     desc = 'Writes a mask into the paint mask of a texture layer (1..8; a layer the map\'s shader does not paint, such as layer 8 of the numbered shaders, refuses the build). The Layer texture setting also gives the layer a texture of a kind (grass, rock, sand ...) from the map\'s texture set; Keep leaves the layer\'s own texture.',
-    inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'layer',
+    inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'layer', maskOut = true,
     params = { N('layer', 'Layer', 1, 8, 1, '%d', 2), C('mode', 'Mode', { 'replace', 'add', 'subtract' }, { 'Replace', 'Add to (the larger)', 'Subtract from' }, 'replace'),
                N('strength', 'Strength', 0, 1, 0.05, '%.2f', 1, { wire = true }), B('takeAway', 'Layers above take away', false),
                C('texture', 'Layer texture', TextureRoleIds, TextureRoleLabels, 'keep') },
@@ -782,7 +782,7 @@ for _, r in import('/lua/editor/texsets.lua').Roles do
 end
 Def('out_role', { label = 'Output: ground kind', cat = 'outputs', kw = 'output ground kind role grass rock sand dirt snow wet stratum layer texture paint mask write shader independent',
     desc = 'Writes a mask into the paint of the layer that holds this kind of ground (grass, rock, sand ...): the kind is found from the textures of the map, so the graph works with any layer order and any shader (TTerrain with its four layers, the 7 layer shaders, the biplanar ones where rock goes to the side-mapped layers). A layer with no texture yet gets the texture of its kind from the map\'s texture set. The base layer has no mask: a kind that is the base is left alone.',
-    inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'layer', role = true,
+    inputs = { In('a', 'mask') }, outputs = { Out('view', 'mask', true) }, output = 'layer', role = true, maskOut = true,
     params = { C('role', 'Kind of ground', RoleIds, RoleLabels, 'rock'), C('mode', 'Mode', { 'replace', 'add', 'subtract' }, { 'Replace', 'Add to (the larger)', 'Subtract from' }, 'replace'),
                N('strength', 'Strength', 0, 1, 0.05, '%.2f', 1, { wire = true }), B('takeAway', 'Layers above take away', false), B('texture', 'Give an empty layer its texture', true) },
     eval = function(E, v, ins) return { view = ins.a } end })

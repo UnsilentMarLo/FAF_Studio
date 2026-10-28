@@ -155,7 +155,7 @@ function Install(Kit, Covers)
     end
     Def('out_kinds', { label = 'Output: ground kinds', cat = 'outputs', kw = 'output ground kinds all grass dirt wet sand rock snow layers paint texture shader stratum recipe terrain types roughness 7 8 layers',
         desc = 'Build paints the whole ground from the kind masks (Ground kinds node, or your own): overlaps are settled the way the recipes do (snow over high rock over dark rock over rock over wet ground over sand over dirt over grass), every kind goes to the layer that holds it whatever the shader (4, 7 or 8 painted layers, the base layer is what is left, side-mapped layers get steep ground only), the masks are written in the shader\'s encoding, then the terrain types follow what shows most and the PBR shaders get their roughness multiplier. A kind with a layer but no wire is cleared from its layer. One undo step with the rest of the build.',
-        inputs = outInputs, outputs = outOutputs, output = 'kinds',
+        inputs = outInputs, outputs = outOutputs, output = 'kinds', maskOut = true,
         params = { B('types', 'Set the terrain types too', true), B('roughness', 'Roughness multiplier too (PBR shaders)', true), N('amount', 'How much the roughness varies', 0, 1, 0.05, '%.2f', 0.6) },
         eval = function(E, v, ins)
             local out = {}

@@ -93,6 +93,9 @@ function Run()
     local outN = A('out_normalmap', { size = 'grid', assign = false })
     local outH = A('out_height', {})
     local mix = A('add', {})
+    local ovs4 = A('oversample', { factor = 4, rerun = true })
+    local outL2 = A('out_layer', { layer = 1 })
+    local outL4 = A('out_layer', { layer = 1 })
     Graph.Connect(gen.id, 'out', rng.id, 'a')
     Graph.Connect(rng.id, 'out', ero.id, 'a')
     Graph.Connect(ero.id, 'out', ovs.id, 'a')
@@ -101,6 +104,9 @@ function Run()
     Graph.Connect(ovs.id, 'out', outH.id, 'a')
     Graph.Connect(ovs.id, 'wear', mix.id, 'a')
     Graph.Connect(rng.id, 'out', mix.id, 'b')            -- the base grid meets the fine grid: the evaluator brings them together
+    Graph.Connect(ero.id, 'out', ovs4.id, 'a')
+    Graph.Connect(ovs.id, 'wear', outL2.id, 'a')
+    Graph.Connect(ovs4.id, 'wear', outL4.id, 'a')
     local run = GraphRun.NewRun{ step = 4 }
     local okRun, report = pcall(run.Evaluate, run)
     check('the graph evaluates', okRun, tostring(report))
@@ -117,6 +123,18 @@ function Run()
         local view = run:Value(outN.id, 'view')
         check('Output: map normal map keeps the fine grid', view and (Fields.Info(view.r)) == fw)
         check('Output: heights gets the run\'s grid again (averaged)', Width(outH.id, 'view') == bw, tostring(Width(outH.id, 'view')))
+        -- the paint writers work at the grid of the paint masks: not coarser than the fine input needs, not finer than the mask has
+        local maskW = ed_stratum_info()
+        if maskW then
+            local _, _, runCell = Fields.Info(run.like)
+            local extent = (bw - 1) * runCell
+            local function Expect(factor)
+                if runCell / factor >= extent / maskW * 0.999 then return (bw - 1) * factor + 1 end
+                return maskW
+            end
+            check('Output: texture layer takes a fine mask at the mask grid or the fine grid, whichever is coarser (factor 2)', Width(outL2.id, 'view') == Expect(2), tostring(Width(outL2.id, 'view')) .. ' vs ' .. Expect(2))
+            check('and the same for a finer input (factor 4: averaged straight down to the mask grid)', Width(outL4.id, 'view') == Expect(4), tostring(Width(outL4.id, 'view')) .. ' vs ' .. Expect(4))
+        end
         check('a node that mixes the base grid with the fine grid works at the fine grid', Width(mix.id, 'out') == fw, tostring(Width(mix.id, 'out')))
         local rerun = run:Value(ovs.id, 'out')
         local plainUp = Fields.Op('upsample', { a = run:Value(ero.id, 'out'), like = rerun })

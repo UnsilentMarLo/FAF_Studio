@@ -344,7 +344,7 @@ end
 --- A node works on one grid: the run's, or the finest one among its inputs (an Oversample node made it). The other inputs are brought onto it (smooth upsampling, a tent filter downwards), E.like / E.cell /
 --- E.step follow it, so a node placed after an Oversample node simply runs at the higher resolution (an erosion node scales its settings by E.step). The nodes that write into the map's own grids (the
 --- outputs of the heights, the paint and the terrain types) get their inputs on the run's grid again, averaged, which is what makes the oversampled masks crisp; only the map-wide textures (def.fineOk)
---- keep the fine grid. Changes `ins`; the converted fields belong to E.
+--- keep the fine grid; the paint writers (def.maskOut) work at the grid of the paint masks, whatever size they have. Changes `ins`; the converted fields belong to E.
 function Run:Conform(node, def, ins, E)
     local baseW, _, baseCell = Fields.Info(self.like)
     local finest, finestW = nil, baseW
@@ -367,7 +367,22 @@ function Run:Conform(node, def, ins, E)
     end
     if not finest then return end
     local target = finest
-    if def.output and not def.fineOk then target = self.like end
+    if def.output and not def.fineOk then
+        target = self.like
+        -- the writers of paint go to the mask's own grid (its size is a setting of the map, strata.lua SetMaskSize): a finer mask keeps what an Oversample node made, a coarser one
+        -- gets the fine field averaged straight down to its cell
+        if def.maskOut and rawget(_G, 'ed_stratum_info') and ed_stratum_info() then
+            local mw = ed_stratum_info()
+            local fw, _, fcell = Fields.Info(finest)
+            local extent = (baseW - 1) * baseCell
+            local maskCell = extent / mw
+            if fw and fcell and fcell >= maskCell * 0.999 then
+                target = finest
+            else
+                target = E:Add(Fields.Stratum(1))
+            end
+        end
+    end
     local tw, _, tcell = Fields.Info(target)
     local function Fit(val, linear)
         local w = Fields.Info(val)

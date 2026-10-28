@@ -615,6 +615,12 @@ function ApplyPending(doc)
     end
     -- paint masks and terrain types: the files have the size the old map's cell size gives; the new template may use another grid
     local mw, mh = ed_stratum_info()
+    -- the new map is made with half-size masks: a map whose masks were finer (strata.lua SetMaskSize) gets its resolution back, as far as the new map allows it
+    if mw and P.maskW and P.maskW > mw and P.maskW == P.maskH then
+        local _, _, maxW, maxH = import('/lua/editor/strata.lua').MaskLimits()
+        local want = maxW and math.min(P.maskW, maxW, maxH or maxW) or mw
+        if want > mw and ed_stratum_set_size(want, want) then mw, mh = ed_stratum_info() end
+    end
     for i, file in P.maskFiles or {} do
         local f = ReadField(file, P.maskW, P.maskH)
         if f then
