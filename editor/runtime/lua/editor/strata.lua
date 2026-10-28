@@ -3,7 +3,7 @@
 -- A map has ten texture layers: Base (everywhere), eight painted layers (strata 0..7, each with a paint mask), and Upper (an overlay without
 -- a mask). Layer numbers here follow the editor's lists: 0 = Base, 1..8 = painted layers, 9 = Upper; the painted layer n is engine
 -- stratum n - 1. Every layer has an albedo and a normal texture, each with its own tile size in world units. The masks are two RGBA textures
--- at half the height-map resolution (ed_stratum_* natives, moho/editor/EdStrata.cpp).
+-- at half the height-map resolution by default, any size from there up to the cap of StratumMaskSize.h (MaskSizes / SetMaskSize; ed_stratum_* natives, moho/editor/EdStrata.cpp).
 --
 -- Settings follow the FAF Map Editor's strata window: per layer albedo + normal with their own scale, layer order up / down, the TerrainXP
 -- switch for layers 5..8; brush Strength (percent, response curve (s / 100)^1.5 * 0.6 per dab), Size, Falloff, Target value (the opacity a
@@ -131,6 +131,42 @@ function MaskInfo()
     local sx = ed_terrain_info()
     if not w or not sx or w < 1 then return nil end
     return w, h, (sx - 1) / w
+end
+
+--- The sizes the paint masks of this map may have: minW, minH, maxW, maxH (nil without a map or an older exe). A mask is never smaller than half the map's size and never bigger than two
+--- texels per world unit (2048 on any map, 8192 at the most): the rule of the engine (StratumMaskSize.h).
+function MaskLimits()
+    if not rawget(_G, 'ed_stratum_limits') then return nil end
+    return ed_stratum_limits()
+end
+
+--- The mask sizes to offer, ascending: the smallest the map allows (half its size, what the shipped exe uses), the powers of two between, and the biggest.
+function MaskSizes()
+    local minW, _, maxW = MaskLimits()
+    if not minW then return {} end
+    local list, seen = { minW }, { [minW] = true }
+    local p = 256
+    while p <= maxW do
+        if p > minW and not seen[p] then table.insert(list, p) seen[p] = true end
+        p = p * 2
+    end
+    if not seen[maxW] then table.insert(list, maxW) end
+    return list
+end
+
+--- Gives the eight paint masks another resolution (the paint is resampled: linear when it grows, the area average when it shrinks). The shipped exe resamples every mask to half the map's
+--- size when it loads the map; an exe that keeps the resolution draws the finer mask. Undo entries of mask edits are tied to the old grid, so the undo history is cleared.
+--- Returns true | nil, message.
+function SetMaskSize(n)
+    if not rawget(_G, 'ed_stratum_set_size') then return nil, 'this exe cannot change the mask size' end
+    local w, h = ed_stratum_info()
+    if not w then return nil, 'the map has no paint masks' end
+    if w == n and h == n then return true end
+    local ok, why = ed_stratum_set_size(n, n)
+    if not ok then return nil, why end
+    pcall(function() import('/lua/editor/history.lua').Clear() end)
+    pcall(function() import('/lua/editor/recipes.lua').Invalidate() end)
+    return true
 end
 
 local function Basename(path)

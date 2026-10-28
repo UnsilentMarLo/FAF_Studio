@@ -357,6 +357,27 @@ Panels.Register{
             end, { convert = true })
         end, { tip = 'Change the shader and adapt the layers to it in one undo step: paint masks re-encoded where the mask range differs, layer 8 and the Upper layer handled. Opens the shader browser; choose the shader and press Convert layers.' })
 
+        P.maskSize = W.Button(group, 'Paint mask size: ...', 0, 0, Skin.S(220), Skin.S(24), function()
+            local w = ed_stratum_info()
+            local minW = Strata.MaskLimits()
+            if not w or not minW then Say('the map has no paint masks') return end
+            local items = {}
+            for _, n in Strata.MaskSizes() do
+                local size = n
+                local note = (size == minW) and '  (half the map, what the shipped exe uses)' or ''
+                table.insert(items, { title = size .. ' x ' .. size .. note, checked = (size == w), run = function()
+                    local ok, why = Strata.SetMaskSize(size)
+                    if ok then
+                        Say('paint masks ' .. size .. ' x ' .. size .. (size > minW and ' (the shipped exe shows them at ' .. minW .. '); undo history cleared' or '; undo history cleared'))
+                    else
+                        Say('paint mask size: ' .. tostring(why))
+                    end
+                    P:Refresh()
+                end })
+            end
+            Menu.Show(GetFrame(0), P.maskSize.Left(), P.maskSize.Bottom(), items)
+        end, { tip = 'The resolution of the paint masks (the eight layer masks, two textures). The shipped exe resamples them to half the map\'s size on load; an exe that keeps the resolution (the FAF Studio engine) draws the finer mask. Bigger is more memory (2048: 32 MB, 4096: 128 MB, 8192: 512 MB) and a finer brush edge. The paint is resampled and the undo history is cleared.' })
+
         -- A plain shader switch only changes the technique: when the new shader reads a mask byte in another range than the masks were written in (shaders.lua Mismatch), a warning
         -- stands at the top of the panel with a button that opens the Convert layers dialog for the map's shader.
         P.warnParas = {}
@@ -422,6 +443,12 @@ Panels.Register{
             if P.shaderShown ~= shaderName then
                 P.shaderShown = shaderName
                 ButtonText(P.shader, 'Shader: ' .. shaderName)
+            end
+            local mw, mh = ed_stratum_info()
+            local maskText = mw and ('Paint mask size: ' .. mw .. (mh ~= mw and (' x ' .. mh) or ' x ' .. mw)) or 'Paint mask size: none'
+            if P.maskShown ~= maskText then
+                P.maskShown = maskText
+                ButtonText(P.maskSize, maskText)
             end
             if P.laidOut and WarnText() ~= P.warnShown then
                 P:OnResize(P.w, P.h)          -- the warning appeared or went away: the panel lays out again (this ends in a Refresh with the same text)
@@ -535,11 +562,11 @@ Panels.Register{
             y = W.Flow(group, { { P.up, P.up.Width() }, { P.down, P.down.Width() }, { P.clearMask, P.clearMask.Width() }, { P.fillMask, P.fillMask.Width() } },
                        pad, y, w - 2 * pad, Skin.S(24), Skin.S(4), not place) + Skin.S(6)
             local sw = math.min(Skin.S(220), w - 2 * pad)
-            for _, b in { P.texset, P.shader, P.convert } do
+            for _, b in { P.texset, P.shader, P.convert, P.maskSize } do
                 if place then
                     W.Place(b, group, pad, y, sw, Skin.S(24))
                     W.Center(b.label, b, 0, 0, sw, Skin.S(24))
-                    P.texsetShown, P.shaderShown = nil, nil          -- the texts are cut to the new width on the next refresh
+                    P.texsetShown, P.shaderShown, P.maskShown = nil, nil, nil         -- the texts are cut to the new width on the next refresh
                 end
                 y = y + Skin.S(30)
             end

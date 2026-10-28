@@ -95,6 +95,15 @@ higher height wins where two overlap), the x1 / x2 variants and Terrain001 / 051
 
 Tests: `selftest_alphagen.lua` (27 checks), `selftest_oversample.lua` (20); the pipeline lab runs `out_texalpha` for every shader (`--from-map` starts from the open map's heights, e.g. Operation Citadel).
 
+## Paint mask size (2026-10-28)
+
+The eight layer masks (two RGBA textures, "stratum masks") used to be cut to half the map's size whenever a map was loaded: `CWldTerrainRes::Finalize` copied both into sheets of `(heightfield - 1) / 2` and the copy is a resample, so a mask saved finer was reduced to that preset. The shipped exe still does this; the decompile graphics session found it and fixed it on the engine branch `dynamic-lights` (`StratumMaskSize.h`, `docs/RENDERER_BACKENDS.md`, "Stratum mask resolution"), and the same change is in the editor engine (the header and `Finalize` are the same code, so the branches merge cleanly). The rule: a mask keeps the size it was saved with, never less than half the map's size, never more than `max(2048, 2 x the map's size in cells)`, 8192 at the most (2048 on any map, 4096 from 40 km, 8192 on an 81 km map).
+
+- **Setting:** Layers panel, **Paint mask size** button: a menu of the sizes the map allows (half the map is the smallest, what the shipped exe shows; then the powers of two up to the cap). Lua: `Strata.MaskLimits()`, `Strata.MaskSizes()`, `Strata.SetMaskSize(n)`; native `ed_stratum_limits()`, `ed_stratum_set_size(w[, h])`. The paint is resampled (linear when it grows, the area average when it shrinks), both sheets are replaced and the saved map carries the new size. The undo history is cleared (mask undo entries address the old grid).
+- **Cost:** two RGBA8 sheets, 32 MB at 2048, 128 MB at 4096, 512 MB at 8192, plus a byte copy of the eight lanes in the editor. Maps saved with a mask above half the map's size only look finer in an exe that keeps the resolution; the shipped one resamples them on load.
+- **Tests:** `selftest_masksize.lua` (14 checks: limits, grow, shrink, round trip, refusals); a saved 1024 mask on a 5 km map loads as 1024 (log: `Terrain: stratum masks 1024x1024 ... half the map is 128x128, the most 2048x2048`).
+- **Not done:** the graph's paint output nodes still write at the map's current mask grid (they follow `ed_stratum_info`, so a finer mask gets finer graph paint, but no node sets the size); the New Map dialog starts at half the map.
+
 ## Why the selftests failed (2026-10-27)
 
 * `selftest_erosion`, golden checksums: the fixtures are 65 x 65 = 4225 samples, above the 4000 samples from which the editor runs the **GPU** solver; the goldens are CPU checksums (and shared with the native
