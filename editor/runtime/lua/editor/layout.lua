@@ -1037,11 +1037,10 @@ end
 
 function LoadSidecar(scenarioFile)
     New({})
-    local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
-    if path and DiskGetFileInfo(path) then
-        local env = {}
-        doscript(path, env)
-        if type(env.Layout) == 'table' then Load(env.Layout) end
+    local env = import('/lua/editor/mods.lua').SidecarEnv(scenarioFile)           -- protected, shared read (mods.lua)
+    if env and type(env.Layout) == 'table' then
+        local ok, err = pcall(Load, env.Layout)
+        if not ok then WARN('EDITOR layout: the layout of the map could not be loaded (' .. tostring(err) .. ')') New({}) end
     end
 end
 

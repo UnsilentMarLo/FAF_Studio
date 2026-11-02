@@ -175,10 +175,12 @@ function SidecarPath(scenarioFile)
     return path
 end
 
+local sidecarCache = false      -- path -> { stamp =, env =, info = } (see SidecarEnv below)
+
 --- Text of the sidecar file for the current selection.
 --- `pathsText` replaces the paths part (Map > Resize writes the sidecar of the resized map with the paths moved).
 function SidecarText(pathsText)
-    local lines = { 'version = 1', 'EditorMods = {' }
+    local lines = { 'version = ' .. SIDECAR_VERSION, 'EditorMods = {' }
     local uids = {}
     for uid in GetSelection() do
         table.insert(uids, uid)
@@ -188,6 +190,7 @@ function SidecarText(pathsText)
         table.insert(lines, string.format('    %q,', uid))
     end
     table.insert(lines, '}')
+    sidecarCache = false        -- a save changes the file: the next read looks again
     return table.concat(lines, '\n') .. '\n' .. import('/lua/editor/terraintype.lua').SidecarText() .. import('/lua/editor/mission.lua').SidecarText()
         .. import('/lua/editor/graph.lua').SidecarText()
         .. import('/lua/editor/layout.lua').SidecarText()
@@ -196,15 +199,47 @@ function SidecarText(pathsText)
         .. import('/lua/editor/shaders.lua').SidecarText()
 end
 
+-- ---- reading the sidecar -------------------------------------------------------------------------------------------
+-- The sidecar is one Lua file with one assignment per feature (`EditorMods`, `Mission`, `Graph` ...), read by up to eight loaders. They all go through SidecarEnv: one protected
+-- read (safeload.lua: syntax and runtime errors lose only the section that has them, the original is kept as `<file>.bad`, wrong types are dropped, `version` is checked and
+-- migrated), shared while the file on disk is unchanged. A broken sidecar never stops a map from opening.
+
+SIDECAR_VERSION = 1             -- (written by SidecarText above) bumped when a section changes shape; Migrate[v](env) turns a version v file into version v + 1 (in place)
+Migrate = {}                    -- (nothing changed shape yet: a file without `version` is a version 0 file and reads the same)
+SidecarSchema = { EditorMods = 'table', TerrainTypeLayers = 'table', Mission = 'table', Graph = 'table', Layout = 'table', Paths = 'table', Interop = 'table', StrataAuthored = 'table' }
+
+
+function SidecarOptions(extra)
+    local opts = { name = 'sidecar', current = SIDECAR_VERSION, migrate = Migrate, schema = SidecarSchema }
+    for k, v in extra or {} do opts[k] = v end
+    return opts
+end
+
+--- The sidecar's values for the map, or nil when it has none or none can be read. `fresh` reads the file again (ApplySidecar does, at every map open); the other loaders of the
+--- same open get the same table. Second result: the load info of safeload.lua (dropped sections, version, migrated).
+function SidecarEnv(scenarioFile, fresh)
+    local path = scenarioFile and SidecarPath(scenarioFile)
+    if not path or not DiskGetFileInfo(path) then return nil end
+    sidecarCache = sidecarCache or {}
+    local disk = rawget(_G, 'ed_vfs_to_disk') and ed_vfs_to_disk(path)
+    local stamp = disk and rawget(_G, 'ed_file_stamp') and ed_file_stamp(disk)
+    local entry = sidecarCache[path]
+    if entry and not fresh and stamp and entry.stamp == stamp then
+        return entry.env or nil, entry.info
+    end
+    local env, why, info = import('/lua/editor/safeload.lua').File(path, SidecarOptions())
+    if env then info = why end
+    sidecarCache[path] = { stamp = stamp, env = env or false, info = info }
+    return env, info
+end
+
 --- Called before a map opens: the map's own mod list becomes the selection (empty when it has none).
 function ApplySidecar(scenarioFile)
     local set = {}
-    local path = scenarioFile and SidecarPath(scenarioFile)
-    if path and DiskGetFileInfo(path) then
-        local env = {}
-        doscript(path, env)
+    local env = SidecarEnv(scenarioFile, true)
+    if env then
         for _, uid in env.EditorMods or {} do
-            set[uid] = true
+            if type(uid) == 'string' then set[uid] = true end
         end
     end
     SetSelection(set)

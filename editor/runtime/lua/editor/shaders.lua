@@ -443,10 +443,8 @@ end
 --- Reads the sidecar of a map (a new map or one without the entry: the masks match).
 function LoadSidecar(scenarioFile)
     authored = false
-    local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
-    if not path or not DiskGetFileInfo(path) then return end
-    local env = {}
-    doscript(path, env)
+    local env = import('/lua/editor/mods.lua').SidecarEnv(scenarioFile)           -- protected, shared read (mods.lua)
+    if not env then return end
     local d = env.StrataAuthored
     if type(d) == 'table' and (d.range == 'half' or d.range == 'full') and type(d.shader) == 'string' then
         authored = { range = d.range, shader = d.shader }

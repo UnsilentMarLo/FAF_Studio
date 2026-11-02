@@ -423,12 +423,12 @@ end
 
 function LoadSidecar(scenarioFile)
     LayerType, Manual = {}, {}
-    local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
-    if not path or not DiskGetFileInfo(path) then return end
-    local env = {}
-    doscript(path, env)
+    local env = import('/lua/editor/mods.lua').SidecarEnv(scenarioFile)           -- protected, shared read (mods.lua)
+    if not env then return end
     for i, code in env.TerrainTypeLayers or {} do
-        LayerType[i] = code
-        Manual[i] = true
+        if type(i) == 'number' and type(code) == 'number' then
+            LayerType[i] = code
+            Manual[i] = true
+        end
     end
 end

@@ -949,11 +949,10 @@ end
 
 function LoadSidecar(scenarioFile)
     Reset()
-    local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
-    if path and DiskGetFileInfo(path) then
-        local env = {}
-        doscript(path, env)
-        ApplyData(env.Interop)
+    local env = import('/lua/editor/mods.lua').SidecarEnv(scenarioFile)           -- protected, shared read (mods.lua)
+    if env then
+        local ok, err = pcall(ApplyData, env.Interop)
+        if not ok then WARN('EDITOR interop: the import / export settings of the map could not be applied (' .. tostring(err) .. ')') Reset() end
     end
 end
 

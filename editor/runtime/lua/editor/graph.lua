@@ -669,12 +669,12 @@ end
 function LoadSidecar(scenarioFile)
     pcall(function() import('/lua/editor/graphrun.lua').Forget() end)
     New('untitled')
-    local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
-    if path and DiskGetFileInfo(path) then
-        local env = {}
-        doscript(path, env)
-        if type(env.Graph) == 'table' then
-            Load(env.Graph)
+    local env = import('/lua/editor/mods.lua').SidecarEnv(scenarioFile)           -- protected, shared read (mods.lua)
+    if env and type(env.Graph) == 'table' then
+        local ok, err = pcall(Load, env.Graph)
+        if not ok then
+            WARN('EDITOR graph: the graph of the map could not be loaded (' .. tostring(err) .. '): starting with an empty graph')
+            New('untitled')
         end
     end
     Changed(true)

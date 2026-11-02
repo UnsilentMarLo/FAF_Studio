@@ -1576,14 +1576,19 @@ function LoadSidecar(scenarioFile)
     PreviewState = false
     FreeResults()
     nextId = 1
-    local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
-    if path and DiskGetFileInfo(path) then
-        local env = {}
-        doscript(path, env)
+    local env = import('/lua/editor/mods.lua').SidecarEnv(scenarioFile)           -- protected, shared read (mods.lua)
+    if env then
         for _, p in (env.Paths or {}) do
-            table.insert(List, Normalize(p))
-            local n = tonumber(string.sub(p.id or '', 2))
-            if n and n >= nextId then nextId = n + 1 end
+            if type(p) == 'table' then
+                local ok, norm = pcall(Normalize, p)
+                if ok then
+                    table.insert(List, norm)
+                    local n = tonumber(string.sub(tostring(p.id or ''), 2))
+                    if n and n >= nextId then nextId = n + 1 end
+                else
+                    WARN('EDITOR paths: a saved path could not be read (' .. tostring(norm) .. '): skipped')
+                end
+            end
         end
     end
     Changed()
