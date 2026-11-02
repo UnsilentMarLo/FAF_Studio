@@ -23,8 +23,26 @@ local function LoadChunk(vfsPath)
     return env
 end
 
+--- Runs one load step protected and notes its time: Load logs the steps that took 5 ms or more (what the Lua side of a map open costs).
+local loadTimes = false
+local function Timed(name, fn)
+    local t0 = GetSystemTimeSeconds()
+    pcall(fn)
+    local dt = (GetSystemTimeSeconds() - t0) * 1000
+    if loadTimes and dt >= 5 then table.insert(loadTimes, string.format('%s %.0f', name, dt)) end
+end
+
 --- Reads the open session's map files. Returns the document or nil + a reason.
 function Load()
+    local t0 = GetSystemTimeSeconds()
+    loadTimes = {}
+    local doc, why = LoadDocument()
+    LOG(string.format('EDITOR map.Load: %.0f ms (steps of 5 ms or more, ms: %s)', (GetSystemTimeSeconds() - t0) * 1000, table.concat(loadTimes, ', ')))
+    loadTimes = false
+    return doc, why
+end
+
+function LoadDocument()
     local session = SessionGetScenarioInfo()
     if not session or not session.file then
         return nil, 'no scenario file on the session'
@@ -36,7 +54,9 @@ function Load()
     end
     local saveEnv = {}
     if info.save and DiskGetFileInfo(info.save) then
+        local t0 = GetSystemTimeSeconds()
         saveEnv = LoadChunk(info.save)
+        if loadTimes then table.insert(loadTimes, string.format('doscript save %.0f', (GetSystemTimeSeconds() - t0) * 1000)) end
     end
     local save = saveEnv.Scenario
     if not save then
@@ -48,20 +68,20 @@ function Load()
         }
     end
     Doc = { info = info, save = save, scenarioPath = session.file, savePath = info.save, scriptPath = info.script }
-    pcall(function() import('/lua/editor/maps.lua').ApplyPending(Doc) end)
-    pcall(function() import('/lua/editor/terraintype.lua').LoadSidecar(session.file) end)       -- terrain types assigned to texture layers
-    pcall(function() import('/lua/editor/mission.lua').LoadSidecar(session.file) end)           -- stages, objectives and actions of a mission map
-    pcall(function() import('/lua/editor/mission.lua').ImportScript(Doc) end)                   -- a hand-written mission script (MissionNumber stages) is shown read-only, never rewritten
-    pcall(function() import('/lua/editor/graph.lua').LoadSidecar(session.file) end)             -- the terrain graph (nodes, wires, parameters)
-    pcall(function() import('/lua/editor/layout.lua').LoadSidecar(session.file) end)            -- the map layout drawing (layers, generator settings)
-    pcall(function() import('/lua/editor/paths.lua').LoadSidecar(session.file) end)             -- spline paths of the terrain tool
-    pcall(function() import('/lua/editor/interop.lua').LoadSidecar(session.file) end)           -- import / export settings for external terrain tools
-    pcall(function() import('/lua/editor/shaders.lua').LoadSidecar(session.file) end)           -- the mask range the paint was made for (after a plain shader switch)
-    pcall(function() import('/lua/editor/texsets.lua').ApplyIfNew() end)       -- a new map's empty layers get the default texture set
+    Timed('maps.ApplyPending', function() import('/lua/editor/maps.lua').ApplyPending(Doc) end)
+    Timed('terraintype.LoadSidecar', function() import('/lua/editor/terraintype.lua').LoadSidecar(session.file) end)       -- terrain types assigned to texture layers
+    Timed('mission.LoadSidecar', function() import('/lua/editor/mission.lua').LoadSidecar(session.file) end)           -- stages, objectives and actions of a mission map
+    Timed('mission.ImportScript', function() import('/lua/editor/mission.lua').ImportScript(Doc) end)                   -- a hand-written mission script (MissionNumber stages) is shown read-only, never rewritten
+    Timed('graph.LoadSidecar', function() import('/lua/editor/graph.lua').LoadSidecar(session.file) end)             -- the terrain graph (nodes, wires, parameters)
+    Timed('layout.LoadSidecar', function() import('/lua/editor/layout.lua').LoadSidecar(session.file) end)            -- the map layout drawing (layers, generator settings)
+    Timed('paths.LoadSidecar', function() import('/lua/editor/paths.lua').LoadSidecar(session.file) end)             -- spline paths of the terrain tool
+    Timed('interop.LoadSidecar', function() import('/lua/editor/interop.lua').LoadSidecar(session.file) end)           -- import / export settings for external terrain tools
+    Timed('shaders.LoadSidecar', function() import('/lua/editor/shaders.lua').LoadSidecar(session.file) end)           -- the mask range the paint was made for (after a plain shader switch)
+    Timed('texsets.ApplyIfNew', function() import('/lua/editor/texsets.lua').ApplyIfNew() end)       -- a new map's empty layers get the default texture set
     if Doc.resizePayload then pcall(function() import('/lua/editor/resize.lua').ApplyPending(Doc) end) end     -- a resized map: heights, masks, props, decals (Map > Resize)
-    pcall(function() import('/lua/editor/meshview.lua').OnMapLoaded() end)                      -- mesh terrain of a TerrainSystem = 'mesh' map
-    pcall(function() import('/lua/editor/units.lua').SpawnGroupEntities() end)                    -- units of the mission's own groups are shown while editing
-    pcall(function() import('/lua/editor/symmetry.lua').AutoDetect() end)                       -- sets the symmetry mode when the start positions, resource markers and heights are symmetric
+    Timed('meshview.OnMapLoaded', function() import('/lua/editor/meshview.lua').OnMapLoaded() end)                      -- mesh terrain of a TerrainSystem = 'mesh' map
+    Timed('units.SpawnGroupEntities', function() import('/lua/editor/units.lua').SpawnGroupEntities() end)                    -- units of the mission's own groups are shown while editing
+    Timed('symmetry.AutoDetect', function() import('/lua/editor/symmetry.lua').AutoDetect() end)                       -- sets the symmetry mode when the start positions, resource markers and heights are symmetric
     return Doc
 end
 

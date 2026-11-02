@@ -53,3 +53,4 @@ selftest_erosionpaint
 selftest_oversample
 selftest_alphagen
 selftest_paintundo
+selftest_savejob
