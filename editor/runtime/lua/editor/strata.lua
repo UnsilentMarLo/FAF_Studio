@@ -19,7 +19,8 @@
 --   Profile()                              shaders.lua Profile of the map's shader (painted layers, what layer 8 is ...)
 --   PaintCap()                             the highest layer the shader paints with a mask      WhyNotPaintable(i) -> nil | reason: the check of every tool that writes a layer mask
 --
--- Undo entries are plain { label, undo, redo } like the object edits (history.lua keeps one order for everything).
+-- Undo entries are plain { label, undo, redo } like the object edits (history.lua keeps one order for everything); a mask edit adds `bytes` (what its packed tiles hold, maskdelta.lua), which the
+-- history sums to keep its limit.
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
 Active = 1
