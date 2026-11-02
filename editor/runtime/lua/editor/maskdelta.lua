@@ -25,13 +25,17 @@ local CHUNK = 1000        -- string.char(unpack(t, i, j)) fails above ~2000 valu
 local OVERHEAD_TILE = 160       -- the tile table and its string headers, counted into `bytes`
 local OVERHEAD_STRING = 24
 
+--- The first n values of `values` as a string of bytes. (Lua 5.0's unpack takes the whole list and ignores a range, and gives up above ~2000 values: a list of exactly n <= CHUNK values
+--- goes in one call, anything else is cut into pieces of CHUNK.)
 function Pack(values, n)
-    if n <= CHUNK then return string.char(unpack(values, 1, n)) end
+    if n <= CHUNK and table.getn(values) == n then return string.char(unpack(values)) end
     local parts, i = {}, 1
     while i <= n do
         local j = i + CHUNK - 1
         if j > n then j = n end
-        parts[table.getn(parts) + 1] = string.char(unpack(values, i, j))
+        local piece = {}
+        for k = i, j do piece[k - i + 1] = values[k] end
+        parts[table.getn(parts) + 1] = string.char(unpack(piece))
         i = j + 1
     end
     return table.concat(parts)
