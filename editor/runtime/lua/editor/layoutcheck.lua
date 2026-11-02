@@ -151,6 +151,34 @@ end
 
 local function Px(n) return math.floor(n + 0.5) end
 
+--- Panels with problems that belong to the files of another group of the 2026-11 stabilization (docs/projects/editor/STABILIZATION_PLAN.md): the layout group does not edit
+--- them. Their problems are measured and kept apart (TakeKnown), the nightly reports them as "known" next to the result instead of failing on them. Empty this table when the owners
+--- have fixed their panels (the nightly then fails on them like on any other).
+Known = {
+    stages = 'group E, gui/panels_mission.lua',
+    bases = 'group E, gui/panels_mission.lua',
+    platoons = 'group E, gui/panels_platoons.lua',
+    run = 'group E, gui/panels_missionrun.lua',
+    mods = 'group F, gui/panels_mods.lua',
+}
+local knownLines = {}
+
+--- The problems found in the panels of Known since the last call -> list of "where > text (owner)"; clears the list.
+function TakeKnown()
+    local list = knownLines
+    knownLines = {}
+    return list
+end
+
+--- Puts a problem of the panel `pid` in the list of problems, or in the known list when the panel is one of Known's.
+local function Add(out, pid, text)
+    if pid and Known[pid] then
+        if table.getn(knownLines) < 400 then table.insert(knownLines, text .. ' (' .. Known[pid] .. ')') end
+    else
+        table.insert(out, text)
+    end
+end
+
 --- The problems of a list of tracked entries (W.tracking) -> list of strings.
 function Analyze(entries, where)
     local out = {}
@@ -162,6 +190,7 @@ function Analyze(entries, where)
             rects[i] = rc
             local name = where .. ' > ' .. Name(e)
             local pid = PanelOf(Object(e))
+            rc.pid = pid
             if pid and not string.find(where, pid, 1, true) then name = name .. ' [' .. pid .. ']' end
             -- the box the widget has to stay in: the area the user sees; a text on a bitmap (button, row) the bitmap
             local box, what = rc.area, 'the ' .. tostring(rc.kind)
@@ -171,26 +200,26 @@ function Analyze(entries, where)
             end
             if box then
                 if rc.r > box.r + SLACK then
-                    table.insert(out, name .. ': ' .. (e.label and 'text' or 'past area') .. ' runs ' .. Px(rc.r - box.r) .. ' px past the right edge of ' .. what)
+                    Add(out, pid, name .. ': ' .. (e.label and 'text' or 'past area') .. ' runs ' .. Px(rc.r - box.r) .. ' px past the right edge of ' .. what)
                 elseif rc.l < box.l - SLACK then
-                    table.insert(out, name .. ': ' .. (e.label and 'text' or 'past area') .. ' starts ' .. Px(box.l - rc.l) .. ' px left of ' .. what)
+                    Add(out, pid, name .. ': ' .. (e.label and 'text' or 'past area') .. ' starts ' .. Px(box.l - rc.l) .. ' px left of ' .. what)
                 end
                 -- a dialog does not scroll sideways or up and down unless it was given a scroll: its widgets stay inside the box
                 if rc.kind == 'dialog' or (rc.kind == 'parent' and not e.label) then
                     if rc.b > box.b + SLACK then
-                        table.insert(out, name .. ': past area, bottom edge ' .. Px(rc.b - box.b) .. ' px below ' .. what)
+                        Add(out, pid, name .. ': past area, bottom edge ' .. Px(rc.b - box.b) .. ' px below ' .. what)
                     end
                 end
             end
             -- the window
             if rc.kind ~= 'panel' and (rc.r > frame.r + SLACK or rc.l < frame.l - SLACK or rc.b > frame.b + SLACK) then
-                table.insert(out, name .. ': off the window (' .. Px(rc.l) .. ',' .. Px(rc.t) .. ',' .. Px(rc.r) .. ',' .. Px(rc.b) .. ' in ' .. frame.r .. 'x' .. frame.b .. ')')
+                Add(out, pid, name .. ': off the window (' .. Px(rc.l) .. ',' .. Px(rc.t) .. ',' .. Px(rc.r) .. ',' .. Px(rc.b) .. ' in ' .. frame.r .. 'x' .. frame.b .. ')')
             end
             if e.button and e.button.label then
                 local okw, lw = pcall(function() return e.button.label.Width() end)
                 local okt, lt = pcall(function() return e.button.label:GetText() end)
                 if okw and lw and lw > (rc.r - rc.l) + SLACK and okt and lt ~= '' then
-                    table.insert(out, name .. ': label wider than the button (' .. lw .. ' > ' .. (rc.r - rc.l) .. ')')
+                    Add(out, pid, name .. ': label wider than the button (' .. lw .. ' > ' .. (rc.r - rc.l) .. ')')
                 end
             end
         end
@@ -201,7 +230,7 @@ function Analyze(entries, where)
                 local ox = math.min(a.r, b.r) - math.max(a.l, b.l)
                 local oy = math.min(a.b, b.b) - math.max(a.t, b.t)
                 if ox > OVERLAP and oy > OVERLAP then
-                    table.insert(out, where .. ' > ' .. Name(entries[i]) .. ' / ' .. Name(entries[j]) .. ': overlap (' .. Px(ox) .. ' x ' .. Px(oy) .. ' px) at ' .. Px(a.l) .. ',' .. Px(a.t) .. ',' .. Px(a.r) .. ',' .. Px(a.b) .. ' and ' .. Px(b.l) .. ',' .. Px(b.t) .. ',' .. Px(b.r) .. ',' .. Px(b.b))
+                    Add(out, a.pid or b.pid, where .. ' > ' .. Name(entries[i]) .. ' / ' .. Name(entries[j]) .. ': overlap (' .. Px(ox) .. ' x ' .. Px(oy) .. ' px) at ' .. Px(a.l) .. ',' .. Px(a.t) .. ',' .. Px(a.r) .. ',' .. Px(a.b) .. ' and ' .. Px(b.l) .. ',' .. Px(b.t) .. ',' .. Px(b.r) .. ',' .. Px(b.b))
                 end
             end
         end

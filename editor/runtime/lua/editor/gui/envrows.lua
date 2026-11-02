@@ -126,6 +126,7 @@ function Build(def)
                         W.Place(row.label, group, pad, y)
                         y = y + Skin.S(20)
                     elseif kind == 'texture' then
+                        row.label.fitCap = math.max(Skin.S(40), w - 2 * pad - Skin.S(80) - Skin.S(8))        -- (the label stops before the Change button)
                         W.Place(row.label, group, pad, y)
                         W.Place(row.file, group, pad, y + Skin.S(18))
                         W.Place(row.b, group, w - pad - Skin.S(80), y + Skin.S(6), Skin.S(80), Skin.S(22))

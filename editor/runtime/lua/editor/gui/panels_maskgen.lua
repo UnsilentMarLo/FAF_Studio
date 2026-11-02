@@ -400,7 +400,8 @@ Panels.Register{
             local bx = size + 2 * pad
             local by = y
             local function Beside(b)
-                local bw = b.Width()
+                b.designW = b.designW or b.Width()
+                local bw = math.min(b.designW, w - size - 3 * pad)
                 if bx > size + 2 * pad and bx + bw > w - pad then
                     bx = size + 2 * pad
                     by = by + Skin.S(26)

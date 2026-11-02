@@ -145,47 +145,68 @@ local function ShowLevel(frame, index, items, x, y, rowRect)
     width = math.max(width, Skin.S(150))
     local pad = Skin.S(3)
     local fw, fh = frame.Width(), frame.Height()
+    -- a menu taller than the window is laid out in columns (each as tall as the window allows): the rows of a column start at colY, the column of a row is colOf
+    local maxH = fh - 2 * pad - 4
+    local cols, colOf, colY = 1, {}, {}
+    if height > maxH then
+        local cy, col = 0, 1
+        for i, r in list do
+            local h = r.separator and sepH or rowH
+            if cy + h > maxH and cy > 0 then
+                col = col + 1
+                cy = 0
+            end
+            colOf[i], colY[i] = col, cy
+            cy = cy + h
+        end
+        cols = col
+        height = maxH
+    end
+    local totalW = width * cols
     -- stay on screen: a submenu that does not fit opens to the left of its parent, a long menu moves up
-    if x + width + 2 > fw then
-        if rowRect then x = rowRect.left - width + Skin.S(2) else x = fw - width - 2 end
+    if x + totalW + 2 > fw then
+        if rowRect then x = rowRect.left - totalW + Skin.S(2) else x = fw - totalW - 2 end
     end
     if x < 0 then x = 0 end
     if y + height + 2 * pad + 2 > fh then y = math.max(0, fh - height - 2 * pad - 2) end
 
     local group = Group(frame)
     group.Depth:Set(9600 + index * 10)
-    group.Left:Set(x) group.Top:Set(y) group.Width:Set(width + 2 + 2 * 0) group.Height:Set(height + 2 * pad + 2)
+    group.Left:Set(x) group.Top:Set(y) group.Width:Set(totalW + 2) group.Height:Set(height + 2 * pad + 2)
     local border = Bitmap(group)
     border.Depth:Set(function() return group.Depth() + 1 end)
     border:SetSolidColor(c.line)
     border.Left:Set(function() return group.Left() end) border.Top:Set(function() return group.Top() end)
-    border.Width:Set(width + 2) border.Height:Set(height + 2 * pad + 2)
+    border.Width:Set(totalW + 2) border.Height:Set(height + 2 * pad + 2)
     local body = Bitmap(group)
     body.Depth:Set(function() return group.Depth() + 2 end)
     body:SetSolidColor(c.panel)
     body.Left:Set(function() return group.Left() + 1 end) body.Top:Set(function() return group.Top() + 1 end)
-    body.Width:Set(width) body.Height:Set(height + 2 * pad)
+    body.Width:Set(totalW) body.Height:Set(height + 2 * pad)
 
     local level = { group = group, rows = {}, items = list }
     current.levels[index] = level
 
     local ry = pad
-    for _, item in list do
+    for i, item in list do
         -- closures made below outlive the loop: they need their own copies (the loop variable is nil afterwards, `ry` keeps moving)
         local r = item
+        local cx = (colOf[i] or 1) - 1
+        cx = cx * width
+        if colY[i] then ry = pad + colY[i] end
         local rowY = ry
         if r.separator then
             local line = Bitmap(group)
             line.Depth:Set(function() return group.Depth() + 3 end)
             line:SetSolidColor(c.line)
-            W.Place(line, group, Skin.S(8), ry + math.floor(sepH / 2), width - Skin.S(14), 1)
+            W.Place(line, group, cx + Skin.S(8), ry + math.floor(sepH / 2), width - Skin.S(14), 1)
             line:DisableHitTest()
             ry = ry + sepH
         else
             local row = Bitmap(group)
             row.Depth:Set(function() return group.Depth() + 3 end)
             row:SetSolidColor(c.panel)
-            W.Place(row, group, 1, ry + 1, width, rowH)
+            W.Place(row, group, cx + 1, ry + 1, width, rowH)
             local textColor = r.enabled and c.text or c.textDim
             if r.header then textColor = c.textDim end
             local label = W.Label(row, r.title, markW, math.floor((rowH - Skin.S(15)) / 2), { color = textColor })
@@ -226,8 +247,8 @@ local function ShowLevel(frame, index, items, x, y, rowRect)
                         local sub = r.submenu
                         if type(sub) == 'function' then sub = sub() end
                         if sub and table.getn(sub) > 0 then
-                            ShowLevel(frame, index + 1, sub, x + width + 2 - Skin.S(2), y + rowY,
-                                { left = x })
+                            ShowLevel(frame, index + 1, sub, x + cx + width + 2 - Skin.S(2), y + rowY,
+                                { left = x + cx })
                         end
                     end
                     return true

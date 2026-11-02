@@ -193,8 +193,9 @@ Panels.Register{
             local foot = Skin.S(150)
             local top = W.Flow(group, { { P.btnLoad, Skin.S(52) }, { P.btnNew, Skin.S(46) }, { P.btnSync, Skin.S(72) }, { P.btnSave, Skin.S(52) }, { P.btnCheck, Skin.S(56) }, { P.btnView, Skin.S(72) } },
                 pad, pad, w - 2 * pad, Skin.S(22), Skin.S(4)) + Skin.S(4)
-            P.list:SetRect(pad, top, w - 2 * pad, math.max(Skin.S(60), h - pad - foot - top))
-            local y = h - foot + Skin.S(4)
+            local listH = math.max(Skin.S(60), h - pad - foot - top)
+            P.list:SetRect(pad, top, w - 2 * pad, listH)
+            local y = math.max(h - foot + Skin.S(4), top + listH + Skin.S(6))      -- (under the list, also in a panel too short for both: the panel scrolls)
             P.slider:Place(pad, y, w - 2 * pad)
             local y2 = W.Flow(group, { { P.setBtn, Skin.S(90) }, { P.scenario, Skin.S(160) } }, pad, y + Skin.S(48), w - 2 * pad, Skin.S(22), Skin.S(8))
             W.Place(P.help, group, pad, y2 + Skin.S(6))

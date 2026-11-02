@@ -388,6 +388,9 @@ LAYOUT_PANEL_ALONE = (('1920x1080', 1.0), ('1280x720', 1.5), ('1280x720', 2.0)) 
 # Panels that start unit thumbnail rendering (assetthumbs.lua): the engine of this machine crashes in it (access violation in the first frames after the thumbnails, seen in the
 # editor log of the layout instance with the plain assets panel and with the unit browser), which would end the run. Their layout is seen in the workspaces that show them.
 LAYOUT_SKIP_PANELS = ()
+# Panels whose buttons are not pressed here (the `clicks` step does that): the Fields panel's buttons run the native field engine, which crashes the engine of this machine (access violation in the
+# first frame after the press, reproduced in a plain click sweep of the layout instance); the dialogs of the other panels are enough for the layout.
+LAYOUT_SKIP_SWEEP = ('fields',)
 LAYOUT_QUIET_LUA = "import('/lua/editor/assetthumbs.lua').Pause(true) return import('/lua/editor/clicksweep.lua').Fixture()"      # no thumbnail renders while the layout is measured
 
 # {scale} {fn} {ids} {tag} {long}
@@ -475,8 +478,8 @@ def step_layout(inst, rep, exe=None, editor=None):
             for fn, arg, label in (('Dialogs', 'false', 'dialogs'), ('Dialogs', 'true', 'dialogs (long text)'), ('Shell', '', 'bars')):
                 call('%s %s' % (tag, label), LAYOUT_PART_LUA.format(scale=scale, fn=fn, arg=arg), timeout=600)
             if (size, scale) in LAYOUT_PANEL_SWEEPS:
-                for pid in ids:
-                    call('%s sweep' % tag, LAYOUT_PART_LUA.format(scale=scale, fn='Panel', arg="'%s'" % pid), timeout=120)
+                for pid in [i for i in ids if i not in LAYOUT_SKIP_SWEEP]:
+                    call('%s sweep %s' % (tag, pid), LAYOUT_PART_LUA.format(scale=scale, fn='Panel', arg="'%s'" % pid), timeout=120)
         inst.lua("import('/lua/editor/gui/skin.lua').SetScale(1.0) import('/lua/editor/gui/shell.lua').ShowWorkspace('Terrain') return 'ok'")
     rep.add('layout', not problems, '%d widgets measured, %d problems' % (checked, len(problems)), sorted(set(problems)))
 
