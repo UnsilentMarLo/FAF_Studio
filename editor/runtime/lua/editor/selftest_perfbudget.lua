@@ -82,12 +82,12 @@ function Run()
     end
 
     -- ---- the pieces ------------------------------------------------------------------------------------------------------------------------------------
-    local n0, s0 = Sig.Sums(GetSystemTimeSeconds() + 1000)
+    local n0, x0s, z0s = Sig.Sums(GetSystemTimeSeconds() + 1000)
     local m = Map.GetMarker('PS_5')
     local x0 = m and m.position[1]
     if m then m.position[1] = x0 + 3 end
-    local n1, s1 = Sig.Sums(GetSystemTimeSeconds() + 2000)
-    Check(n0 == n1 and s0 ~= s1, 'the marker fingerprint sees a marker that moved')
+    local n1, x1s, z1s = Sig.Sums(GetSystemTimeSeconds() + 2000)
+    Check(n0 == n1 and x0s ~= x1s, 'the marker fingerprint sees a marker that moved')
     if m then m.position[1] = x0 end
     local a = Units.CachedAll()
     local b = Units.CachedAll()

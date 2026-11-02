@@ -42,7 +42,7 @@ local areaKeys = {}       -- area name -> key string
 local fpKeys = {}         -- resource marker name -> key string
 local iconKeys = {}       -- marker name -> { x, y, z, tint, path }
 local selKeys = {}        -- selected marker name -> { x, y, z }
-local handleKey = ''
+local handleKeyT = { false, 0, 0, 0, 0, 0, 0 }    -- what the area handles were laid for
 local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 -- The overlay's own "the ground may have changed" counter, `groundEpoch`. TerrainEpoch.Epoch moves on every history step and every 5 seconds as a net, and each move laid every area
 -- outline and resource footprint onto the terrain again (a 50-70 ms hitch with 600 resource markers and 40 areas, every 5 s). The ground really changes with the history (a stroke,
@@ -474,7 +474,7 @@ local function LabelCandidates(view, zoomedIn, now)
     local hov = Tools.Hover
     local hovKind, hovName = hov.kind, hov.name
     LC.changed, LC.hover, LC.doc, LC.epoch, LC.zoomed, LC.at = Tools.Changed, Tools.HoverRev, Map.Doc, groundEpoch, zoomedIn, now
-    LC.sumA, LC.sumB = Mod('markersig', '/lua/editor/markersig.lua').Sums(now)
+    LC.sumA, LC.sumB, LC.sumC = Mod('markersig', '/lua/editor/markersig.lua').Sums(now)
     local bx0, bx1, bz0, bz1
     if zoomedIn then
         bx0, bx1, bz0, bz1 = LabelBounds(view)
@@ -590,8 +590,8 @@ local function UpdateLabels(view, px)
         and LC.zoomed == zoomedIn
     if candidatesSame and now - LC.at >= 1 then
         -- the net (a writer that announces nothing): once a second a sum over the positions, a rebuild only when it moved
-        local a, b = Mod('markersig', '/lua/editor/markersig.lua').Sums(now)
-        if a == LC.sumA and b == LC.sumB then LC.at = now else candidatesSame = false end
+        local a, b, c = Mod('markersig', '/lua/editor/markersig.lua').Sums(now)
+        if a == LC.sumA and b == LC.sumB and c == LC.sumC then LC.at = now else candidatesSame = false end
     end
     if candidatesSame and zoomedIn and not LC.all then
         -- the view must still lie inside the rectangle the candidates cover
@@ -870,20 +870,23 @@ local function Handles(view, px)
     if a and a.rectangle then
         local r = a.rectangle
         local s = 4 * px
-        -- (8 squares of 4 terrain reads each, only when the rectangle, the zoom or the ground changed)
-        local key = string.format('%s|%.2f|%.2f|%.2f|%.2f|%.4f|%d', handleArea, r[1], r[2], r[3], r[4], s, groundEpoch)
-        local same = (key == handleKey) and handleCount == 8
-        handleKey = key
-        for _, h in Tools.HandlesOf(r) do
-            count = count + 1
-            if not same then
+        -- (8 squares of 4 terrain reads each, only when the rectangle, the zoom or the ground changed; the key is compared field by field, and the handle list is not even made
+        -- when nothing changed: it was a string and 8 tables per frame)
+        local k = handleKeyT
+        local same = handleCount == 8 and k[1] == handleArea and k[2] == r[1] and k[3] == r[2] and k[4] == r[3] and k[5] == r[4] and k[6] == s and k[7] == groundEpoch
+        if same then
+            count = 8
+        else
+            k[1], k[2], k[3], k[4], k[5], k[6], k[7] = handleArea, r[1], r[2], r[3], r[4], s, groundEpoch
+            for _, h in Tools.HandlesOf(r) do
+                count = count + 1
                 local pts = {}
                 Push(pts, h.x - s, h.z - s) Push(pts, h.x + s, h.z - s) Push(pts, h.x + s, h.z + s) Push(pts, h.x - s, h.z + s)
                 Line(nil, 'ah' .. count, pts, 'FFFFFF', 0.2, 2, 4, true)
             end
         end
     else
-        handleKey = ''
+        handleKeyT[1] = false
     end
     for i = count + 1, handleCount do
         Remove('ah' .. i)
@@ -1519,7 +1522,8 @@ local function ForgetIds()
     rulerKey = ''
     gizmoIds = {}
     gizmoKeys = {}
-    areaKeys, fpKeys, iconKeys, selKeys, handleKey = {}, {}, {}, {}, ''
+    areaKeys, fpKeys, iconKeys, selKeys = {}, {}, {}, {}
+    handleKeyT[1] = false
     lastHover, lastEpoch = -1, -1
     selSetAt = -1
     LabelsForget()

@@ -376,7 +376,7 @@ end
 local sigChanged, sigHistory, sigAt = -1, -1, 0
 local toolsMod = false
 local Sig = import('/lua/editor/markersig.lua')
-local sigFullAt, sigA, sigB = 0, -1, -1
+local sigFullAt, sigA, sigB, sigC = 0, -1, -1, -1
 
 function Update()
     if not Map.Doc then return end
@@ -391,12 +391,12 @@ function Update()
     local due = changed ~= sigChanged or History.Version ~= sigHistory or clock - sigFullAt >= 10
     if not due and clock - sigAt >= 1 then
         sigAt = clock
-        local a, b = Sig.Sums(clock)
-        if a ~= sigA or b ~= sigB then due = true end
+        local a, b, c = Sig.Sums(clock)
+        if a ~= sigA or b ~= sigB or c ~= sigC then due = true end
     end
     if due then
         sigChanged, sigHistory, sigAt, sigFullAt = changed, History.Version, clock, clock
-        sigA, sigB = Sig.Sums(clock)
+        sigA, sigB, sigC = Sig.Sums(clock)
         if SignatureMoved() then
             dirty = true
             quiet = 0

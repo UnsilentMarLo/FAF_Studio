@@ -35,7 +35,7 @@ local Tools = import('/lua/editor/tools.lua')
 local syncedEpoch, seenChanged = -1, -1      -- what the last height sync and the last walk over the markers were done for
 local filterMod = false
 local Sig = import('/lua/editor/markersig.lua')
-local fullAt, sigA, sigB = 0, 0, 0              -- the clock of the last full walk over the markers, and the fingerprint of the positions it saw
+local fullAt, sigA, sigB, sigC = 0, 0, 0, 0              -- the clock of the last full walk over the markers, and the fingerprint of the positions it saw
 local Perf = import('/lua/editor/perf.lua')
 local SYNC_SLICE = 400                      -- markers whose height is synced per frame
 local syncMoved = false                      -- a height moved in the pass under way
@@ -325,13 +325,13 @@ function Update()
     local walk = synced or changed ~= seenChanged or clock - fullAt >= 10
     if not walk and clock - netAt >= 1 then
         netAt = clock
-        local a, b = Sig.Sums(clock)
-        if a ~= sigA or b ~= sigB then walk = true end
+        local a, b, c = Sig.Sums(clock)
+        if a ~= sigA or b ~= sigB or c ~= sigC then walk = true end
     end
     if not walk then return end
     fullAt = clock
     netAt = clock
-    sigA, sigB = Sig.Sums(clock)
+    sigA, sigB, sigC = Sig.Sums(clock)
     seenChanged = changed
     local tWalk = Perf.Begin()
     if not filterMod then filterMod = import('/lua/editor/markerfilter.lua') end
