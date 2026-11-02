@@ -39,11 +39,10 @@ function CopyDiagnostics()
     Say('diagnostics saved as ' .. file .. (clip and ' and copied to the clipboard' or ''))
     local c = Skin.color
     local d = Dialog.Open('Diagnostics', 560, 170)
-    d:Label(clip and 'The diagnostics are on the clipboard and in this file:' or 'The diagnostics are in this file; attach it to your bug report:', 14, 40, { color = c.text })
-    local label = d:Label(file, 14, 64, { color = c.textDim, size = 'small' })
-    W.Fit(label, file, d.width - Skin.S(28))
-    d:Label('Version, settings, open map, monitors, the end of the log and the newest crash report.', 14, 90, { color = c.textDim, size = 'small' })
-    d:Button('OK', 14, 124, 100, 28, function() Dialog.Close() end)
+    local y = d:Text(clip and 'The diagnostics are on the clipboard and in this file:' or 'The diagnostics are in this file; attach it to your bug report:', 14, 36, { color = c.text })
+    local label = d:Label(file, 14, y + 4, { color = c.textDim, size = 'small' })
+    y = d:Text('Version, settings, open map, monitors, the end of the log and the newest crash report.', 14, y + 28, { color = c.textDim, size = 'small' })
+    d:Flow({ { d:Button('OK', 0, 0, 100, 28, function() Dialog.Close() end), 100 } }, y + 10, 28)
 end
 
 -- ---- autosave offer ----------------------------------------------------------------------------------------------------------------------
@@ -59,18 +58,18 @@ local function AutosaveOffer(done)
     local c = Skin.color
     local d = Dialog.Open('Unsaved work from the last session', 520, 170, function() if done then done() end end)
     local name = (pending.map and pending.map ~= '') and ("'" .. pending.map .. "'") or 'a map'
-    d:Label('The editor was closed (or stopped) with unsaved changes. An autosave of ' .. name, 14, 40, { color = c.text })
-    d:Label('is available. Restore it now?', 14, 60, { color = c.text })
-    d:Button('Restore it', 14, 120, 120, 28, function()
+    local y = d:Text('The editor was closed (or stopped) with unsaved changes. An autosave of ' .. name .. ' is available. Restore it now?', 14, 36, { color = c.text })
+    local restore = d:Button('Restore it', 0, 0, 120, 28, function()
         d.onClose = nil
         Dialog.Close()
         Maps.Recover()
     end)
-    d:Button('Ask me later', 144, 120, 120, 28, function() Dialog.Close() end)
-    d:Button('Discard it', 274, 120, 120, 28, function()
+    local later = d:Button('Ask me later', 0, 0, 120, 28, function() Dialog.Close() end)
+    local discard = d:Button('Discard it', 0, 0, 120, 28, function()
         Crash.ClearAutosave()
         Dialog.Close()
     end)
+    d:Flow({ { restore, 120 }, { later, 120 }, { discard, 120 } }, y + 14, 28)
 end
 
 -- ---- crash notice ------------------------------------------------------------------------------------------------------------------------
@@ -88,14 +87,13 @@ local function CrashNotice(done)
         Crash.MarkSeen(fresh)
         if done then done() end
     end)
-    d:Label('Last time FAF Studio ended with an error. The engine wrote a crash report:', 14, 40, { color = c.text })
+    local y = d:Text('Last time FAF Studio ended with an error. The engine wrote a crash report:', 14, 36, { color = c.text })
     local path = Crash.ReportPath(newest)
-    local label = d:Label(path, 14, 64, { color = c.textDim, size = 'small' })
-    W.Fit(label, path, d.width - Skin.S(28))
-    d:Label('Please send it with a short description of what you were doing. Your work is not lost:', 14, 92, { color = c.text })
-    d:Label('if the editor autosaved, the next window offers to restore it.', 14, 112, { color = c.text })
-    d:Button('Save diagnostics', 14, 176, 160, 28, function() CopyDiagnostics() end)
-    d:Button('Continue', 184, 176, 110, 28, function() Dialog.Close() end)
+    d:Label(path, 14, y + 4, { color = c.textDim, size = 'small' })
+    y = d:Text('Please send it with a short description of what you were doing. Your work is not lost: if the editor autosaved, the next window offers to restore it.', 14, y + 28, { color = c.text })
+    local save = d:Button('Save diagnostics', 0, 0, 160, 28, function() CopyDiagnostics() end)
+    local continue = d:Button('Continue', 0, 0, 110, 28, function() Dialog.Close() end)
+    d:Flow({ { save, 160 }, { continue, 110 } }, y + 14, 28)
 end
 
 function Notices(done)
@@ -109,15 +107,15 @@ Commands.Register{ id = 'help.diagnostics', title = 'Help: save diagnostics for 
 local function ResetSettings()
     local d = Dialog.Open('Reset user settings', 520, 190)
     local c = Skin.color
-    d:Label('This clears your layouts, UI size, hotkeys, recent maps and tool settings.', 14, 40, { color = c.text })
-    d:Label('Your maps, mod projects and backups are not affected.', 14, 60, { color = c.text })
-    d:Label('User folder: ' .. UserData.Dir(), 14, 86, { color = c.textDim, size = 'small' })
-    d:Button('Reset', 14, 140, 110, 28, function()
+    local y = d:Text('This clears your layouts, UI size, hotkeys, recent maps and tool settings. Your maps, mod projects and backups are not affected.', 14, 36, { color = c.text })
+    y = d:Text('User folder: ' .. UserData.Dir(), 14, y + 8, { color = c.textDim, size = 'small' })
+    local reset = d:Button('Reset', 0, 0, 110, 28, function()
         local cleared = UserData.Reset()
         Dialog.Close()
         Say('user settings reset (' .. table.getn(cleared) .. ' files): restart the editor to start from the defaults')
     end)
-    d:Button('Cancel', 134, 140, 110, 28, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 110, 28, function() Dialog.Close() end)
+    d:Flow({ { reset, 110 }, { cancel, 110 } }, y + 14, 28)
 end
 
 Commands.Register{ id = 'help.reset_settings', title = 'Help: reset user settings...', run = function() ResetSettings() end }

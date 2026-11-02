@@ -103,7 +103,7 @@ local function Rect(e)
     -- a control a scroll cull parked off screen: its own place (relative to the group it belongs to) is what is measured
     local lx, ly = o.layX, o.layY
     local okP, pl, pt = pcall(function() return parent.Left(), parent.Top() end)
-    if okP and lx and ly and (t < -5000 or l < -5000) then
+    if okP and lx and ly and ((t < -5000 and o.culledY) or (l < -5000 and o.culledX)) then
         local w, h = r - l, b - t
         if h < 0 then h = 0 end
         l, t = pl + lx, pt + ly
@@ -214,7 +214,8 @@ end
 local function Stuff(entries)
     local n = 0
     for _, e in entries do
-        if e.label then
+        local okP, parent = pcall(function() return e.label and e.label:GetParent() end)
+        if e.label and okP and parent and not IsBitmap(parent) then          -- (the text of a button or a list row is the owner's to fill)
             local ok, text = pcall(function() return e.label:GetText() end)
             if ok and text == '' then
                 local okS = pcall(function() e.label:SetText(LONG) end)
@@ -234,7 +235,15 @@ local function Counted(entries)
 end
 
 --- The widgets of a panel and of the dialogs its buttons open.
+--- Panels that only live in a window of their own (Settings): opening one here creates a second native window, which the engine of this machine does not survive (access violation
+--- in the first frame, seen with the layout instance); they are not measured.
+local function WindowOnly(panelId)
+    local def = import('/lua/editor/gui/panels.lua').Get(panelId)
+    return def and def.windowOnly
+end
+
 function Panel(panelId)
+    if WindowOnly(panelId) then return 0, {} end
     local problems, n, seen = {}, 0, {}
     local function Collect(entries, where)
         n = n + Counted(entries)
@@ -256,6 +265,7 @@ end
 
 --- Shows the panel without pressing anything (the layout of the panel alone) -> widgets checked, list of problems. `where` names the scale.
 function PanelOnly(panelId, where)
+    if WindowOnly(panelId) then return 0, {} end
     local W = import('/lua/editor/gui/widgets.lua')
     local Shell = import('/lua/editor/gui/shell.lua')
     local list = {}
@@ -323,7 +333,7 @@ function Dialogs(long)
         { 'Mirror', function() import('/lua/editor/gui/dialogs_mirror.lua').Open() end },
         { 'Texture browser', function() import('/lua/editor/gui/browser.lua').OpenTextures{ sources = { { '/env', '*_albedo.dds' } } } end },
         { 'Name browser', function() import('/lua/editor/gui/browser.lua').OpenNames{ title = 'Names', names = names } end },
-        { 'Diagnostics', function() import('/lua/editor/gui/feature_crash.lua').CopyDiagnostics() end },
+        { 'Diagnostics', function() import('/lua/editor/gui/commands.lua').Run('help.diagnostics') end },
         { 'Reset settings', function() import('/lua/editor/gui/commands.lua').Run('help.reset_settings') end },
         { 'Add a node', function() DX.AddNode(1, 'ready') end },
         { 'Edit a node', function() DX.EditNode(1, 'ready', { 1 }) end },
@@ -410,31 +420,35 @@ function Resize(name, scale)
     local problems, n = {}, 0
     local ok, err = pcall(function()
         Skin.SetScale(scale or 1)
+        local first = {}
+        W.tracking = first
         Shell.ShowWorkspace(name)
+        W.tracking = false
         local main = Shell.S.main
         local x, y, w, h = main.x, main.y, main.w, main.h
-        local list = {}
-        W.tracking = list
+        -- what is measured after each change: the controls of the first layout (the panels place them again) and the ones built meanwhile
+        local function Look(what, change)
+            local fresh = {}
+            W.tracking = fresh
+            change()
+            W.tracking = false
+            local all = {}
+            for _, e in first do table.insert(all, e) end
+            for _, e in fresh do table.insert(all, e) end
+            n = n + Counted(all)
+            for _, p in Analyze(all, tag .. ' ' .. what) do table.insert(problems, p) end
+        end
         -- a smaller window
-        main:SetRect(x, y, math.floor(w * 0.7), math.floor(h * 0.8))
-        W.tracking = false
-        n = n + Counted(list)
-        for _, p in Analyze(list, tag .. ' smaller window') do table.insert(problems, p) end
-        -- the narrowest docks
-        list = {}
-        W.tracking = list
-        Splits(main.tree, function(s) if s.dir == 'row' then s.ratio = 0.02 else s.ratio = 0.02 end end)
-        main:Layout()
-        W.tracking = false
-        n = n + Counted(list)
-        for _, p in Analyze(list, tag .. ' narrowest docks') do table.insert(problems, p) end
-        list = {}
-        W.tracking = list
-        Splits(main.tree, function(s) s.ratio = 0.98 end)
-        main:Layout()
-        W.tracking = false
-        n = n + Counted(list)
-        for _, p in Analyze(list, tag .. ' widest first docks') do table.insert(problems, p) end
+        Look('smaller window', function() main:SetRect(x, y, math.floor(w * 0.7), math.floor(h * 0.8)) end)
+        -- the narrowest docks: every split pulled to its end
+        Look('narrowest docks', function()
+            Splits(main.tree, function(s) s.ratio = 0.02 end)
+            main:Layout()
+        end)
+        Look('widest first docks', function()
+            Splits(main.tree, function(s) s.ratio = 0.98 end)
+            main:Layout()
+        end)
     end)
     W.tracking = false
     if not ok then table.insert(problems, tag .. ': resize test failed: ' .. tostring(err)) end

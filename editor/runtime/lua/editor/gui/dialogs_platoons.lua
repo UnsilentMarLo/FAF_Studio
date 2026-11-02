@@ -24,20 +24,21 @@ local function Condition(army, name, index, done)
     local d = Dialog.Open('Build condition ' .. index .. ' of ' .. name, 520, 230)
     local col = Skin.color
     d:Label('File', 14, 40, { color = col.textDim })
-    local file = d:Field(110, 36, 396, 22, { text = tostring(c[1] or '') })
+    local file = d:Field(110, 36, d:Span(110), 22, { text = tostring(c[1] or '') })
     d:Label('Function', 14, 74, { color = col.textDim })
-    local fn = d:Field(110, 70, 396, 22, { text = tostring(c[2] or '') })
+    local fn = d:Field(110, 70, d:Span(110), 22, { text = tostring(c[2] or '') })
     d:Label('Arguments', 14, 108, { color = col.textDim })
-    local args = d:Field(110, 104, 396, 22, { text = PL.ArgsToText(c[3]) })
-    d:Label('Arguments are separated by commas, e.g. MAIN, 4 (the condition function gets them after the AI brain).', 14, 136, { color = col.textDim, size = 'small' })
-    d:Button('OK', 14, 190, 90, 28, function()
+    local args = d:Field(110, 104, d:Span(110), 22, { text = PL.ArgsToText(c[3]) })
+    local hintBottom = d:Text('Arguments are separated by commas, e.g. MAIN, 4 (the condition function gets them after the AI brain).', 14, 136, { color = col.textDim, size = 'small' })
+    local ok = d:Button('OK', 0, 0, 90, 28, function()
         if file:GetText() ~= tostring(c[1] or '') then PL.SetCondition(army, name, index, 'file', file:GetText()) end
         if fn:GetText() ~= tostring(c[2] or '') then PL.SetCondition(army, name, index, 'fn', fn:GetText()) end
         if args:GetText() ~= PL.ArgsToText(c[3]) then PL.SetCondition(army, name, index, 'args', args:GetText()) end
         Dialog.Close()
         done()
     end)
-    d:Button('Cancel', 114, 190, 90, 28, function() Dialog.Close() done() end)
+    local cancel = d:Button('Cancel', 0, 0, 90, 28, function() Dialog.Close() done() end)
+    d:Flow({ { ok, 90 }, { cancel, 90 } }, math.max(190, hintBottom + 14), 28)
     fn:AcquireFocus()
 end
 
@@ -53,7 +54,7 @@ function EditBuilder(army, name, onClose)
 
     -- template
     d:Label('Platoon template', 14, 44, { color = c.textDim })
-    local template = d:Button(tostring(b().PlatoonTemplate ~= '' and b().PlatoonTemplate or '(choose)'), 140, 40, 400, 24, function(self)
+    local template = d:Button(tostring(b().PlatoonTemplate ~= '' and b().PlatoonTemplate or '(choose)'), 140, 40, math.min(400, d:Span(140)), 24, function(self)
         local D = import('/lua/editor/gui/dialogs_mission.lua')
         D.PickName('Platoon template', PL.PlatoonNames(), b().PlatoonTemplate, function(t)
             PL.SetBuilder(army, name, 'PlatoonTemplate', t)
@@ -75,7 +76,7 @@ function EditBuilder(army, name, onClose)
         local s = W.Slider(d.group, { label = label, min = min, max = max, step = step, fmt = '%d', compact = true, curve = curve,
             get = function() return tonumber(b()[key]) or min end,
             set = function(v) PL.SetBuilder(army, name, key, v, true) end })
-        s:Place(Skin.S(x), Skin.S(y), Skin.S(w))
+        s:Place(Skin.S(x), Skin.S(y), Skin.S(math.min(w, d:Span(x))))
         for _, ctl in { s.label, s.track, s.fill, s.thumb, s.minus, s.plus } do d:Raise(ctl) end
         d:Raise(s.field) d:Raise(s.field.frame)
         return s
@@ -85,14 +86,14 @@ function EditBuilder(army, name, onClose)
     Slider('Time-out in seconds (-1 = automatic)', 'BuildTimeOut', -1, 600, 1, 14, 158, 250)
 
     d:Label('Location', 290, 164, { color = c.textDim })
-    local loc = d:Field(350, 160, 190, 22, { text = tostring(b().LocationType or 'MAIN'),
+    local loc = d:Field(350, 160, math.min(190, d:Span(350)), 22, { text = tostring(b().LocationType or 'MAIN'),
         onEnter = function(text) PL.SetBuilder(army, name, 'LocationType', text) end })
 
     -- AI function
     local ai = b().PlatoonAIFunction or { '', '' }
     d:Label('Platoon AI', 14, 212, { color = c.textDim })
-    local aiFile = d:Field(100, 208, 280, 22, { text = tostring(ai[1] or ''), onEnter = function(text) PL.SetBuilder(army, name, 'AIFile', text) end })
-    local aiFn = d:Field(388, 208, 152, 22, { text = tostring(ai[2] or ''), onEnter = function(text) PL.SetBuilder(army, name, 'AIFunction', text) end })
+    local aiFile = d:Field(100, 208, math.min(280, math.floor(d:Span(100) * 0.65)), 22, { text = tostring(ai[1] or ''), onEnter = function(text) PL.SetBuilder(army, name, 'AIFile', text) end })
+    local aiFn = d:Field(100 + math.min(280, math.floor(d:Span(100) * 0.65)) + 8, 208, d:Span(100 + math.min(280, math.floor(d:Span(100) * 0.65)) + 8), 22, { text = tostring(ai[2] or ''), onEnter = function(text) PL.SetBuilder(army, name, 'AIFunction', text) end })
     d:Label('file (e.g. /lua/ScenarioPlatoonAI.lua) and function', 100, 232, { color = c.textDim, size = 'small' })
 
     -- build conditions
@@ -118,21 +119,24 @@ function EditBuilder(army, name, onClose)
         onSelect = function(index) state.cond = index list:Refresh() end,
         bgColor = c.panelAlt,
     })
-    list:SetRect(Skin.S(14), Skin.S(284), Skin.S(526), Skin.S(130))
-    d:Button('Add...', 14, 422, 80, 26, function()
+    local lx, ly, lw, lh = d:Room(14, 284, 526, 130, 120)
+    list:SetRect(lx, ly, lw, lh)
+    local below = math.floor((ly + lh) / math.max(0.5, Skin.scale) + 0.5) + 8
+    local add = d:Button('Add...', 0, 0, 80, 26, function()
         local n = PL.AddCondition(army, name, '/lua/editor/miscbuildconditions.lua', '', '')
         state.cond = n
         Condition(army, name, n, Reopen)
     end)
-    d:Button('Edit...', 104, 422, 80, 26, function()
+    local edit = d:Button('Edit...', 0, 0, 80, 26, function()
         if (b().BuildConditions or {})[state.cond] then Condition(army, name, state.cond, Reopen) end
     end)
-    d:Button('Remove', 194, 422, 80, 26, function()
+    local remove = d:Button('Remove', 0, 0, 80, 26, function()
         if PL.RemoveCondition(army, name, state.cond) then state.cond = math.max(1, state.cond - 1) end
         list:Refresh()
     end)
-    d:Label('Priority and conditions decide when the campaign AI forms the platoon; an AI function runs on it once it exists.', 14, 456, { color = c.textDim, size = 'small' })
-    d:Button('Done', 14, 482, 100, 28, function()
+    local rowBottom = d:Flow({ { add, 80 }, { edit, 80 }, { remove, 80 } }, below, 26)
+    local noteBottom = d:Text('Priority and conditions decide when the campaign AI forms the platoon; an AI function runs on it once it exists.', 14, rowBottom + 8, { color = c.textDim, size = 'small' })
+    local done = d:Button('Done', 0, 0, 100, 28, function()
         local cur = b()
         local curAi = cur and cur.PlatoonAIFunction or {}
         if cur and loc:GetText() ~= tostring(cur.LocationType or 'MAIN') then PL.SetBuilder(army, name, 'LocationType', loc:GetText()) end
@@ -140,4 +144,5 @@ function EditBuilder(army, name, onClose)
         if cur and aiFn:GetText() ~= tostring(curAi[2] or '') then PL.SetBuilder(army, name, 'AIFunction', aiFn:GetText()) end
         Dialog.Close()
     end)
+    d:Flow({ { done, 100 } }, noteBottom + 8, 28)
 end

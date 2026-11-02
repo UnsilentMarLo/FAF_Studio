@@ -90,7 +90,7 @@ end
 function Open()
     if not Opts then Reset() end
     local c = Skin.color
-    local d = Dialog.Open('Import mesh: turns an OBJ file into terrain patches of the mesh map (old patch files stay on disk)', 640, 560)
+    local d = Dialog.Open('Import mesh: turns an OBJ file into terrain patches of the mesh map (old patch files stay on disk)', 640, 590)
 
     d:Label('OBJ file (full path, or relative to the map folder)', 14, 30, { color = c.textDim })
     local field = d:Field(14, 50, 612, 22, { text = Path, onChange = function(t) Path = t end })
@@ -111,46 +111,45 @@ function Open()
         buttons[Opts[key]]:SetOn(true)
         return buttons
     end
-    local function Toggle(label, x, y, w, key)
-        local b = d:Button(label, x, y, w, 22, function(self) Opts[key] = self.on end, { toggle = true })
+    local function Toggle(label, w, key)
+        local b = d:Button(label, 0, 0, w, 22, function(self) Opts[key] = self.on end, { toggle = true })
         b:SetOn(Opts[key] and true or false)
-        return b
+        return { b, w }
     end
     Choice('Up axis', 14, 82, 'axis', { 'y_up', 'z_up' }, { 'Y up', 'Z up' })
-    Toggle('Mirror X', 330, 82, 74, 'mirrorX')
-    Toggle('Mirror Z', 408, 82, 74, 'mirrorZ')
-    Toggle('Flip faces', 486, 82, 84, 'flipWinding')
-    Toggle('Flip V', 574, 82, 52, 'flipV')
-    Choice('Normals', 14, 110, 'normals', { 'auto', 'smooth', 'flat' }, { 'File / auto', 'Smooth', 'Flat' })
-    Choice('Light mask uv', 14, 138, 'uv2', { 'planar', 'copy' }, { 'Over map', 'Copy uv' })
-    Choice('Materials by', 14, 166, 'groupBy', { 'material', 'object', 'none' }, { 'usemtl', 'o / g', 'One' })
+    -- the four toggles share the row on their own row
+    d:Flow({ Toggle('Mirror X', 74, 'mirrorX'), Toggle('Mirror Z', 74, 'mirrorZ'), Toggle('Flip faces', 84, 'flipWinding'), Toggle('Flip V', 52, 'flipV') }, 110, 22, 14)
+    Choice('Normals', 14, 138, 'normals', { 'auto', 'smooth', 'flat' }, { 'File / auto', 'Smooth', 'Flat' })
+    Choice('Light mask uv', 14, 166, 'uv2', { 'planar', 'copy' }, { 'Over map', 'Copy uv' })
+    Choice('Materials by', 14, 194, 'groupBy', { 'material', 'object', 'none' }, { 'usemtl', 'o / g', 'One' })
 
     local function Slider(label, key, min, max, step, fmt, x, y, curve)
         local s = W.Slider(d.group, { label = label, min = min, max = max, step = step, fmt = fmt, compact = true, curve = curve,
             get = function() return Opts[key] end, set = function(v) Opts[key] = v end })
-        s:Place(Skin.S(x), Skin.S(y), Skin.S(290))
+        s:Place(Skin.S(x), Skin.S(y), Skin.S(math.min(290, d:Span(x))))
         Raise(d, s)
         return s
     end
-    Slider('Scale (OBJ unit to world unit)', 'scale', 0.01, 100, 0.01, '%.2f', 14, 198, 3)
-    Slider('Height offset (world units)', 'offsetY', -200, 300, 0.5, '%.1f', 326, 198)
-    Slider('Offset X', 'offsetX', -2000, 5000, 1, '%d', 14, 250)
-    Slider('Offset Z', 'offsetZ', -2000, 5000, 1, '%d', 326, 250)
-    Slider('Texture repeat when the file has no uv (units)', 'uvTile', 4, 512, 4, '%d', 14, 302)
-    Slider('Patch tile (units)', 'tile', 32, 2048, 32, '%d', 326, 302)
-    Slider('Vertices per patch (at most 65,535)', 'limit', 1000, 65535, 1000, '%d', 14, 354)
-    local replace = d:Button('Replace the existing patches (their files stay on disk)', 326, 366, 300, 22, function(self) Replace = self.on end, { toggle = true })
+    Slider('Scale (OBJ unit to world unit)', 'scale', 0.01, 100, 0.01, '%.2f', 14, 226, 3)
+    Slider('Height offset (world units)', 'offsetY', -200, 300, 0.5, '%.1f', 326, 226)
+    Slider('Offset X', 'offsetX', -2000, 5000, 1, '%d', 14, 278)
+    Slider('Offset Z', 'offsetZ', -2000, 5000, 1, '%d', 326, 278)
+    Slider('Texture repeat when the file has no uv (units)', 'uvTile', 4, 512, 4, '%d', 14, 330)
+    Slider('Patch tile (units)', 'tile', 32, 2048, 32, '%d', 326, 330)
+    Slider('Vertices per patch (at most 65,535)', 'limit', 1000, 65535, 1000, '%d', 14, 382)
+    local replace = d:Button('Replace the existing patches (their files stay on disk)', 326, 394, 300, 22, function(self) Replace = self.on end, { toggle = true })
     replace:SetOn(Replace)
 
     local info = {}
-    for i = 1, 5 do info[i] = d:Label('', 14, 412 + (i - 1) * 16, { color = c.textDim, size = 'small' }) end
+    for i = 1, 5 do info[i] = d:Label('', 14, 440 + (i - 1) * 16, { color = c.textDim, size = 'small' }) end
     Show = function(lines)
         for i = 1, 5 do info[i]:SetText(lines[i] or '') end
     end
 
-    d:Button('Preview', 14, 516, 100, 28, function() Preview() end)
-    d:Button('Import', 124, 516, 100, 28, function() Import() end)
-    d:Button('Defaults', 234, 516, 100, 28, function() Reset() Dialog.Close() Open() end)
-    d:Button('Close', 344, 516, 100, 28, function() Dialog.Close() end)
+    local preview = d:Button('Preview', 0, 0, 100, 28, function() Preview() end)
+    local import = d:Button('Import', 0, 0, 100, 28, function() Import() end)
+    local defaults = d:Button('Defaults', 0, 0, 100, 28, function() Reset() Dialog.Close() Open() end)
+    local close = d:Button('Close', 0, 0, 100, 28, function() Dialog.Close() end)
+    d:Flow({ { preview, 100 }, { import, 100 }, { defaults, 100 }, { close, 100 } }, 544, 28)
     return d
 end

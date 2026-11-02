@@ -14,17 +14,18 @@ local Maps = import('/lua/editor/maps.lua')
 function Guard(proceed)
     if not Maps.Dirty() then proceed() return end
     local d = Dialog.Open('Unsaved changes', 420, 120)
-    d:Label('The open map has unsaved changes. What do you want to do?', 14, 38, { color = Skin.color.text })
-    d:Button('Save', 14, 78, 100, 26, function()
+    local y = d:Text('The open map has unsaved changes. What do you want to do?', 14, 34, { color = Skin.color.text })
+    local save = d:Button('Save', 0, 0, 100, 26, function()
         Dialog.Close()
         if Maps.Save() then proceed() end
     end)
-    d:Button('Discard', 124, 78, 100, 26, function()
+    local discard = d:Button('Discard', 0, 0, 100, 26, function()
         Dialog.Close()
         pcall(function() import('/lua/editor/crash.lua').ClearAutosave() end)
         proceed()
     end)
-    d:Button('Cancel', 234, 78, 100, 26, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 100, 26, function() Dialog.Close() end)
+    d:Flow({ { save, 100 }, { discard, 100 }, { cancel, 100 } }, y + 12, 26)
 end
 
 -- ---- new map ------------------------------------------------------------------------------------------------------------------------
@@ -36,26 +37,32 @@ function NewMap()
     local buttons = {}
     d:Label('Size', 14, 36, { color = c.textDim })
     local count = table.getn(Maps.Sizes)
-    local bw = math.floor((460 - 28 - (count - 1) * 6) / count)
+    local bw = math.floor((d:Span(14) - (count - 1) * 6) / count)
     local say
     local function Show()
         for j, b in buttons do b:SetOn(not state.custom and j == state.size) end
         if buttons.custom then buttons.custom:SetOn(state.custom) end
     end
+    local row = {}
     for i, s in Maps.Sizes do
         local index = i
-        buttons[i] = d:Button(string.gsub(s.label, ' km$', ''), 14 + (i - 1) * (bw + 6), 58, bw, 28, function()
+        buttons[i] = d:Button(string.gsub(s.label, ' km$', ''), 0, 0, bw, 28, function()
             state.size, state.custom = index, false
             Show()
         end, { toggle = true, tip = s.label .. ' (' .. s.samples .. ' x ' .. s.samples .. ' samples).' })
+        row[i] = { buttons[i], bw }
     end
-    buttons.custom = d:Button('Any size...', 14, 94, 120, 24, function()
+    local y = d:Flow(row, 58, 28) + 8
+    buttons.custom = d:Button('Any size...', 14, y, 120, 24, function()
         Dialog.Close()
         NewCustomMap()
     end, { tip = 'Any width and height from 1 to 80 km: the terrain of the next power of two with the playable area cut to your size.' })
-    say = d:Label('', 14, 126, { color = c.error, size = 'small' })
-    d:Label('Name', 14, 156, { color = c.textDim })
-    local name = d:Field(70, 152, 376, 22, { text = 'My map' })
+    y = y + 32
+    say = d:Label('', 14, y, { color = c.error, size = 'small' })
+    y = y + 30
+    d:Label('Name', 14, y + 4, { color = c.textDim })
+    local name = d:Field(70, y, math.min(376, d:Span(70)), 22, { text = 'My map' })
+    y = y + 54
     local function Create()
         local text = name:GetText()
         if text == '' then text = 'My map' end
@@ -66,8 +73,9 @@ function NewMap()
         Dialog.Close()
         Guard(function() Maps.New(state.size, text) end)
     end
-    d:Button('Create', 14, 206, 100, 26, Create)
-    d:Button('Cancel', 124, 206, 100, 26, function() Dialog.Close() end)
+    local create = d:Button('Create', 0, 0, 100, 26, Create)
+    local cancel = d:Button('Cancel', 0, 0, 100, 26, function() Dialog.Close() end)
+    d:Flow({ { create, 100 }, { cancel, 100 } }, y, 26)
     name.OnEnterPressed = function(self, text) Create() return true end
     Show()
     buttons[1]:SetOn(true)
@@ -109,7 +117,7 @@ function NewCustomMap()
         local ow, oh = math.floor(Skin.S(BOX) * plan.w / plan.terrain), math.floor(Skin.S(BOX) * plan.h / plan.terrain)
         local ox = math.floor((Skin.S(BOX) - ow) / 2)
         local oz = math.floor((Skin.S(BOX) - oh) / 2)
-        boxInner.Left:Set(boxOuter.Left() + ox) boxInner.Top:Set(boxOuter.Top() + oz)
+        boxInner.Left:Set(function() return boxOuter.Left() + ox end) boxInner.Top:Set(function() return boxOuter.Top() + oz end)
         boxInner.Width:Set(math.max(2, ow)) boxInner.Height:Set(math.max(2, oh))
         if squareButton then squareButton:SetOn(O.square) end
     end
@@ -125,7 +133,7 @@ function NewCustomMap()
     local function Row(label, key, x, y)
         local sl = W.Slider(d.group, { label = label, min = Maps.MIN_KM, max = Maps.MAX_KM, step = 0.1, curve = 2, fmt = '%.1f', compact = true,
             get = function() return O[key] end, set = function(v) Set(key, v) end })
-        sl:Place(Skin.S(x), Skin.S(y), Skin.S(230))
+        sl:Place(Skin.S(x), Skin.S(y), math.min(Skin.S(230), Skin.S(d:Span(x, 14))))
         for _, ctl in { sl.label, sl.track, sl.fill, sl.thumb, sl.minus, sl.plus } do d:Raise(ctl) end
         d:Raise(sl.field) d:Raise(sl.field.frame)
         table.insert(sliders, sl)
@@ -159,21 +167,20 @@ function NewCustomMap()
     boxOuter = Bitmap(d.group)
     d:Raise(boxOuter)
     boxOuter:SetSolidColor(c.panel)
-    boxOuter.Left:Set(d.group.Left() + Skin.S(360)) boxOuter.Top:Set(d.group.Top() + Skin.S(60))
-    boxOuter.Width:Set(Skin.S(BOX)) boxOuter.Height:Set(Skin.S(BOX))
+    W.Place(boxOuter, d.group, Skin.S(360), Skin.S(60), Skin.S(BOX), Skin.S(BOX))
     boxOuter:DisableHitTest()
     boxInner = Bitmap(d.group)
     boxInner.Depth:Set(function() return d.group.Depth() + 8 end)
     boxInner:SetSolidColor(c.accent)
     boxInner:DisableHitTest()
-    boxInner.Left:Set(boxOuter.Left()) boxInner.Top:Set(boxOuter.Top())
+    boxInner.Left:Set(function() return boxOuter.Left() end) boxInner.Top:Set(function() return boxOuter.Top() end)
     boxInner.Width:Set(Skin.S(BOX)) boxInner.Height:Set(Skin.S(BOX))
 
     info1 = d:Label('', 14, 296, { color = c.text })
     info2 = d:Label('', 14, 316, { color = c.textDim, size = 'small' })
     info3 = d:Label('', 14, 334, { color = c.textDim, size = 'small' })
     d:Label('Name', 14, 360, { color = c.textDim })
-    local name = d:Field(70, 356, 300, 22, { text = 'My map' })
+    local name = d:Field(70, 356, math.min(300, d:Span(70)), 22, { text = 'My map' })
     say = d:Label('', 14, 386, { color = c.error, size = 'small' })
     local function Create()
         local text = name:GetText()
@@ -191,8 +198,9 @@ function NewCustomMap()
             if not ok then pcall(function() import('/lua/editor/gui/shell.lua').Say('new map: ' .. tostring(err)) end) end
         end)
     end
-    d:Button('Create', 380, 356, 70, 26, Create)
-    d:Button('Cancel', 456, 356, 70, 26, function() Dialog.Close() end)
+    local create = d:Button('Create', 0, 0, 70, 26, Create)
+    local cancel = d:Button('Cancel', 0, 0, 70, 26, function() Dialog.Close() end)
+    d:Flow({ { create, 70 }, { cancel, 70 } }, 408, 26)
     name.OnEnterPressed = function(self, text) Create() return true end
     Redraw()
     name:AcquireFocus()
@@ -212,7 +220,7 @@ function OpenMap(opts)
     end
     local state = { shown = all }
     local list
-    local field = d:Field(14, 30, 530, 22, {
+    local field = d:Field(14, 30, d:Span(14), 22, {
         onChange = function(text)
             local f = string.lower(text or '')
             state.shown = {}
@@ -225,15 +233,15 @@ function OpenMap(opts)
         end,
         onEscape = function() Dialog.Close() end,
     })
-    d:Label(table.getn(all) .. ' maps' .. ((opts.userOnly and table.getn(all) == 0) and '   (the folder the game loads your own maps from has none yet)' or ''), 14, 446, { color = c.textDim, size = 'small' })
+    local countLine = d:Label(table.getn(all) .. ' maps' .. ((opts.userOnly and table.getn(all) == 0) and '   (the folder the game loads your own maps from has none yet)' or ''), 14, 446, { color = c.textDim, size = 'small' })
     list = W.VirtualList(d.group, {
         rowH = 22,
         extra = true,
         getCount = function() return table.getn(state.shown) end,
         bind = function(row, index)
             local m = state.shown[index]
-            row.extra:SetText(m.folder)
-            local ew = math.min(row.extra.Width(), Skin.S(220))
+            W.Fit(row.extra, m.folder, Skin.S(220))
+            local ew = row.extra.Width()
             W.Fit(row.text, m.name, math.max(Skin.S(40), row.bg.Width() - ew - Skin.S(30)))
             row.text:SetColor(c.text)
             row.extra:SetColor(c.textDim)
@@ -259,7 +267,10 @@ function OpenMap(opts)
             end
         end,
     })
-    list:SetRect(Skin.S(8), Skin.S(58), Skin.S(544), Skin.S(380))
+    local lx, ly, lw, lh = d:Room(8, 58, 544, 380, 30)
+    list:SetRect(lx, ly, lw, lh)
+    -- the count sits under the list (the list is as tall as the box allows)
+    W.Place(countLine, d.group, Skin.S(14), ly + lh + Skin.S(8))
     field:AcquireFocus()
 end
 
@@ -270,11 +281,11 @@ function MapInfo()
     local d = Dialog.Open('Map info', 480, 360)
     local c = Skin.color
     d:Label('Name', 14, 42, { color = c.textDim })
-    local name = d:Field(100, 38, 360, 22, { text = info.name })
+    local name = d:Field(100, 38, math.min(360, d:Span(100)), 22, { text = info.name })
     d:Label('Author', 14, 76, { color = c.textDim })
-    local author = d:Field(100, 72, 360, 22, { text = info.author })
+    local author = d:Field(100, 72, math.min(360, d:Span(100)), 22, { text = info.author })
     d:Label('Description', 14, 110, { color = c.textDim })
-    local desc = d:Field(100, 106, 360, 22, { text = info.description })
+    local desc = d:Field(100, 106, math.min(360, d:Span(100)), 22, { text = info.description })
     local sz = info.size
     d:Label('Size', 14, 144, { color = c.textDim })
     d:Label(sz and (tostring(sz[1]) .. ' x ' .. tostring(sz[2]) .. ' world units') or '', 100, 144, { color = c.text })
@@ -297,19 +308,21 @@ function MapInfo()
     local version = d:Field(100, 234, 80, 22, { text = tostring(info.version) })
     d:Label('No-rush radius', 14, 268, { color = c.textDim })
     local norush = d:Field(100, 264, 80, 22, { text = tostring(info.norush) })
-    d:Label('(units around each start position where enemies may not build in the first minutes; 0 = none)', 190, 268, { color = c.textDim, size = 'small' })
+    local hintBottom = d:Text('(units around each start position where enemies may not build in the first minutes; 0 = none)', 190, 268, { color = c.textDim, size = 'small' })
     local startsOn = info.starts
-    d:Label('Armies start', 14, 298, { color = c.textDim })
-    d:Button(startsOn and 'on the start positions' or 'anywhere', 100, 294, 200, 24, function(self)
+    local armyY = math.max(298, hintBottom + 6)
+    d:Label('Armies start', 14, armyY + 4, { color = c.textDim })
+    d:Button(startsOn and 'on the start positions' or 'anywhere', 100, armyY, 200, 24, function(self)
         startsOn = not startsOn
         self:SetText(startsOn and 'on the start positions' or 'anywhere')
     end)
-    d:Button('Apply', 14, 326, 100, 26, function()
+    local apply = d:Button('Apply', 0, 0, 100, 26, function()
         Maps.SetInfo({ name = name:GetText(), author = author:GetText(), description = desc:GetText(), type = mapType,
                        version = tonumber(version:GetText()), norush = tonumber(norush:GetText()), starts = startsOn })
         Dialog.Close()
     end)
-    d:Button('Cancel', 124, 326, 100, 26, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 100, 26, function() Dialog.Close() end)
+    d:Flow({ { apply, 100 }, { cancel, 100 } }, armyY + 32, 26)
     name:AcquireFocus()
 end
 
@@ -323,14 +336,14 @@ function LobbySlots()
     end
     if n == 0 then
         local d = Dialog.Open('Lobby slots', 420, 110)
-        d:Label('The map has no start positions yet. Use the Start position tool.', 14, 42, { color = Skin.color.text })
-        d:Button('Close', 14, 74, 100, 26, function() Dialog.Close() end)
+        local y = d:Text('The map has no start positions yet. Use the Start position tool.', 14, 38, { color = Skin.color.text })
+        d:Button('Close', 14, y + 12, 100, 26, function() Dialog.Close() end)
         return
     end
     local rows = math.min(n, 16)
     local d = Dialog.Open('Lobby slots: factions per start position', 460, 100 + rows * 28)
     local c = Skin.color
-    d:Label('Click a faction to remove it from the slot. A slot with all four factions is unrestricted.', 14, 40, { color = c.textDim, size = 'small' })
+    d:Text('Click a faction to remove it from the slot. A slot with all four factions is unrestricted.', 14, 40, { color = c.textDim, size = 'small' })
     local state = {}
     local names = { uef = 'UEF', aeon = 'Aeon', cybran = 'Cybran', seraphim = 'Seraphim' }
     for slot = 1, rows do
@@ -345,7 +358,7 @@ function LobbySlots()
             end)
         end
     end
-    d:Button('Apply', 14, 80 + rows * 28, 100, 26, function()
+    local apply = d:Button('Apply', 0, 0, 100, 26, function()
         for slot = 1, rows do
             local list = {}
             for _, key in Slots.Keys do if state[slot][key] then table.insert(list, key) end end
@@ -353,5 +366,6 @@ function LobbySlots()
         end
         Dialog.Close()
     end)
-    d:Button('Cancel', 124, 80 + rows * 28, 100, 26, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 100, 26, function() Dialog.Close() end)
+    d:Flow({ { apply, 100 }, { cancel, 100 } }, 80 + rows * 28, 26)
 end

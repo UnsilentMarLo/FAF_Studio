@@ -382,6 +382,11 @@ def step_tips(inst, rep):
 LAYOUT_SIZES = ('1920x1080', '1280x720')
 LAYOUT_SCALES = (1.0, 1.5, 2.0)
 LAYOUT_PANEL_SWEEPS = (('1280x720', 1.5), ('1280x720', 2.0))      # the panels are also pressed through (their dialogs are measured) at these
+LAYOUT_PANEL_ALONE = (('1920x1080', 1.0), ('1280x720', 1.5), ('1280x720', 2.0))      # every panel shown on its own at these (the workspaces only show the active tab of a stack)
+# Panels that start unit thumbnail rendering (assetthumbs.lua): the engine of this machine crashes in it (access violation in the first frames after the thumbnails, seen in the
+# editor log of the layout instance with the plain assets panel and with the unit browser), which would end the run. Their layout is seen in the workspaces that show them.
+LAYOUT_SKIP_PANELS = ()
+LAYOUT_QUIET_LUA = "import('/lua/editor/assetthumbs.lua').Pause(true) return import('/lua/editor/clicksweep.lua').Fixture()"      # no thumbnail renders while the layout is measured
 
 # {scale} {fn} {ids} {tag} {long}
 LAYOUT_WORKSPACES_LUA = r"""
@@ -432,15 +437,17 @@ def step_layout(inst, rep, exe=None, editor=None):
         problems.extend('%s %s' % (label, t.replace(NL, ' ')[:260]) for t in tail.split(' @@ ') if t.strip())
 
     def call(label, src, timeout=300):
+        began = time.time()
         try:
             add(label, inst.lua(src, timeout=timeout))
+            print('  layout %-34s %5.1f s, %d problems so far' % (label, time.time() - began, len(problems)), flush=True)
         except RuntimeError as e:
             problems.append('%s: %s' % (label, str(e)[:200]))
             if not inst.alive() or 'no answer' in str(e):
                 # a dead or hung editor: a fresh one for the rest (the failure above is kept)
                 inst.start(exe or 'main_x64_la_p2.exe', editor, size=inst.size)
                 try:
-                    inst.lua("return import('/lua/editor/clicksweep.lua').Fixture()")
+                    inst.lua(LAYOUT_QUIET_LUA)
                 except RuntimeError:
                     pass
 
@@ -449,18 +456,20 @@ def step_layout(inst, rep, exe=None, editor=None):
             inst.size = size
             inst.start(exe or 'main_x64_la_p2.exe', editor, size=size)
         try:
-            inst.lua("return import('/lua/editor/clicksweep.lua').Fixture()")
+            inst.lua(LAYOUT_QUIET_LUA)
         except RuntimeError as e:
             problems.append('%s: the fixture could not be built: %s' % (size, e))
             continue
-        ids = inst.lua(PANEL_LUA).split()
+        ids = [i for i in inst.lua(PANEL_LUA).split() if i not in LAYOUT_SKIP_PANELS]
         for scale in LAYOUT_SCALES:
             pct = int(scale * 100)
             tag = '%s@%d' % (size, pct)
             for fn in ('Workspace', 'Resize'):
                 call('%s %s' % (tag, fn.lower()), LAYOUT_WORKSPACES_LUA.format(fn=fn, scale=scale))
-            # every panel on its own (shown, not pressed), then the dialogs and the bars
-            call('%s panel' % tag, LAYOUT_PANELS_LUA.format(scale=scale, pct=pct, ids=', '.join("'%s'" % i for i in ids)), timeout=600)
+            # every panel on its own (shown, not pressed), in chunks (a panel that hangs costs its chunk, not the run), then the dialogs and the bars
+            if (size, scale) in LAYOUT_PANEL_ALONE:
+                for k in range(0, len(ids), 10):
+                    call('%s panel' % tag, LAYOUT_PANELS_LUA.format(scale=scale, pct=pct, ids=', '.join("'%s'" % i for i in ids[k:k + 10])), timeout=240)
             for fn, arg, label in (('Dialogs', 'false', 'dialogs'), ('Dialogs', 'true', 'dialogs (long text)'), ('Shell', '', 'bars')):
                 call('%s %s' % (tag, label), LAYOUT_PART_LUA.format(scale=scale, fn=fn, arg=arg), timeout=600)
             if (size, scale) in LAYOUT_PANEL_SWEEPS:

@@ -15,6 +15,13 @@ local function Say(text)
     pcall(function() import('/lua/editor/ui.lua').Say(text) end)
 end
 
+--- A list in a dialog at the designed place, as tall and wide as the box allows (`below`: the logical room kept under it for what follows) -> the logical y below it.
+local function ListIn(d, list, x, y, w, h, below)
+    local sx, sy, sw, sh = d:Room(x, y, w, h, below)
+    list:SetRect(sx, sy, sw, sh)
+    return math.floor((sy + sh) / math.max(0.5, Skin.scale) + 0.5) + 8
+end
+
 local function Copy(t)
     if type(t) ~= 'table' then return t end
     local c = {}
@@ -33,7 +40,7 @@ function PickName(title, names, current, done)
     local c = Skin.color
     local state = { shown = names }
     local list
-    local field = d:Field(14, 30, 352, 22, {
+    local field = d:Field(14, 30, d:Span(14), 22, {
         onChange = function(text)
             local f = string.lower(text or '')
             state.shown = {}
@@ -60,7 +67,7 @@ function PickName(title, names, current, done)
             if n then Dialog.Close() done(n) end
         end,
     })
-    list:SetRect(Skin.S(8), Skin.S(58), Skin.S(364), Skin.S(316))
+    ListIn(d, list, 8, 58, 364, 316, 8)
     if table.getn(names) == 0 then d:Label('Nothing to choose from yet.', 14, 70, { color = c.textDim }) end
     field:AcquireFocus()
 end
@@ -88,28 +95,30 @@ function PickMulti(title, names, current, done)
             if n then chosen[n] = not chosen[n] list:Refresh() end
         end,
     })
-    list:SetRect(Skin.S(8), Skin.S(30), Skin.S(364), Skin.S(340))
+    local below = ListIn(d, list, 8, 30, 364, 340, 44)
     if table.getn(names) == 0 then d:Label('Nothing to choose from yet.', 14, 42, { color = c.textDim }) end
-    d:Button('Done', 14, 384, 100, 26, function()
+    local ok = d:Button('Done', 0, 0, 100, 26, function()
         local result = {}
         for _, n in names do if chosen[n] then table.insert(result, n) end end
         Dialog.Close()
         done(result)
     end)
-    d:Button('Cancel', 124, 384, 100, 26, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 100, 26, function() Dialog.Close() end)
+    d:Flow({ { ok, 100 }, { cancel, 100 } }, below, 26)
 end
 
 --- Asks for a name (letters, digits, _): done(name) when confirmed.
 function NameDialog(title, hint, done)
     local d = Dialog.Open(title, 360, 130)
-    d:Label(hint, 14, 34, { color = Skin.color.textDim, size = 'small' })
-    local field = d:Field(14, 56, 330, 22, { text = '' })
-    d:Button('OK', 14, 92, 90, 28, function()
+    local y = d:Text(hint, 14, 32, { color = Skin.color.textDim, size = 'small' })
+    local field = d:Field(14, y + 6, d:Span(14), 22, { text = '' })
+    local ok = d:Button('OK', 0, 0, 90, 28, function()
         local name = field:GetText()
         Dialog.Close()
         if name and name ~= '' then done(name) end
     end)
-    d:Button('Cancel', 114, 92, 90, 28, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 90, 28, function() Dialog.Close() end)
+    d:Flow({ { ok, 90 }, { cancel, 90 } }, y + 40, 28)
     field:AcquireFocus()
 end
 
@@ -158,14 +167,14 @@ local PICKERS = {
 }
 
 local function RowHeight(p)
-    if p.kind == 'diff3' then return 56 end
+    if p.kind == 'diff3' then return 64 end
     if p.kind == 'number' or p.kind == 'text' then return 50 end
     return 32
 end
 
 local function AddSlider(d, opts, x, y, w)
     local slider = W.Slider(d.group, opts)
-    slider:Place(Skin.S(x), Skin.S(y), Skin.S(w))
+    slider:Place(Skin.S(x), Skin.S(y), Skin.S(math.min(w, d:Span(x))))
     for _, c2 in { slider.label, slider.track, slider.fill, slider.thumb } do d:Raise(c2) end
     d:Raise(slider.field) d:Raise(slider.field.frame)
     return slider
@@ -189,8 +198,11 @@ function Form(o)
     local d = Dialog.Open(o.title, width, height)
     local c = Skin.color
     local y = 34
-    local x2 = width - 220
-    local inner = width - 28
+    local boxW = d:Span(0, 0)                       -- the box, logical (the window may be narrower than the design)
+    local x2 = math.max(math.floor(boxW * 0.4), boxW - 220)
+    local cw = math.min(200, boxW - x2 - 14)
+    local inner = boxW - 28
+    local function labelRoom() return Skin.S(x2 - 22) end      -- a label stops before its control
     for _, loopParam in o.params do
         local p = loopParam      -- the pickers below run later: a closure over the loop variable itself sees nil once the loop is over
         local key = p.key
@@ -217,16 +229,16 @@ function Form(o)
                     end }, 14 + (i - 1) * (each + 6), y + 14, each)
             end
         elseif p.kind == 'bool' then
-            d:Label(p.label, 14, y + 4, { color = c.text })
+            d:Label(p.label, 14, y + 4, { color = c.text, maxW = labelRoom })
             local b
-            b = d:Button(current and 'Yes' or 'No', x2, y, 80, 24, function(self)
+            b = d:Button(current and 'Yes' or 'No', x2, y, math.min(80, cw), 24, function(self)
                 o.set(key, self.on and true or false)
                 self:SetText(self.on and 'Yes' or 'No')
             end, { toggle = true })
             b:SetOn(current and true or false)
         elseif p.kind == 'choice' then
-            d:Label(p.label, 14, y + 4, { color = c.text })
-            d:Button(tostring(current or p.default or p.choices[1]), x2, y, 200, 24, function(self)
+            d:Label(p.label, 14, y + 4, { color = c.text, maxW = labelRoom })
+            d:Button(tostring(current or p.default or p.choices[1]), x2, y, cw, 24, function(self)
                 local cur, at = o.get(key) or p.default or p.choices[1], 1
                 for i, ch in p.choices do if ch == cur then at = i end end
                 local nextValue = p.choices[math.mod(at, table.getn(p.choices)) + 1]
@@ -234,8 +246,8 @@ function Form(o)
                 self:SetText(tostring(nextValue))
             end)
         elseif p.kind == 'multi' then
-            d:Label(p.label, 14, y + 4, { color = c.text })
-            d:Button(MultiText(current), x2, y, 200, 24, function()
+            d:Label(p.label, 14, y + 4, { color = c.text, maxW = labelRoom })
+            d:Button(MultiText(current), x2, y, cw, 24, function()
                 local names = o.names and o.names(p)
                 if not names and type(p.choices) == 'table' then names = p.choices end
                 PickMulti('Choose: ' .. string.lower(p.label), names or {}, o.get(key), function(list)
@@ -244,12 +256,12 @@ function Form(o)
                 end)
             end)
         elseif p.kind == 'var' and p.defines then
-            d:Label(p.label, 14, y + 4, { color = c.text })
-            d:Field(x2, y + 1, 200, 22, { text = tostring(current or ''), onChange = function(text) o.set(key, text, true) end })
+            d:Label(p.label, 14, y + 4, { color = c.text, maxW = labelRoom })
+            d:Field(x2, y + 1, cw, 22, { text = tostring(current or ''), onChange = function(text) o.set(key, text, true) end })
         else
             -- a name from the map: army, group (of the node's army), chain, area, marker, unit, base, var (set earlier)
-            d:Label(p.label, 14, y + 4, { color = c.text })
-            d:Button((current and current ~= '') and tostring(current) or '(choose)', x2, y, 200, 24, function()
+            d:Label(p.label, 14, y + 4, { color = c.text, maxW = labelRoom })
+            d:Button((current and current ~= '') and tostring(current) or '(choose)', x2, y, cw, 24, function()
                 local names = o.names and o.names(p)
                 if not names and PICKERS[p.kind] then names = PICKERS[p.kind]() end
                 names = names or {}
@@ -266,12 +278,13 @@ function Form(o)
         end
         y = y + RowHeight(p)
     end
-    d:Button('Done', 14, height - 36, 100, 26, function() Dialog.Close() if o.onClose then o.onClose() end end)
-    local bx = 124
+    local buttons = {}
+    local done = d:Button('Done', 0, 0, 100, 26, function() Dialog.Close() if o.onClose then o.onClose() end end)
+    buttons[1] = { done, 100 }
     for _, e in o.extra or {} do
-        d:Button(e[1], bx, height - 36, e[2] or 110, 26, e[3])
-        bx = bx + (e[2] or 110) + 6
+        buttons[table.getn(buttons) + 1] = { d:Button(e[1], 0, 0, e[2] or 110, 26, e[3]), e[2] or 110 }
     end
+    d:Flow(buttons, y + 6, 26)
 end
 
 -- ---- nodes ----------------------------------------------------------------------------------------------------------------------------------------
@@ -311,8 +324,8 @@ function AddNode(stage, section, after, parent)
             if table.getn(t.params) > 0 then EditNode(stage, section, path, function() if after then after(path) end end) end
         end,
     })
-    list:SetRect(Skin.S(8), Skin.S(30), Skin.S(444), Skin.S(370))
-    d:Button('Cancel', 360, 408, 90, 26, function() Dialog.Close() end)
+    local below = ListIn(d, list, 8, 30, 444, 370, 44)
+    d:Button('Cancel', 14, below, 90, 26, function() Dialog.Close() end)
 end
 
 --- Every parameter of a node. Text parameters are fields (applied while typing, one undo step per field), numbers sliders, choices cycle on click,
@@ -400,11 +413,11 @@ function BaseGroups(i, onClose)
         end,
         onSelect = function(index) state.sel = index list:Refresh() slider:Refresh() end,
     })
-    list:SetRect(Skin.S(8), Skin.S(30), Skin.S(424), Skin.S(140))
+    local below = ListIn(d, list, 8, 30, 424, 140, 150)
     slider = AddSlider(d, { label = 'Priority of the selected group (higher is built first; 0 = not spawned at the start)', min = 0, max = 200, step = 5, fmt = '%d', compact = true,
         get = function() local g = Groups()[state.sel] return g and tonumber(g.priority) or 0 end,
-        set = function(v) if Groups()[state.sel] then B.SetGroupPriority(i, state.sel, v, true) list:Refresh() end end }, 14, 180, 400)
-    d:Button('Add group...', 14, 250, 110, 26, function()
+        set = function(v) if Groups()[state.sel] then B.SetGroupPriority(i, state.sel, v, true) list:Refresh() end end }, 14, below + 2, 400)
+    local addGroup = d:Button('Add group...', 0, 0, 110, 26, function()
         local names = {}
         for _, n in M.GroupNames(base.army or '') do
             local have = false
@@ -416,10 +429,11 @@ function BaseGroups(i, onClose)
             BaseGroups(i, onClose)
         end)
     end)
-    d:Button('Remove', 134, 250, 90, 26, function()
+    local remove = d:Button('Remove', 0, 0, 90, 26, function()
         if Groups()[state.sel] then B.RemoveGroup(i, state.sel) state.sel = math.max(1, state.sel - 1) list:Refresh() slider:Refresh() end
     end)
-    d:Button('Done', 14, 292, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
+    local done = d:Button('Done', 0, 0, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
+    d:Flow({ { addGroup, 110 }, { remove, 90 }, { done, 100 } }, below + 72, 26)
 end
 
 --- The attacks (OpAI) of a base.
@@ -450,18 +464,19 @@ function BaseAttacks(i, onClose)
         end,
         onSelect = function(index) state.sel = index list:Refresh() end,
     })
-    list:SetRect(Skin.S(8), Skin.S(30), Skin.S(464), Skin.S(190))
-    d:Button('Add', 14, 232, 80, 26, function()
+    local below = ListIn(d, list, 8, 30, 464, 190, 70)
+    local add = d:Button('Add', 0, 0, 80, 26, function()
         local ok, at = B.AddOpAI(i)
         if ok then Dialog.Close() AttackEdit(i, at, function() BaseAttacks(i, onClose) end) end
     end)
-    d:Button('Edit...', 104, 232, 80, 26, function()
+    local edit = d:Button('Edit...', 0, 0, 80, 26, function()
         if Ops()[state.sel] then Dialog.Close() AttackEdit(i, state.sel, function() BaseAttacks(i, onClose) end) end
     end)
-    d:Button('Remove', 194, 232, 80, 26, function()
+    local remove = d:Button('Remove', 0, 0, 80, 26, function()
         if Ops()[state.sel] then B.RemoveOpAI(i, state.sel) state.sel = math.max(1, state.sel - 1) list:Refresh() end
     end)
-    d:Button('Done', 14, 290, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
+    local done = d:Button('Done', 0, 0, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
+    d:Flow({ { add, 80 }, { edit, 80 }, { remove, 80 }, { done, 100 } }, below, 26)
 end
 
 --- One attack: family, platoon kinds, size per difficulty, orders, priority, locking; the conditions in a second form.
@@ -600,25 +615,26 @@ function DialogueLines(i, onClose)
         end,
         onSelect = function(index) state.sel = index list:Refresh() end,
     })
-    list:SetRect(Skin.S(8), Skin.S(30), Skin.S(484), Skin.S(220))
+    local below = ListIn(d, list, 8, 30, 484, 220, 80)
     if d0.imported then
         -- a dialogue of the map's own strings file: shown, never edited
-        d:Label('Imported from the strings file of the map: read-only.', 14, 262, { color = c.textDim, size = 'small' })
-        d:Button('Done', 14, 302, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
+        local y = d:Text('Imported from the strings file of the map: read-only.', 14, below, { color = c.textDim, size = 'small' })
+        d:Button('Done', 14, y + 10, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
         return
     end
     local function Reopen() DialogueLines(i, onClose) end
-    d:Button('Add line', 14, 262, 84, 26, function()
+    local add = d:Button('Add line', 0, 0, 84, 26, function()
         local ok, at = M.AddLine(i, 'Text')
         if ok then Dialog.Close() LineEdit(i, at, Reopen) end
     end)
-    d:Button('Edit...', 106, 262, 70, 26, function()
+    local edit = d:Button('Edit...', 0, 0, 70, 26, function()
         if Lines()[state.sel] then Dialog.Close() LineEdit(i, state.sel, Reopen) end
     end)
-    d:Button('Remove', 184, 262, 70, 26, function()
+    local remove = d:Button('Remove', 0, 0, 70, 26, function()
         if Lines()[state.sel] then M.RemoveLine(i, state.sel) state.sel = math.max(1, state.sel - 1) list:Refresh() end
     end)
-    d:Button('Up', 262, 262, 44, 26, function() if M.MoveLine(i, state.sel, -1) then state.sel = state.sel - 1 list:Refresh() end end)
-    d:Button('Down', 312, 262, 54, 26, function() if M.MoveLine(i, state.sel, 1) then state.sel = state.sel + 1 list:Refresh() end end)
-    d:Button('Done', 14, 302, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
+    local up = d:Button('Up', 0, 0, 44, 26, function() if M.MoveLine(i, state.sel, -1) then state.sel = state.sel - 1 list:Refresh() end end)
+    local down = d:Button('Down', 0, 0, 54, 26, function() if M.MoveLine(i, state.sel, 1) then state.sel = state.sel + 1 list:Refresh() end end)
+    local done = d:Button('Done', 0, 0, 100, 26, function() Dialog.Close() if onClose then onClose() end end)
+    d:Flow({ { add, 84 }, { edit, 70 }, { remove, 70 }, { up, 44 }, { down, 54 }, { done, 100 } }, below, 26)
 end

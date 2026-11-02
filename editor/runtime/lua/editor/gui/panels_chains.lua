@@ -163,8 +163,9 @@ Panels.Register{
             y = W.Flow(group, { { P.bAdd, Skin.S(90) }, { P.bRemove, Skin.S(60) }, { P.bUp, Skin.S(34) }, { P.bDown, Skin.S(44) }, { P.bSelect, Skin.S(100) },
                                 { P.bDraw, Skin.S(80) }, { P.bFinish, Skin.S(86) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4))
             y = y + Skin.S(4)
-            P.markers:SetRect(pad, y, w - 2 * pad, math.max(Skin.S(44), h - y - pad - Skin.S(20)))
-            W.Place(P.status, group, pad, h - pad - Skin.S(14))
+            local markersH = math.max(Skin.S(44), h - y - pad - Skin.S(20))
+            P.markers:SetRect(pad, y, w - 2 * pad, markersH)
+            W.Place(P.status, group, pad, math.max(h - pad - Skin.S(14), y + markersH + Skin.S(4)))       -- (under the list, also in a panel too short for both)
             P:Refresh(true)
         end
         return P

@@ -16,6 +16,10 @@
 registry = {}
 order = {}
 
+--   The narrowest a panel can be drawn without its controls running past the edge (logical pixels) when it does not declare `minW`. The dock keeps every stack at least that wide
+--   (as far as the window allows); narrower than that the panel scrolls sideways.
+DEFAULT_MIN_W = 200
+
 function Register(def)
     if not def or not def.id then
         error('Panels.Register: a panel needs an id')
