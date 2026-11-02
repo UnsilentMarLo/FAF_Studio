@@ -93,7 +93,8 @@ function Report()
     Out(string.format('--- %.1f s, %.0f frames/s ---', span, fps))
     -- The Lua heap of this state: a heap that grows and falls back within seconds is garbage made every frame (the collector runs on the same core as the editor);
     -- one that only grows is a leak. (Once per report: not part of any frame.)
-    local okHeap, heap = pcall(collectgarbage, 'count')
+    -- (Lua 5.0 has gcinfo(), the heap in KB; collectgarbage('count') is the 5.1 spelling and raises here: the line never appeared)
+    local okHeap, heap = pcall(rawget(_G, 'gcinfo') or function() return nil end)
     if okHeap and type(heap) == 'number' then
         Out(string.format('lua heap: %.1f MB (%+.1f MB since the last report)', heap / 1024, (heap - (lastHeap or heap)) / 1024))
         lastHeap = heap

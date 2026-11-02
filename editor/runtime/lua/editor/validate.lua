@@ -24,7 +24,8 @@ local generation = 0
 local resultPath = 'ed_validate_result.txt'
 local pendingGen = false
 local pollFrame = 0
-local lastSig = ''
+local lastSig = false          -- { count, acc, undo, redo } of the resource markers and the history the last results are for
+local sigNow = { 0, 0, 0, 0 }     -- (reused: the signature used to be a formatted string, made again every time the objects changed and once a second)
 local quiet = 0
 local dirty = true
 local stackedIssues = {}
@@ -346,23 +347,36 @@ local function Poll()
     end
 end
 
-local function Signature()
+--- The signature of the resource markers (how many, where) and of the history, in `sigNow`; true when it differs from the last one (`lastSig`).
+-- (The sum is compared rounded to 1/100, like the string it replaces.)
+local function SignatureMoved()
     local count, acc = 0, 0
+    local structure = Grid.Structure
     if Map.Doc then
         for name, m in Map.Doc.save.MasterChain._MASTERCHAIN_.Markers do
-            if Grid.Structure[m.type] then
+            if structure[m.type] then
                 count = count + 1
                 acc = acc + m.position[1] * 3.1 + m.position[3] * 7.7 + (m.type == 'Mass' and 1 or 2)
             end
         end
     end
     local undo, redo = History.Depth()
-    return string.format('%d|%.2f|%d|%d', count, acc, undo, redo)
+    acc = math.floor(acc * 100 + 0.5)
+    local k = lastSig
+    if k and k[1] == count and k[2] == acc and k[3] == undo and k[4] == redo then return false end
+    if not k then
+        k = {}
+        lastSig = k
+    end
+    k[1], k[2], k[3], k[4] = count, acc, undo, redo
+    return true
 end
 
 --- Per-frame: re-validates by itself after the resource markers or the edit history changed and stayed quiet for a moment.
 local sigChanged, sigHistory, sigAt = -1, -1, 0
 local toolsMod = false
+local Sig = import('/lua/editor/markersig.lua')
+local sigFullAt, sigA, sigB, sigC = 0, -1, -1, -1
 
 function Update()
     if not Map.Doc then return end
@@ -372,11 +386,18 @@ function Update()
     local changed = toolsMod.Changed
     local clock = GetSystemTimeSeconds()
     local moved = false
-    if changed ~= sigChanged or History.Version ~= sigHistory or clock - sigAt >= 1 then
-        sigChanged, sigHistory, sigAt = changed, History.Version, clock
-        local sig = Signature()
-        if sig ~= lastSig then
-            lastSig = sig
+    -- (the net: once a second the shared fingerprint of the marker positions (markersig.lua, ~1 ms for 3000 markers and shared with the other nets) decides whether the signature
+    -- walk, which also checks each marker's type, is worth it; the full walk still runs every 10 s)
+    local due = changed ~= sigChanged or History.Version ~= sigHistory or clock - sigFullAt >= 10
+    if not due and clock - sigAt >= 1 then
+        sigAt = clock
+        local a, b, c = Sig.Sums(clock)
+        if a ~= sigA or b ~= sigB or c ~= sigC then due = true end
+    end
+    if due then
+        sigChanged, sigHistory, sigAt, sigFullAt = changed, History.Version, clock, clock
+        sigA, sigB, sigC = Sig.Sums(clock)
+        if SignatureMoved() then
             dirty = true
             quiet = 0
             moved = true
@@ -397,7 +418,7 @@ function Clear()
     stackedIssues, blockedIssues, gridIssues, mapIssues = {}, {}, {}, {}
     pendingGen = false
     State = 'idle'
-    lastSig = ''
+    lastSig = false
     dirty = true
     Revision = Revision + 1
 end

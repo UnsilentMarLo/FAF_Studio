@@ -22,7 +22,7 @@ UI state, every frame
 | Held-key camera movement | camera.lua `UpdateKeys` | was ~100-200 us/frame: walked ~200 commands, `ParseKeys` (gsub, find, two tables) 20 times | **done**: binding parsed once per key text (`Binding` cache), hold commands listed once (`HoldCommands`), move table only when a key is held |
 | Unit viewer camera lock | camera.lua `Update` -> unitview.lua `Tick` | closure + import per frame | **done**: `LockTick` named function, module cached; returns at once unless the lock is on |
 | ui.lua tick (`ui.tick` `OnFrame`): hide game HUD check, brush stroke pump, overlay | ui.lua `FinishCreate` | 2 imports + 1 import of itself per frame | **done**: the three modules are kept in `ui`; Perf marks `ui: frame tick (all)` and `ui: brush stroke pump` added |
-| Overlay update (grid, slope, rings, paths, chains, ghosts, labels, handles ...) | overlay.lua `Update` | the largest per-frame Lua block; has Perf marks per section already | not touched (agent GC). See "Recommended" |
+| Overlay update (grid, slope, rings, paths, chains, ghosts, labels, handles ...) | overlay.lua `Update` | the largest per-frame Lua block; has Perf marks per section already | **done** in the frame cost work (2026-11-02): see "Recommended list of the Lua audit: status" and "Frame cost budgets" |
 | `TerrainEpoch.Step` | terrainepoch.lua | built a string per frame; 300-frame net | **done**: two number compares, 5 s clock net (`NET_SECONDS`) |
 | `Validate.Update` | validate.lua | `import` per frame; 60-frame signature net (walks every marker) | **done**: module cached, 1 s clock net |
 | `MarkerVis.Update` | markervis.lua | 120-frame height sync (3000 native reads) and 60-frame mesh net | **done**: 2 s and 1 s clock nets |
@@ -40,7 +40,7 @@ UI state, about four times a second (shell tick, now by clock: `REFRESH_SECONDS 
 | `StatusText()` | ui.lua:1114 | one `string.format`, a pointer ray (`MouseWorld`), `GroundHeight`, slope readout (a native call only with the slope view on) | est. 20-40 us; compared with the shown text before `SetText` |
 | `AutosaveTick` | maps.lua:333 | two compares; a synchronous `Map.SaveAs` every 300 s when the history moved | the save is a hitch of the size of the map (est. 50-500 ms on a big mission map); moving it to a thread is not possible (it is one native call chain); left |
 | `W.ScrollTick`, pop-out window signature, `persist.Tick`, `UserData.Flush` | gui/shell.lua, widgets.lua:328, persist.lua:61 | a few table walks / string formats; `Flush` writes only when dirty | fine |
-| Brush panel preview | panels_editor.lua:170 | 48 `Terrain.BrushWeight` calls + 48 `string.format` per refresh while the Brush panel is shown | est. 50 us; could be keyed by (radius, strength, mode, shape): recommended, not done |
+| Brush panel preview | panels_editor.lua:170 | 48 `Terrain.BrushWeight` calls + 48 `string.format` per refresh while the Brush panel is shown | est. 50 us; keyed by (radius, strength, falloff, tool, shape) since 2026-11-02 |
 | Paths panel | panels_paths.lua:481 | signature string every refresh; the panel's own refresh only on change or every 8th (2 s) | fine, and now really 2 s |
 
 Threads (UI state)
@@ -92,15 +92,54 @@ What runs before the editor is usable, by cost (all estimates; no timings exist)
 | perf.lua | the report prints the Lua heap (`lua heap: X MB (+Y MB since the last report)`) |
 | selftest_peace.lua, selftest_graphbase.lua | new checks: sweep walks only on a count change and as a net; `TerrainEpoch.Step` net by clock |
 
-### Recommended, not done (ordered by expected value)
+### Recommended list of the Lua audit: status after the frame cost work (2026-11-02)
 
-1. **overlay.lua `UpdateLabels`** (agent GC's file, line ~380): when zoomed in it loops over **every marker every frame** (selection set lookup, hover compare, bounds test); est. 1-3 ms per frame with 3000 markers, i.e. 6-18 % of a core at 60 fps and proportionally more at an uncapped rate. Key it on (`Tools.Changed`, `Tools.HoverRev`, the camera's visible bounds, filter state) and keep the list of visible names between frames; only the projection of the <= 150 shown labels needs to run per frame. Same pattern in `Handles`, and `unitFrames` (overlay.lua:941) is also a frame counter.
-2. **overlay.lua `DrawLayers`**: 11 `pcall(function() import(...).X() end)` per frame make 11 closures and 11 import calls; cache the modules in a table and call named functions.
-3. **Units cache net** (units.lua `CacheFresh`): `Units.All()` (2100 tables on a mission map) is rebuilt at the latest every 1.5 s while any caller (unit tools, rings, gizmo) uses it; it is keyed already, so the net could be 5 s. Est. 10 ms per rebuild.
-4. **Brush panel preview** keyed by (radius, strength, mode, shape).
-5. **Blueprint load** (startup item 1) and **lazy HUD** (item 2): the two big startup costs; both need an engine or deeper session change.
-6. **Native candidates** (user guidance: use several cores where a native op exists or is easy): the marker height sync (`ed_terrain_get` x 3000) as one native batch call; `Validate.CheckMap` prop loop (`ed_prop_get` per prop, up to 10,000); `Units.All()` as a native snapshot. None is needed at idle any more.
-7. Autosave (`Map.SaveAs`) is synchronous: a native background writer would remove the periodic hitch.
+The items of the audit, with what became of them (numbers: "Frame cost budgets" below).
+
+1. **overlay.lua `UpdateLabels`**: **done**. Two levels of keys (`LC` in overlay.lua): the *candidates* (markers / areas inside the ground the camera sees plus a margin, or selected / hovered, with their display positions) are made again when `Tools.Changed`, the ground, the document or the zoom class moved, when the view leaves the margin, and on a net; the *shown labels* (the first 150 candidates that project onto the screen) again when the candidates or the camera changed (camera key: three projected ground points and the view rectangle). A camera at rest costs a few projections. The net is once a second a fingerprint of the marker positions (`markersig.lua`) and a rebuild only when it moved. The hover does not rebuild the lists when zoomed in. Hide / Show of the pooled labels only for the ones that change. The ghost names (`ghostLabels`) are reused tables, the ruler text is looked at as before.
+2. **overlay.lua `DrawLayers` and the other per-frame imports**: **done**. `Mod(key, path)` imports once, `Call(key, path, fname, a, b)` is the `pcall(function() import(..).X(..) end)` without the closure and the import; `View`, `PixelSize`, and the symmetry / props / decals / units / gizmo / ruler / chains / brushes / strata imports go through them. Per-frame tables and strings removed: `lastBrushPos` (one table, reused), `ghostLabels`, the unit ring key (numbers instead of a string), the area handle key and the 8 handle tables, the gizmo key (a string of ten concatenations per shape), `previewKeys` (`tostring(i)`, `'cur:ring' .. i`), `previewKeys = {}` per frame without the brush, and the 6 `ed_overlay_remove` calls per frame for lines that are not there (`absent`).
+3. **Units cache net**: **done**: `Units.CACHE_NET_SECONDS` 5 (was 1.5 s); it was keyed already. The unit ring key (`unitFrames`, a frame counter) is keyed by the units' revision, the history, the selection and a 5 s clock.
+4. **Brush panel preview** (`panels_editor.lua`): **done**, keyed by (radius, strength, falloff, tool, shape, angle, UI scale); the stamp tool is always worked out.
+5. **The brush ring** (not on the audit list, found by it): **done**. `RingAt` lays the ring onto the terrain only when its place, radius, base height, colour, the native height revision (`ed_cmd_depth()`, the 4th value) or the overlay's ground epoch changed. The marker, area and chain ghosts at the pointer are keyed the same way (`GhostSame`). A pointer at rest costs no terrain read; a moving one costs what it cost (192 reads per ring).
+6. **markervis.lua / validate.lua nets**: **done**. The height sync (3000 `ed_terrain_get`) is cut into slices of 400 markers per frame (it was one 3-5 ms frame every 2 s) and moves the meshes only when a height moved; the mesh walk runs when `Tools.Changed` moved, a height moved, the fingerprint of the positions moved, or every 10 s; `DisplayPos` gets the terrain size (it asked the engine for it per marker) and a marker that stands where it stood is skipped on maps without a mesh terrain. `validate.lua`: the shared fingerprint is compared once a second; the signature walk (it also looks at each marker's type) runs when the fingerprint, `Tools.Changed` or the history moved, and every 10 s.
+7. **The overlay's ground epoch**: **done**. `TerrainEpoch.Epoch` moves with the history and every 5 s, and each move laid every area outline and resource footprint onto the terrain again (a 50-70 ms frame with 600 resource markers and 40 areas, every 5 s). The overlay keeps its own `groundEpoch` (history, native height revision, `TerrainEpoch.Touch`, mesh mode; the plain net is 90 s, 5 s on a mesh map whose edits it cannot see). `terrainepoch.lua` is unchanged.
+8. **`Tools.Pick`** (walks every marker on each pointer move): **not done**. 0.6 ms for 3185 markers per call, only while the pointer moves; a spatial grid belongs in `tools.lua`, which the frame cost group does not own.
+9. **Blueprint load**, **lazy HUD**, **native batch calls** (marker height sync as one native call, `Validate.CheckMap` prop loop, `Units.All()` as a native snapshot), **autosave on a worker**: **not done** (engine side or other groups; the height sync is sliced so that its cost no longer shows as a frame).
+10. `perf.lua`: the report's heap line never appeared (`collectgarbage('count')` is the Lua 5.1 spelling and raises in this Lua 5.0); `gcinfo()` is used now.
+
+### Frame cost budgets (measured and gated, 2026-11-02)
+
+**Stress document** (`perfstress.lua`): 3000 markers of ten types, 40 areas and 600 units (nightly: 150 units) put into the open map by the editor's own document calls; positions from a fixed pseudo random sequence. Machine: Windows 11, RX 7900 XTX, window 1920x1080, vsync, other editor instances running at the same time (so the frame rates are lower than the idle numbers of the audit). Numbers are Lua ms per second of wall time from the 5 s perf report (`ui: frame tick (all)`); before = `main` at e361059, after = branch `ed/perf`.
+
+| scene | frames/s before / after | ui tick ms/s before | after | overlay labels ms/s before | after | slowest ui tick ms before | after |
+|---|---|---|---|---|---|---|---|
+| blank 257 map, idle | 58 / 58 | 8.2 to 8.9 | 6.4 to 6.5 | 1.4 | 0.9 | 0.4 | 0.4 |
+| 20x20 Winter Fire 8v8 (1025, 185 markers, 249 units), zoomed out | 53 to 60 / 56 to 58 | 9.3 to 9.8 | 7.0 | 0.3 | 0.2 | 6.7 (rebuild) | 0.5 |
+| stress, camera zoomed out (default) | 22 to 44 / 35 to 38 | 28 to 34 | 8.4 to 8.9 | 0.2 | 0.2 | 73 to 88 | 1.4 to 6.9 |
+| stress, camera zoomed in (names of ~150 markers on screen) | 26 to 45 / 29 to 38 | **119 to 148** | **13 to 17** | **86 to 115** | **1 to 4** | 90 to 96 | 3.6 to 10 |
+| stress, brush tool, pointer at rest | 25 to 55 / 42 | 40 to 48 | 10 to 13 | 4 to 6 | 0.2 | 70 to 88 | 2 to 3.5 |
+
+`Overlay.Update` alone, 300 frames in a loop (brush tool, camera zoomed in, stress): before 1.66 ms and 47 KB of Lua garbage per frame (worst 7 ms), after 0.09 ms and 1.6 KB (worst 0.24 ms). `selftest_perfbudget`'s paced idle run (60 fps, 3.2 s, camera as it is): before 41 to 47 ms/s, 10.6 KB/frame, worst 82 to 92 ms; after 8.3 ms/s, 0.5 KB/frame, worst 1.1 ms.
+
+The "slowest" before is the 5 s epoch net (every footprint and area laid onto the terrain again); after it is the 1 s label / mesh nets. The one-off 40 to 80 ms frame when the validation of 600 random resource markers finishes (their footprints turn red / orange) is not in these rows; on a real map with few issues it is a few ms.
+
+**Budgets that gate.** They are regression gates with about 4x headroom over the measured value and far below the "before" column.
+
+| gate | budget | measured after | before |
+|---|---|---|---|
+| `selftest_perfbudget`: Overlay.Update Lua ms per second at 60 fps, stress document | 24 | 5 to 9 | 41 to 47 |
+| ... garbage per frame | 6 KB | 0.5 to 1.6 | 10.6 to 47 |
+| ... heap growth after full collections over the 3 s run | 1024 KB | 0 | |
+| ... worst frame | 20 ms | 1 | 82 to 92 |
+| ... terrain reads per frame with the brush ring at rest | 8 | 4 | ~190 |
+| nightly step `perf` (1024 map, stress, camera zoomed in, 5 reports after the one-off work): `ui: frame tick` average | 1.5 ms/frame | 0.28 to 0.41 | 2.4 |
+| ... `overlay: labels` average | 0.6 ms/frame | 0.03 to 0.07 | 1.9 |
+| ... slowest ui tick | 30 ms | 4 to 10 | 81 |
+| ... Lua heap growth over the sampled period | 6 MB | 0.1 to 0.2 | 0.2 |
+
+Run: `return import('/lua/editor/selftest_perfbudget.lua').Run()` (listed in `selftests.extra`; blocks the editor for about 8 s) and `python scripts/editor_nightly.py --tag <own tag> --skip <every step but perf>` or the whole nightly (step `perf`, last). The budgets are the constants `BUDGET_*` of the selftest and `PERF_BUDGETS` in `scripts/editor_nightly.py`; change them only together with a measurement written here. Checked to fail without the change: the nightly step on the code of e361059 reports the ui tick at 2.4 ms, the labels at 1.9 ms and an 81 ms tick (three FAIL); the paced run of the selftest on that code gives 41 to 47 ms/s, 10.6 KB/frame, 82 to 92 ms (over all three budgets; the selftest itself needs the new files to load).
+
+Not gated: frames per second (the GPU and vsync decide it), the native overlay's own cost, the Lua cost of panels while the user works in them. `selftest_qa` fails its box select checks on this mission map with and without the change; running `selftest_snap`, `selftest_meshview` and the sim-starting self tests one after the other crashed the engine (access violation, read at FFFFFFFFFFFFFFFF) on both trees, so it is not from this branch.
 
 ### How to measure
 
@@ -109,11 +148,13 @@ What runs before the editor is usable, by cost (all estimates; no timings exist)
 * Frame-rate dependence: the first line of a report shows frames/s. Before this audit `shell: 4 Hz refresh (all)` showed `calls` = frames/15; now it shows about 20 calls per 5 s at any frame rate. That is the quickest check that the clock change works.
 * Heap: a heap that rises and falls by many MB within a report is per-frame garbage (the collector runs on the same core); one that only rises is a leak.
 * Sim state has no Perf report. Check the peace sweep with the log: `GetUnitsInRect` is no longer called while the unit count is steady; the sim's own cost shows in the engine's frame statistics (agent EC).
+* A stress document: `local PS = import('/lua/editor/perfstress.lua') PS.Build({ markers = 3000, areas = 40, units = 600 })` (`PS.Remove()` takes it away), `PS.Frames(300)` (Overlay.Update in a loop: ms and garbage per frame), `PS.Paced(3, 60)` (paced like a 60 fps frame loop, nets included: Lua ms per second, worst frame, garbage, heap growth). Zoom with `import('/lua/editor/camera.lua').FocusOn(512, 512, 300)` (300 = names on the markers, 1440 = the default view). Needs a map and an editor window that draws.
+* Finer sections of the perf report: `markervis: height sync`, `markervis: mesh walk`, `overlay: rebuild footprints / areas / icons`.
 * Selftests: `return import('/lua/editor/selftest_peace.lua').Run()` and `return import('/lua/editor/selftest_graphbase.lua').Run()` through `/edcmd` (graphbase needs a map open).
 
 ### Could not verify
 
-Nothing here was run in the editor. All files parse with the Moho parser (32-upvalue limit) and `python3 -I scripts/studio.py check` passes; `selftest_peace.lua` was also run in a Lua 5.1 shim (lupa) and passes. Not run: the shell refresh change, the camera key cache (needs the engine's key table), the validate / markervis / terrain epoch clocks, and the `GetCurrentUnits` call in the sim (if the engine's active-unit stat does not move for a unit created by a callback, the sweep falls back to its 10 s net instead of 1 s; hold fire for such a unit is then late, but every army pair is neutral anyway, which is the first line of defence). All cost numbers are estimates.
+(The frame cost work of 2026-11-02 ran the editor and measured: "Frame cost budgets" above. What follows is the state of the audit itself.) Nothing here was run in the editor. All files parse with the Moho parser (32-upvalue limit) and `python3 -I scripts/studio.py check` passes; `selftest_peace.lua` was also run in a Lua 5.1 shim (lupa) and passes. Not run: the shell refresh change, the camera key cache (needs the engine's key table), the validate / markervis / terrain epoch clocks, and the `GetCurrentUnits` call in the sim (if the engine's active-unit stat does not move for a unit created by a callback, the sweep falls back to its 10 s net instead of 1 s; hold fire for such a unit is then late, but every army pair is neutral anyway, which is the first line of defence). All cost numbers are estimates.
 
 ## Engine CPU
 

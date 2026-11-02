@@ -12,6 +12,7 @@ local Skin = import('/lua/editor/gui/skin.lua')
 local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local Terrain = import('/lua/editor/terrain.lua')
+local Brushes = false          -- brushes.lua, imported on first use
 
 live = {}      -- panel id -> instance, for Refresh
 
@@ -177,6 +178,19 @@ Panels.Register{
             if noiseOn then for _, s in P.noise do s:Refresh() end end
             -- the brush's weight from the centre (left) to the rim (right), in the brightness the world preview uses
             local mode = UI.State.tool
+            -- the profile is worked out again only when what it depends on changed (48 weight calls and 48 colour strings, four times a second, were the whole cost): the radius,
+            -- strength, falloff, tool and shape; the stamp tool's own picture is not keyed (it has more inputs), it is always worked out
+            if not Brushes then Brushes = import('/lua/editor/brushes.lua') end
+            local pk = P.profileKey
+            if not pk then
+                pk = {}
+                P.profileKey = pk
+            end
+            local stamp = (mode == 'stamp' or mode == 'stamp_paint')
+            if not stamp and pk[1] == B.radius and pk[2] == B.strength and pk[3] == B.falloff and pk[4] == mode and pk[5] == Brushes.Active and pk[6] == Brushes.Angle and pk[7] == Skin.scale then
+                return
+            end
+            pk[1], pk[2], pk[3], pk[4], pk[5], pk[6], pk[7] = B.radius, B.strength, B.falloff, mode, Brushes.Active, Brushes.Angle, Skin.scale
             local ref = (mode == 'flatten' or mode == 'smooth') and 1.0 or 6.0
             local scale = 0.25 + 0.75 * math.min(1, B.strength / ref)
             local n = table.getn(P.bars)
@@ -219,6 +233,7 @@ Panels.Register{
             end
             W.Place(P.title, group, pad, y)
             P.gx, P.gy, P.gw, P.gh = pad, y + Skin.S(20), w - 2 * pad, Skin.S(56)
+            P.profileKey = nil          -- (the bars are placed again by the Refresh below)
             W.Place(P.baseline, group, pad, P.gy + P.gh, w - 2 * pad, 1)
             P:Refresh()
         end

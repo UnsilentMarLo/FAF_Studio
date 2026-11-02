@@ -57,3 +57,4 @@ selftest_bpedit
 selftest_modapi
 selftest_paintundo
 selftest_savejob
+selftest_perfbudget

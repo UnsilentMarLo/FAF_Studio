@@ -20,6 +20,8 @@ Steps (each one is pass / fail in the report; the exit code is 0 only when all p
   maps        scripts/editor_maps_qa.py: a big and a small real map are opened, edited, undone exactly, saved as and reopened (checksums, counts)
   selfloop    scripts/editor_selftest_loop.py: every self test N times in one process, shuffled (order dependence, shared state)
   simstress   scripts/editor_sim_stress.py: play tests with timers / waits / spawns / sim callbacks, left five ways, process + crash folder checked
+  perf        frame cost budgets: a 1024 map with 3000 markers, 40 areas and 150 units (perfstress.lua), the camera zoomed in on it, perf timing on for ~25 s: the Lua ms per frame of
+              the ui tick, of the name labels, the slowest frame and the Lua heap growth must stay under the budgets of PERF_BUDGETS (docs/projects/editor/PERFORMANCE.md)
   stress      scripts/ed_stress_load.py --mode full (all workspaces, graph, live link, pop-outs, play tests, dirty maps), survive every load and keep memory growth under the leak limit
 
 The instance <tag> (default `nightly`) is created on first use and runs the Lua tree of `--editor` (default: this checkout's editor/runtime).
@@ -527,6 +529,106 @@ def step_simstress(inst, rep, cycles):
     rep.add('simstress', p.returncode == 0, ('%d play cycles survived' % cycles if p.returncode == 0 else 'a play cycle failed (exit %d)' % p.returncode), tail)
 
 
+# ---- perf: frame cost budgets ----------------------------------------------------------------------------------------------------------------
+# Budgets of the `perf` step (docs/projects/editor/PERFORMANCE.md, "Frame cost budgets"): measured on the stress document with the camera zoomed in (the worst case for the name labels),
+# about 4x the measured value so that a slower machine passes, and far below what the code cost before the frame cost work (shown in brackets).
+PERF_BUDGETS = {
+    'frame_tick_avg_ms': 1.5,     # `ui: frame tick (all)`, average ms per frame (measured 0.4 to 0.5; before 4.4)
+    'labels_avg_ms': 0.6,         # `overlay: labels`, average ms per frame (measured 0.1 to 0.2; before 3.2)
+    'worst_frame_ms': 30.0,       # the slowest ui tick in the sampled reports (measured 3 to 9; before 85 to 95); above ~30 ms is a visible hitch
+    'heap_growth_mb': 6.0,        # Lua heap after a full collection at the end minus at the start of the sampled period
+}
+PERF_STRESS_LUA = r"""
+local PS = import('/lua/editor/perfstress.lua')
+local made = PS.Build({ markers = 3000, areas = 40, units = 150 })
+import('/lua/editor/camera.lua').FocusOn(512, 512, 300)
+return made
+"""
+PERF_ON_LUA = r"""
+local P = import('/lua/editor/perf.lua')
+P.Set(false)
+P.Set(true)
+collectgarbage(0) collectgarbage(0)
+return tostring(gcinfo())
+"""
+PERF_STATE_LUA = "return tostring(import('/lua/editor/validate.lua').State)"
+PERF_HEAP_LUA = r"""
+collectgarbage(0) collectgarbage(0)
+return tostring(gcinfo())
+"""
+
+
+def parse_perf_reports(lines):
+    """The 'EDITOR perf:' reports of a log: a list of { 'fps': n, 'sections': { name: { 'avg': ms per call, 'max': ms } } }."""
+    reports, cur = [], None
+    for l in lines:
+        if 'EDITOR perf: ' not in l:
+            continue
+        t = l.split('EDITOR perf: ', 1)[1]
+        m = re.match(r'--- [\d.]+ s, (\d+) frames/s ---', t)
+        if m:
+            cur = { 'fps': int(m.group(1)), 'sections': {} }
+            reports.append(cur)
+            continue
+        m = re.match(r'(.+?)\s+([\d.]+) ms/s\s+(\d+) calls\s+avg\s+([\d.]+)\s+max\s+([\d.]+)', t)
+        if m and cur is not None:
+            cur['sections'][m.group(1).strip()] = { 'avg': float(m.group(4)), 'max': float(m.group(5)), 'calls': int(m.group(3)) }
+    return reports
+
+
+def step_perf(inst, rep, exe, seconds=28):
+    """Frame cost on a stress document: the Lua time per frame of the ui tick and the name labels, the slowest tick and the heap growth against PERF_BUDGETS."""
+    # a clean 1024 map (the stress document is 3000 markers on it; the 257 map of the other steps would pack them into a knot)
+    with contextlib.redirect_stdout(io.StringIO()):
+        EI.cmd_start(argparse.Namespace(tag=inst.tag, map='editor_blank_1024', exe=exe, wait=90))
+    made = inst.lua(PERF_STRESS_LUA, timeout=120)
+    # the one-off costs are not sampled: making the objects, and laying the footprints of the resource markers again when the validation (which runs by itself a moment after the
+    # markers appeared and finds problems with the random placement) is done
+    deadline = time.time() + 90
+    time.sleep(6)
+    while time.time() < deadline and inst.lua(PERF_STATE_LUA, timeout=30) != 'done':
+        time.sleep(2)
+    inst.lua("import('/lua/editor/terrainepoch.lua').Touch()", timeout=30)          # the overlay lays everything onto the ground again now (and not by its 90 s net in the middle of the sample)
+    time.sleep(4)
+    n0 = len(inst.log_lines())
+    heap0 = float(inst.lua(PERF_ON_LUA, timeout=60))
+    time.sleep(seconds)
+    perf_lines = [l for l in inst.log_lines()[n0:] if 'EDITOR perf: ' in l]
+    if getattr(rep, 'outdir', None):
+        open(os.path.join(rep.outdir, 'perf_reports.txt'), 'w', encoding='utf-8').write(NL.join(perf_lines))      # the raw reports, for the section that went over
+    reports = parse_perf_reports(perf_lines)
+    heap1 = float(inst.lua(PERF_HEAP_LUA, timeout=60))
+    inst.lua("import('/lua/editor/perf.lua').Set(false) import('/lua/editor/perfstress.lua').Remove()", timeout=60)
+    sampled = [r for r in reports if r['sections'].get('ui: frame tick (all)')]
+    if len(sampled) < 3:
+        rep.add('perf', False, 'only %d perf reports in %d s (the editor did not draw frames?)' % (len(sampled), seconds), ['stress: %s' % made])
+        return
+    def avg(name):
+        vals = [r['sections'][name]['avg'] for r in sampled if name in r['sections']]
+        return sum(vals) / len(vals) if vals else 0.0
+    tick, labels = avg('ui: frame tick (all)'), avg('overlay: labels')
+    worst = max(r['sections']['ui: frame tick (all)']['max'] for r in sampled)
+    growth = (heap1 - heap0) / 1024.0
+    fps = sum(r['fps'] for r in sampled) / len(sampled)
+    B = PERF_BUDGETS
+    checks = [
+        ('ui frame tick avg %.2f ms/frame' % tick, tick <= B['frame_tick_avg_ms'], B['frame_tick_avg_ms']),
+        ('name labels avg %.2f ms/frame' % labels, labels <= B['labels_avg_ms'], B['labels_avg_ms']),
+        ('slowest ui tick %.1f ms' % worst, worst <= B['worst_frame_ms'], B['worst_frame_ms']),
+        ('Lua heap growth %.1f MB' % growth, growth <= B['heap_growth_mb'], B['heap_growth_mb']),
+    ]
+    bad = [c for c in checks if not c[1]]
+    details = ['%s %s budget %s' % (('ok  ' if ok else 'FAIL'), text, limit) for text, ok, limit in checks]
+    if bad:
+        # the sections of the slowest sampled report: where the time went
+        slow = max(sampled, key=lambda r: r['sections']['ui: frame tick (all)']['max'])
+        top = sorted(slow['sections'].items(), key=lambda kv: -kv[1]['max'])[:6]
+        details.append('slowest report, sections by worst call: ' + '; '.join('%s max %.1f ms avg %.3f' % (k, v['max'], v['avg']) for k, v in top))
+    details.append('stress: %s; %d reports, %.0f frames/s (not gated: the GPU and vsync decide it)' % (made, len(sampled), fps))
+    rep.add('perf', not bad, '%s' % ('within budget: ' + ', '.join(c[0] for c in checks) if not bad else 'over budget: ' + ', '.join(c[0] for c in bad)), details)
+    inst.start(exe)                               # the other steps want the usual blank document
+
+
 def write_report(rep, outdir, tag, exe, seconds):
     ok = all(s['ok'] for s in rep.steps)
     json.dump({ 'tag': tag, 'exe': exe, 'seconds': round(seconds), 'ok': ok, 'steps': rep.steps }, open(os.path.join(outdir, 'report.json'), 'w'), indent=1)
@@ -549,7 +651,7 @@ def main():
     ap.add_argument('--loop-runs', type=int, default=3, help='shuffled runs of every self test (selfloop step)')
     ap.add_argument('--sim-cycles', type=int, default=6, help='play test cycles of the simstress step')
     ap.add_argument('--maps', type=int, default=3, help='maps of the lifecycle step (half big, half small)')
-    ap.add_argument('--skip', default='', help='comma list of steps to leave out: lint, selftests, selfloop, panels, menus, clicks, tips, workspaces, log, maps, simstress, stress')
+    ap.add_argument('--skip', default='', help='comma list of steps to leave out: lint, selftests, selfloop, panels, menus, clicks, tips, workspaces, log, maps, simstress, stress, perf')
     ap.add_argument('--out')
     ap.add_argument('--keep', action='store_true', help='leave the instance running at the end')
     a = ap.parse_args()
@@ -581,6 +683,7 @@ def main():
         ('maps', lambda: step_maps(inst, rep, a.maps)),
         ('simstress', lambda: step_simstress(inst, rep, a.sim_cycles)),
         ('stress', lambda: step_stress(inst, rep, a.loads, outdir)),
+        ('perf', lambda: step_perf(inst, rep, a.exe)),
     ]
     for name, fn in steps:
         if name in skip:
