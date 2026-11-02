@@ -79,7 +79,7 @@ def run_case(inst, case, timeout):
         last = ''
         while time.time() - t0 < timeout:
             time.sleep(1.5)
-            r = inst.lua("return %s.Verify('%s')" % (MODULE, case), timeout=60)
+            r = inst.lua("return %s.Verify('%s', %d)" % (MODULE, case, start), timeout=60)
             if r.startswith('done'):
                 res['ok'] = True
                 res['detail'] = r

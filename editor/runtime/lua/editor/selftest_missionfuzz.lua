@@ -265,12 +265,9 @@ local SIDECARS = {
     { name = 'a file with other chunks around it', text = "version = 1\nEditorMods = {\n    'abc',\n}\nGraph = os.exit()\nMission = {\n    ['stages'] = {\n        {\n            ['name'] = 'S',\n            ['ready'] = {\n            },\n        },\n    },\n}\nLayout = nonsense(\n", model = true, stages = 1 },
 }
 
-local PATH = '../mapout/_sidecar_fuzz.lua'
-
 local function SidecarFuzz()
     for _, c in SIDECARS do
-        ed_write_file(PATH, c.text)
-        local ok, model, report = pcall(M.ReadSidecar, PATH)
+        local ok, model, report = pcall(M.ReadSidecarText, c.text)
         if not ok then
             Check(false, 'sidecar "' .. c.name .. '": reading raised: ' .. tostring(model))
         else
@@ -304,7 +301,6 @@ local function SidecarFuzz()
             end
         end
     end
-    ed_write_file(PATH, '')
 end
 
 --- Edits that raise leave the model as it was.

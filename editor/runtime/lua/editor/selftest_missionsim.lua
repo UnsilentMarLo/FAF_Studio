@@ -376,7 +376,10 @@ end
 
 -- ---- running a case --------------------------------------------------------------------------------------------------------------------------------
 
+Verified = {}
+
 function Prepare(case)
+    Verified[case] = nil
     Reset = true
     local ok, err = pcall(Build, case)
     Reset = false
@@ -400,9 +403,16 @@ local function Set(list)
 end
 
 --- Polls the sim and compares with what the case expects. Returns 'done' | 'wait ...' | 'fail ...' (a text; 'done' only when everything holds).
-function Verify(case)
-    local expect = Build(case)       -- (rebuilt after the reload: the same model, the same addresses)
+function Verify(case, logFrom)
+    -- what the reloaded session read from the sidecar must be the mission that was built (the round trip save -> `_editor.lua` -> LoadSidecar); then it is rebuilt: the same addresses
+    local loaded = M.SidecarText()
+    local expect = Build(case)
+    if loaded ~= M.SidecarText() and not Verified[case] then
+        return 'fail the mission the reloaded session read from the sidecar is not the one that was built (' .. table.getn(M.Data.stages) .. ' stages after the rebuild, the sidecar text differs; load report: ' .. tostring(M.LoadReport and M.LoadReport[1]) .. ')'
+    end
+    Verified[case] = true
     local R = import('/lua/editor/missionrun.lua')
+    if logFrom then R.SetLogMark(logFrom) end
     R.Poll()
     local st = R.Poll()
     if not st.playing then return 'wait the test run has not started (playing = ' .. tostring(st.playing) .. ')' end
@@ -463,10 +473,14 @@ function Verify(case)
     end
     -- warnings the script raised
     local allow = expect.allowWarn or {}
+    -- (the log of a session start holds warnings that are not about the mission: only what the mission's script, the game's mission modules or the editor's mission code raised counts)
+    local RELEVANT = { 'Error running', 'Error in', 'attempt to', 'bad argument', '_script.lua', 'EDITOR mission', 'ScenarioFramework', 'ScenarioUtilities', 'SimObjectives', 'cinematics', 'AI ERROR' }
     for _, w in R.Warnings() do
+        local relevant = false
+        for _, key in RELEVANT do if string.find(w, key, 1, true) then relevant = true end end
         local fine = false
         for _, a in allow do if string.find(w, a, 1, true) then fine = true end end
-        if not fine and string.find(w, '^    ') == nil then table.insert(problems, 'log: ' .. w) end
+        if relevant and not fine and string.find(w, '^    ') == nil then table.insert(problems, 'log: ' .. w) end
     end
     if table.getn(problems) > 0 then return 'fail ' .. table.concat(problems, ' | ') end
     return 'done (' .. table.getn(st.trace) .. ' trace entries, stage ' .. st.stage .. ', tick ' .. st.tick .. ')'
@@ -489,6 +503,14 @@ function Run()
                 Check(loadstring(text) ~= nil, 'case ' .. case .. ' compiles to loadable Lua (' .. (flavor and 'test run' or 'saved map') .. ')')
             end
             Check(table.getn(M.Problems) == 0, 'case ' .. case .. ' leaves no node out of the script')
+            -- the round trip through the sidecar file: what is saved is what is read back
+            local text = M.SidecarText()
+            local back, report = M.ReadSidecarText(text)
+            local kept = M.Data
+            M.Data = back or { stages = {}, bases = {}, dialogues = {} }
+            local again = M.SidecarText()
+            M.Data = kept
+            Check(back ~= nil and again == text, 'case ' .. case .. ': the sidecar text reads back to the same mission (' .. tostring(report and report[1]) .. ')')
             for id, _ in expect.types do used[id] = true end
         end
     end

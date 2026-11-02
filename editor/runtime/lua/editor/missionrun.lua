@@ -111,7 +111,7 @@ function MarkLog()
 end
 
 -- engine and editor debug output that is not about the mission
-local NOISE = { 'SIMGATE', 'RECONDRIVE', 'ENABLEINTEL', 'GHOST', 'RECONFUNNEL', 'RECONDETECT', 'GetResource', 'LazyVar', 'Can\'t find texture', 'NUM PROPS', 'Detected a' }
+local NOISE = { 'SIMGATE', 'RECONDRIVE', 'ENABLEINTEL', 'GHOST', 'RECONFUNNEL', 'RECONDETECT', 'GetResource', 'LazyVar', 'Can\'t find texture', 'NUM PROPS', 'Detected a', 'zip directory', 'is not a valid .zip', 'Overwriting user key action' }       -- (the engine tries every file of the map / mod folders as an archive: not about the mission)
 
 local function IsNoise(line)
     if string.find(line, '^warning: %[%u+%]') then return true end       -- [TAG] diagnostics of the engine
@@ -138,6 +138,11 @@ function ParseLog(text)
         end
     end
     return list
+end
+
+--- Puts the mark at byte `offset` of the log (a driver that started the run knows where the log was then; the UI state of a session reload does not keep the mark).
+function SetLogMark(offset)
+    logMark = tonumber(offset) or 0
 end
 
 --- The warnings the play test raised since MarkLog().

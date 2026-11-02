@@ -10,7 +10,7 @@
 --                             runs later (timer, area, death, objective result): their stage guard keeps them quiet after the stage has moved on.
 --   A node is addressed by (stage, section, path): path is the index in the section's list, or a table { i, j, ... } through the children of container nodes.
 --   AddStage / RemoveStage / MoveStage / SetStage, AddNode / RemoveNode / MoveNode / IndentNode / OutdentNode / SetParam     edits with undo (History)
---   Compile()                 -> script text of the region (the generated part of `_script.lua`)
+--   Compile(withEntry, opts)  -> script text of the region (the generated part of `_script.lua`); opts.test = the test run flavor (docs/projects/editor/MISSION_COMPILER.md)
 --   PatchScript(text)         -> text with the region written (or replaced); the second result says what happened: 'none' (no mission), 'written', 'detached' (the region was edited by hand: left alone)
 --   Check()                   -> list of { sev = 'E' | 'W' | 'I', text, stage, section, index }
 --   SidecarText() / LoadSidecar(scenarioFile)    the model travels with the map in the `_editor.lua` file
@@ -183,10 +183,10 @@ function Report(where, err)
 end
 
 --- pcall that does not hide the error: Safe(where, fn, args ...) -> ok, result ...
-function Safe(where, fn, a, b, c, d)
-    local ok, r1, r2, r3 = pcall(fn, a, b, c, d)
-    if not ok then Report(where, r1) return false, r1 end
-    return true, r1, r2, r3
+function Safe(where, fn, ...)
+    local res = { pcall(fn, unpack(arg)) }       -- (exactly the arguments given: a C function of the engine checks their number)
+    if not res[1] then Report(where, res[2]) return false, res[2] end
+    return unpack(res)
 end
 
 -- ---- the catalogue ---------------------------------------------------------------------------------------------------------------------------------
@@ -1884,8 +1884,17 @@ end
 
 --- Reads the mission of a sidecar file without running anything else of it: returns the model (or nil) and the list of problems.
 function ReadSidecar(path)
-    local text = ed_read_file(path)
-    if not text or text == '' then return nil, {} end       -- (an empty file is a sidecar without a mission; a file that cannot be read gives the same, the other sections report their own)
+    -- (a virtual path of the map ('/maps/x/x_editor.lua') is turned into the disk file: ed_read_file reads disk paths only)
+    local disk = path
+    if string.sub(path, 1, 1) == '/' and rawget(_G, 'ed_vfs_to_disk') then disk = ed_vfs_to_disk(path) or path end
+    local text = ed_read_file(disk)
+    if text == nil then return nil, { 'the sidecar file cannot be read (' .. tostring(disk) .. ')' } end
+    return ReadSidecarText(text)
+end
+
+--- The same for the text of a sidecar (the file is read by ReadSidecar; tests give the text directly).
+function ReadSidecarText(text)
+    if text == '' then return nil, {} end       -- (an empty file is a sidecar without a mission)
     local chunk = MissionChunk(text)
     if not chunk then return nil, {} end
     local ok, why = DataOnly(chunk)

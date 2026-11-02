@@ -92,6 +92,9 @@ Panels.Register{
             local s = R.State
             local stage = M.StageByNumber(s.stage)
             table.insert(rows, { text = 'Stage ' .. s.stage .. (M.IsImported() and '' or (' of ' .. table.getn(M.Data.stages))) .. (stage and (': ' .. tostring(stage.name)) or ''), extra = 'tick ' .. s.tick, color = c.accent })
+            if s.ended then
+                table.insert(rows, { text = s.success and 'the operation ended: won' or 'the operation ended: lost', color = s.success and c.ok or (c.warn or c.accent) })
+            end
             if M.IsImported() then
                 table.insert(rows, { text = 'imported script: its objectives and groups are not listed here', color = c.textDim })
             end
