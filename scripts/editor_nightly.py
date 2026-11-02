@@ -388,9 +388,9 @@ LAYOUT_PANEL_ALONE = (('1920x1080', 1.0), ('1280x720', 1.5), ('1280x720', 2.0)) 
 # Panels that start unit thumbnail rendering (assetthumbs.lua): the engine of this machine crashes in it (access violation in the first frames after the thumbnails, seen in the
 # editor log of the layout instance with the plain assets panel and with the unit browser), which would end the run. Their layout is seen in the workspaces that show them.
 LAYOUT_SKIP_PANELS = ()
-# Panels whose buttons are not pressed here (the `clicks` step does that): the Fields panel's buttons run the native field engine, which crashes the engine of this machine (access violation in the
-# first frame after the press, reproduced in a plain click sweep of the layout instance); the dialogs of the other panels are enough for the layout.
-LAYOUT_SKIP_SWEEP = ('fields',)
+# Panels whose buttons are not pressed here (the `clicks` step does that): their buttons run a long native computation (field engine, erosion, recipes, scatter, the layout canvas); one Lua command
+# that keeps the main loop busy for more than 12 s makes the engine's watchdog write a crash report and end the process, which would end the run. The dialogs of the other panels are enough for the layout.
+LAYOUT_SKIP_SWEEP = ('fields', 'erosion', 'layoutcanvas', 'recipes', 'scatter')
 LAYOUT_QUIET_LUA = "import('/lua/editor/assetthumbs.lua').Pause(true) return import('/lua/editor/clicksweep.lua').Fixture()"      # no thumbnail renders while the layout is measured
 
 # {scale} {fn} {ids} {tag} {long}
@@ -433,7 +433,7 @@ return n .. '|' .. table.concat(p, ' @@ ')
 def step_layout(inst, rep, exe=None, editor=None):
     """No control runs past the area the user sees or over another one, no text is wider than its box (layoutcheck.lua): every workspace, its resized and narrowest docks,
     every panel on its own, the dialogs (also with long text) and the bars, at 1920x1080 and 1280x720 and UI 100 / 150 / 200 %."""
-    problems, checked = [], 0
+    problems, checked, known = [], 0, []
 
     def add(label, res):
         nonlocal checked
@@ -480,8 +480,19 @@ def step_layout(inst, rep, exe=None, editor=None):
             if (size, scale) in LAYOUT_PANEL_SWEEPS:
                 for pid in [i for i in ids if i not in LAYOUT_SKIP_SWEEP]:
                     call('%s sweep %s' % (tag, pid), LAYOUT_PART_LUA.format(scale=scale, fn='Panel', arg="'%s'" % pid), timeout=120)
+            # problems of the panels of other groups (layoutcheck.Known) are kept apart
+            try:
+                tail = inst.lua("return table.concat(import('/lua/editor/layoutcheck.lua').TakeKnown(), ' @@ ')")
+                known.extend('%s %s' % (tag, t.replace(NL, ' ')[:240]) for t in tail.split(' @@ ') if t.strip())
+            except RuntimeError:
+                pass
         inst.lua("import('/lua/editor/gui/skin.lua').SetScale(1.0) import('/lua/editor/gui/shell.lua').ShowWorkspace('Terrain') return 'ok'")
-    rep.add('layout', not problems, '%d widgets measured, %d problems' % (checked, len(problems)), sorted(set(problems)))
+    problems = sorted(set(problems))
+    known = sorted(set(known))
+    summary = '%d widgets measured, %d problems' % (checked, len(problems))
+    if known:
+        summary += ', %d more in panels of other groups (known, listed at the end of the details)' % len(known)
+    rep.add('layout', not problems, summary, problems + ['KNOWN ' + k for k in known])
 
 
 MENU_LUA = r"""
