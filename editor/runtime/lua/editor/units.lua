@@ -292,13 +292,14 @@ end
 
 -- All() builds a table per unit (2100 on a mission map) and walks and sorts every group: per-frame callers (the overlay's rings, the gizmo, range rings, hover) and the
 -- loops that look up each selected unit use this cached copy instead. It is rebuilt when a unit was stored or removed here (Rev), when the history moved (an edit made
--- elsewhere), when another document was opened, and at the latest after 1.5 s (a writer that bypasses all three). The entries are shared: read them, do not change them.
+-- elsewhere), when another document was opened, and at the latest after 5 s (a writer that bypasses all three; it was 1.5 s: each rebuild is ~10 ms on a mission map). The entries are shared: read them, do not change them.
 local cache = { doc = false, rev = -1, hist = -1, at = -100, list = false, index = false }
+CACHE_NET_SECONDS = 5
 
 local function CacheFresh()
     local now = GetSystemTimeSeconds()
     local hist = History.Version
-    if cache.list and cache.doc == Map.Doc and cache.rev == Rev and cache.hist == hist and now - cache.at < 1.5 then return end
+    if cache.list and cache.doc == Map.Doc and cache.rev == Rev and cache.hist == hist and now - cache.at < CACHE_NET_SECONDS then return end
     cache.list, cache.index = All(), false
     cache.doc, cache.rev, cache.hist, cache.at = Map.Doc, Rev, hist, now
 end

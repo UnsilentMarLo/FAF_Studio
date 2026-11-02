@@ -8,6 +8,7 @@
 
 local Map = import('/lua/editor/map.lua')
 local MC = import('/lua/editor/markercheck.lua')
+local MeshView = import('/lua/editor/meshview.lua')
 local WorldMesh = import('/lua/ui/controls/worldmesh.lua').WorldMesh
 
 local MARKER_ALBEDO = '/env/common/props/marker01_albedo.dds'
@@ -32,6 +33,13 @@ local syncAt, netAt = 0, 0      -- clock of the last height sync (2 s net) and o
 local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 local Tools = import('/lua/editor/tools.lua')
 local syncedEpoch, seenChanged = -1, -1      -- what the last height sync and the last walk over the markers were done for
+local filterMod = false
+local Sig = import('/lua/editor/markersig.lua')
+local fullAt, sigA, sigB = 0, 0, 0              -- the clock of the last full walk over the markers, and the fingerprint of the positions it saw
+local Perf = import('/lua/editor/perf.lua')
+local SYNC_SLICE = 400                      -- markers whose height is synced per frame
+local syncMoved = false                      -- a height moved in the pass under way
+local syncNames, syncN, syncPos = {}, 0, 0   -- the names of the pass under way, how many, the next one (0: no pass)
 local ended = false      -- Shutdown ran: the session is ending, nothing is built any more
 
 --- '/env/common/props/markers/M_Mass_prop.bp' -> '/env/common/props/markers/M_Mass_lod0.scm' (false for the mesh-less path marker).
@@ -124,8 +132,8 @@ local function Destroy(e)
     if e.deposit then e.deposit:Destroy() end
 end
 
-local function Build(name, m)
-    local x, y, z = MC.DisplayPos(m)
+local function Build(name, m, sizeX, sizeZ)
+    local x, y, z = MC.DisplayPos(m, sizeX, sizeZ)
     local yaw = (m.orientation and m.orientation[2]) or 0
     local dep = DEPOSITS[m.type]
     local e = { shapeProp = m.prop, shapeType = m.type, x = x, y = y, z = z, yaw = yaw, prop = false, deposit = false }
@@ -151,8 +159,9 @@ local function Build(name, m)
     entries[name] = e
 end
 
-local function Move(name, e, m)
-    local x, y, z = MC.DisplayPos(m)
+local function Move(name, e, m, sizeX, sizeZ)
+    local x, y, z, kind = MC.DisplayPos(m, sizeX, sizeZ)
+    e.outside = kind ~= nil
     local yaw = (m.orientation and m.orientation[2]) or 0
     if x == e.x and y == e.y and z == e.z and yaw == e.yaw then return end
     e.x, e.y, e.z, e.yaw = x, y, z, yaw
@@ -226,6 +235,7 @@ function Clear()
     entries = {}
     lastDoc = false
     syncedEpoch, seenChanged = -1, -1
+    syncPos = 0
     for i = 1, table.getn(ghosts) do ghosts[i]:Destroy() end
     ghosts, ghostMesh, ghostShown = {}, false, 0
 end
@@ -269,30 +279,70 @@ function Update()
     -- ground may have changed (TerrainEpoch: a finished stroke, an undo; at the latest every 5 s) and every 2 s, not ten times a second.
     local clock = GetSystemTimeSeconds()
     local synced = false
-    if syncedEpoch ~= TerrainEpoch.Epoch or clock - syncAt >= 2 then
+    -- The pass is cut into slices of SYNC_SLICE markers, one slice per frame: 3000 terrain reads in one frame were a 3-5 ms hitch every 2 s. It starts when the ground may
+    -- have changed or after 2 s and the meshes follow (`synced`) when the last slice is done.
+    local tSync = Perf.Begin()
+    if syncPos == 0 and (syncedEpoch ~= TerrainEpoch.Epoch or clock - syncAt >= 2) then
         syncAt = clock
         syncedEpoch = TerrainEpoch.Epoch
-        synced = true
-        for name, m in markers do
-            local px, pz = m.position[1], m.position[3]
-            if px and pz and px > -1e6 and px < 1e6 and pz > -1e6 and pz < 1e6 then      -- (NaN fails both tests)
-                local ground = ed_terrain_get(math.floor(px + 0.5), math.floor(pz + 0.5))
-                if ground and math.abs(ground - m.position[2]) > 0.01 then m.position[2] = ground end
+        syncN = 0
+        for name in markers do
+            syncN = syncN + 1
+            syncNames[syncN] = name
+        end
+        syncPos = 1
+    end
+    if syncPos > 0 then
+        local last = math.min(syncN, syncPos + SYNC_SLICE - 1)
+        local get, floor, abs = ed_terrain_get, math.floor, math.abs
+        for i = syncPos, last do
+            local m = markers[syncNames[i]]
+            local pos = m and m.position
+            if pos then
+                local px, pz = pos[1], pos[3]
+                if px and pz and px > -1e6 and px < 1e6 and pz > -1e6 and pz < 1e6 then      -- (NaN fails both tests)
+                    local ground = get(floor(px + 0.5), floor(pz + 0.5))
+                    if ground and abs(ground - pos[2]) > 0.01 then
+                        pos[2] = ground
+                        syncMoved = true
+                    end
+                end
             end
         end
+        syncPos = last + 1
+        if syncPos > syncN then
+            syncPos = 0
+            synced = syncMoved          -- (the meshes follow when a height moved)
+            syncMoved = false
+        end
     end
+    Perf.End('markervis: height sync', tSync)
     -- The meshes are brought in line with the markers when the objects changed (Tools.Changed: a move, a type, a layer switch), when heights were synced, and about once a
     -- second as a net for an edit that does not announce itself. A frame in which nothing happened costs nothing (it walked every marker and built a string for each, every frame).
+    -- The net: once a second a fingerprint of the marker positions (markersig.lua), a walk only when it moved or the markers changed in a way the fingerprint cannot see (type, prop:
+    -- all of them announce themselves through Tools.Changed; the full walk every 10 s is for a writer that does not).
     local changed = Tools.Changed
-    if not synced and changed == seenChanged and clock - netAt < 1 then
-        return
+    local walk = synced or changed ~= seenChanged or clock - fullAt >= 10
+    if not walk and clock - netAt >= 1 then
+        netAt = clock
+        local a, b = Sig.Sums(clock)
+        if a ~= sigA or b ~= sigB then walk = true end
     end
+    if not walk then return end
+    fullAt = clock
     netAt = clock
+    sigA, sigB = Sig.Sums(clock)
     seenChanged = changed
-    local Filter = import('/lua/editor/markerfilter.lua')
+    local tWalk = Perf.Begin()
+    if not filterMod then filterMod = import('/lua/editor/markerfilter.lua') end
+    local Filter = filterMod
+    local sizeX, sizeZ = ed_terrain_info()           -- (once for the walk: DisplayPos asks the engine for it per marker when it is not given)
+    sizeX, sizeZ = (sizeX or 257) - 1, (sizeZ or 257) - 1
+    local anyHidden = next(Filter.Hidden) ~= nil
+    local meshOn = MeshView.Active()
     for name, m in markers do
         local e = entries[name]
-        local hidden = Filter.IsHidden(m.type)       -- marker layers: a hidden category has no prop in the world
+        local hidden = anyHidden and Filter.IsHidden(m.type)       -- marker layers: a hidden category has no prop in the world
         if e and (hidden or e.shapeProp ~= m.prop or e.shapeType ~= m.type) then
             Destroy(e)
             ed_overlay_remove('sp:' .. name)
@@ -302,9 +352,14 @@ function Update()
         if hidden then
             -- nothing to show
         elseif e then
-            Move(name, e, m)
+            -- (a marker that stands where it stood, on a map without a mesh terrain, needs no DisplayPos: it is the stored position)
+            local p, o = m.position, m.orientation
+            if meshOn or e.rx ~= p[1] or e.ry ~= p[2] or e.rz ~= p[3] or e.rYaw ~= (o and o[2]) or e.outside then
+                e.rx, e.ry, e.rz, e.rYaw = p[1], p[2], p[3], o and o[2]
+                Move(name, e, m, sizeX, sizeZ)
+            end
         else
-            Build(name, m)
+            Build(name, m, sizeX, sizeZ)
         end
     end
     for name, e in entries do
@@ -314,4 +369,5 @@ function Update()
             entries[name] = nil
         end
     end
+    Perf.End('markervis: mesh walk', tWalk)
 end
