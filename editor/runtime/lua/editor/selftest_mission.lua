@@ -380,7 +380,14 @@ function RunStrings()
     Check(string.find(text, "['INTRO'] = {", 1, true) and string.find(text, "text = 'HQ: Welcome, Commander', delay = 7", 1, true), 'the Strings table carries speaker and duration')
     Check(string.find(text, "ScenarioFramework.Dialogue(Strings['INTRO'], nil, true)", 1, true), 'the dialogue node plays the table')
     Check(string.find(text, 'local o = obj', 1, true) and string.find(text, 'Wait(30)', 1, true) and string.find(text, "Strings['INTRO'])", 1, true), 'the reminder loop is compiled')
-    Check(string.find(text, 'local function Wait(seconds)', 1, true) and string.find(text, 'ScenarioInfo.EditorMission = ', 1, true), 'Wait / Timer helpers and the editor state are in the script')
+    local testText = M.Compile(true, { test = true })
+    Check(string.find(testText, 'local function Wait(seconds)', 1, true) and string.find(testText, 'ScenarioInfo.EditorMission = ', 1, true) and string.find(testText, 'EdTrace(', 1, true), 'a test run script has the Wait shim, the editor state and the node trace')
+    Check(loadstring(testText) ~= nil, 'and loads')
+    -- the script of a saved or released map has none of the editor's test hooks
+    Check(string.find(text, 'local function Wait(seconds)', 1, true) and string.find(text, 'WaitSeconds(seconds)', 1, true) and not string.find(text, 'WaitTicks', 1, true), 'a saved map waits with WaitSeconds (no polling shim)')
+    for _, hook in { 'EditorSkip', 'EditorTimeScale', 'EditorMission =', 'EdTrace', 'EditorStartStage', 'coopshim', 'editorsim' } do
+        Check(not string.find(text, hook, 1, true), 'a saved map script has no ' .. hook)
+    end
 
     -- sidecar and undo
     local fn = loadstring(M.SidecarText())
@@ -424,7 +431,8 @@ function RunCoop()
     Check(M.ScenarioType('campaign') == 'campaign_coop' and M.ScenarioType('skirmish') == 'campaign_coop', 'coop and both modes make the scenario campaign_coop')
     M.SetMode('both')
     Check(M.ScenarioType('campaign') == 'campaign_coop', 'both mode too')
-    Check(string.find(M.Compile(true), "import('/lua/editor/coopshim.lua').Install()", 1, true) ~= nil, 'coop and both-mode scripts install the coop support in an editor play test')
+    Check(string.find(M.Compile(true, { test = true }), "import('/lua/editor/coopshim.lua').Install()", 1, true) ~= nil, 'coop and both-mode scripts install the coop support in an editor play test')
+    Check(string.find(M.Compile(true), 'coopshim', 1, true) == nil, 'and a saved map does not mention the editor shim')
     H.Undo()
     Check(M.Data.mode == 'coop', 'mode change has undo')
     H.Redo()

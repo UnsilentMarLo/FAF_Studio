@@ -12,12 +12,13 @@ local Skin = import('/lua/editor/gui/skin.lua')
 local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local PL = import('/lua/editor/platoons.lua')
+local M = import('/lua/editor/mission.lua')
 local Map = import('/lua/editor/map.lua')
 
 live = {}
 
 local function Say(text)
-    pcall(function() UI.Say(text) end)
+    M.Safe('status line', UI.Say, text)
 end
 
 local function Dialogs() return import('/lua/editor/gui/dialogs_mission.lua') end
@@ -443,5 +444,5 @@ Panels.Register{
 --- Ticked by the shell: follows undo / redo and edits of other panels.
 function Refresh()
     local P = live.platoons
-    if P and P.rev ~= PL.Revision then pcall(P.Refresh, P) end
+    if P and P.rev ~= PL.Revision then M.Safe('Platoons panel refresh', P.Refresh, P) end
 end

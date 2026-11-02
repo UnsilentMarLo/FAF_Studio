@@ -41,7 +41,7 @@ local function WhyTip(b, blocked, why)
 end
 
 local function Say(text)
-    pcall(function() UI.Say(text) end)
+    M.Safe('status line', UI.Say, text)
 end
 
 local function Dialogs() return import('/lua/editor/gui/dialogs_mission.lua') end
@@ -268,9 +268,9 @@ function Refresh()
         run.ticks = run.ticks + 1
         -- the sim is asked once a second while playing (a dump is a file write)
         if UI.State.mode == 'play' or run.lastMode == 'play' then
-            if math.mod(run.ticks, 4) == 0 or run.lastMode ~= UI.State.mode then pcall(run.Refresh, run) end
+            if math.mod(run.ticks, 4) == 0 or run.lastMode ~= UI.State.mode then M.Safe('Run panel refresh', run.Refresh, run) end
         end
     end
     local st = live.strings
-    if st and st.rev ~= M.Revision then pcall(st.Refresh, st) end
+    if st and st.rev ~= M.Revision then M.Safe('Strings panel refresh', st.Refresh, st) end
 end

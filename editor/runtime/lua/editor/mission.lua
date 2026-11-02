@@ -90,25 +90,41 @@ end
 local IMPORTED = 'imported from the script: read-only'
 
 -- ---- helpers for the emitters ---------------------------------------------------------------------------------------------------------------------
+-- Everything a user can type reaches the script through one of these (docs/projects/editor/MISSION_COMPILER.md): Q quotes a string, N writes a finite number, Var / IsName accept
+-- identifiers only, Expr accepts one Lua expression of a small alphabet, and the catalogue's choice / number / bool parameters are cleaned by Clean() before an emitter sees them.
 
+--- A Lua string literal ('...') for any text: backslash, quote and every control character are escaped (a newline or a NUL can neither end the literal nor the line).
 local function Q(s)
-    s = tostring(s or '')
+    if type(s) ~= 'string' then s = tostring(s == nil and '' or s) end
     s = string.gsub(s, '\\', '\\\\')
     s = string.gsub(s, "'", "\\'")
-    s = string.gsub(s, '\n', '\\n')
-    s = string.gsub(s, '\r', '')
+    s = string.gsub(s, '%c', function(c) return string.format('\\%03d', string.byte(c)) end)
     return "'" .. s .. "'"
 end
 
+local HUGE = 1e300
+
+--- Is `v` a number that can be written into a script (not nan, not infinite)?
+local function Finite(v)
+    return type(v) == 'number' and v == v and v > -HUGE and v < HUGE
+end
+IsFinite = Finite
+
+--- A number as script text. Anything that is not a finite number (nil, text, nan, inf) gives `default` (0 when none).
 local function N(v, default)
     v = tonumber(v)
-    if not v then v = default or 0 end
+    if not Finite(v) then v = tonumber(default) if not Finite(v) then v = 0 end end
     if v == math.floor(v) and v > -1000000 and v < 1000000 then return string.format('%d', v) end
     return string.format('%.3f', v)
 end
 
+local KEYWORDS = { ['and'] = true, ['break'] = true, ['do'] = true, ['else'] = true, ['elseif'] = true, ['end'] = true, ['false'] = true, ['for'] = true, ['function'] = true,
+                   ['if'] = true, ['in'] = true, ['local'] = true, ['nil'] = true, ['not'] = true, ['or'] = true, ['repeat'] = true, ['return'] = true, ['then'] = true,
+                   ['true'] = true, ['until'] = true, ['while'] = true }
+
+--- A name that is usable as a Lua field / variable: letters, digits, _, not starting with a digit, not a keyword (V.end would not load), not absurdly long.
 local function IsName(s)
-    return type(s) == 'string' and string.find(s, '^[%a_][%w_]*$') ~= nil
+    return type(s) == 'string' and string.len(s) <= 64 and string.find(s, '^[%a_][%w_]*$') ~= nil and not KEYWORDS[s]
 end
 
 --- The field of the variable table for a name the user typed. A name that is not an identifier (empty = not chosen yet) becomes V.UNSET, a field nothing sets: the script
@@ -118,11 +134,19 @@ local function Var(name)
     return 'V.' .. name
 end
 
---- A Lua expression the user typed (a category such as categories.TECH3): the text itself when it compiles, else `default` (Check reports the broken expression).
+--- The characters a category expression (categories.TECH3 * categories.LAND - categories.ENGINEER, ParseEntityCategory('x')) needs; nothing that could open a table, a string
+--- over several lines, a comment or a second statement.
+local function ExprShape(text)
+    return type(text) == 'string' and string.len(text) <= 300 and string.find(text, '^[%w_%.%s%(%)%+%-%*/,\'"]+$') ~= nil and not string.find(text, '--', 1, true)
+end
+
+--- A Lua expression the user typed (a category such as categories.TECH3): the text itself, in parentheses so that it is ONE value, when it is a single expression of the
+--- alphabet above that compiles; else `default` (Check reports the broken expression).
 local function Expr(text, default)
     if text == nil or text == '' then return default end
-    local ok, f = pcall(loadstring, 'return ' .. tostring(text))
-    if ok and f then return text end
+    if not ExprShape(text) then return default end
+    local ok, f = pcall(loadstring, 'return (' .. text .. ')')
+    if ok and f then return '(' .. text .. ')' end
     return default
 end
 ExprOk = function(text) return text == nil or text == '' or Expr(text, false) ~= false end
@@ -137,6 +161,26 @@ end
 Quote = Q
 Num = N
 ValidName = IsName
+
+--- Reports an error that was caught (an edit, a node emitter, a hook): the log always, the status line and the console when the UI is up. Returns the text so a caller can pass it on.
+--- (A swallowed error used to look like "nothing happened".)
+local reported = {}
+function Report(where, err)
+    local text = tostring(where) .. ': ' .. tostring(err)
+    reported[text] = (reported[text] or 0) + 1
+    if reported[text] > 1 then return text end       -- (a panel that fails every refresh is logged once, not four times a second)
+    LOG('EDITOR mission: ' .. text)
+    local ok, ui = pcall(import, '/lua/editor/ui.lua')
+    if ok and ui and ui.Say then pcall(ui.Say, 'mission: ' .. text) end
+    return text
+end
+
+--- pcall that does not hide the error: Safe(where, fn, args ...) -> ok, result ...
+function Safe(where, fn, a, b, c, d)
+    local ok, r1, r2, r3 = pcall(fn, a, b, c, d)
+    if not ok then Report(where, r1) return false, r1 end
+    return true, r1, r2, r3
+end
 
 -- ---- the catalogue ---------------------------------------------------------------------------------------------------------------------------------
 
@@ -197,7 +241,9 @@ local function CallbackBody(n, C, fork)
     local lines = {}
     local pad = fork and '        ' or '    '
     if fork then table.insert(lines, '    ForkThread(function()') end
-    if n.stageOnly ~= false then table.insert(lines, pad .. 'if ScenarioInfo.MissionNumber ~= ' .. C.stage .. ' then return end') end
+    -- (the guard drops the event silently when the stage has moved on: a test run traces the drop, Check lists every such trigger)
+    if n.stageOnly ~= false then table.insert(lines, pad .. 'if ScenarioInfo.MissionNumber ~= ' .. C.stage .. ' then ' .. (C.test and ('EdTrace(' .. Q(C.Addr() .. '~') .. ') ') or '') .. 'return end') end
+    if C.test then table.insert(lines, pad .. 'EdTrace(' .. Q(C.Addr() .. '!') .. ')') end
     local body = C.Body(n, pad, true)
     for _, l in body do table.insert(lines, l) end
     if table.getn(body) == 0 then table.insert(lines, pad .. '-- (nothing to do)') end
@@ -314,7 +360,7 @@ Catalogue = {
                  { key = 'spread', label = 'Scatter radius', kind = 'number', default = 0, min = 0, max = 200 },
                  { key = 'fill', label = 'Load the silos first (no build time)', kind = 'bool', default = true } },
       emit = function(n)
-          local count = math.floor(tonumber(n.count) or 1)
+          local count = math.max(1, math.min(50, math.floor(tonumber(n.count) or 1)))       -- (the loop below runs this often: never a huge number)
           local spread = N(n.spread, 0)
           return { 'do',
                    '    local target = ScenarioUtils.MarkerToPosition(' .. Q(n.marker) .. ')',
@@ -383,11 +429,15 @@ Catalogue = {
       end },
     { id = 'base_start', family = 'action', title = 'Start a base (BaseManager)',
       params = { { key = 'base', label = 'Base', kind = 'base' } },
-      emit = function(n) return { 'Base.Start_' .. tostring(n.base or '') .. '()' } end },
+      emit = function(n)
+          if not IsName(n.base) then return { '-- (no base chosen)' } end
+          return { 'Base.Start_' .. n.base .. '()' }
+      end },
     { id = 'base_active', family = 'action', title = 'Switch a base on / off',
       params = { { key = 'base', label = 'Base', kind = 'base' }, { key = 'on', label = 'Active', kind = 'bool', default = true } },
       emit = function(n)
-          local b = 'Base.Manager_' .. tostring(n.base or '')
+          if not IsName(n.base) then return { '-- (no base chosen)' } end
+          local b = 'Base.Manager_' .. n.base
           return { 'if ' .. b .. ' then ' .. b .. ':BaseActive(' .. (n.on == false and 'false' or 'true') .. ') end' }
       end },
     { id = 'raw', family = 'action', title = 'Raw Lua',
@@ -435,20 +485,13 @@ Catalogue = {
       emit = function(n, C)
           local cat = Expr(n.category, COUNT_CAT)
           local test = 'CountInArea(' .. Q(n.area) .. ', ' .. Q(n.army) .. ', ' .. cat .. ') ' .. (n.compare or '>=') .. ' ' .. N(n.value, 1)
-          local out = { 'ForkThread(function()', '    while true do' }
-          if n.stageOnly ~= false then table.insert(out, '        if ScenarioInfo.MissionNumber ~= ' .. C.stage .. ' then return end') end
-          table.insert(out, '        if ' .. test .. ' then')
-          local body = C.Body(n, '            ', true)
+          -- one poller thread serves every area trigger (WatchArea in the script's header): it asks the game for the units of an area once per tick, however many triggers look at it
+          local out = { 'WatchArea(' .. ((n.stageOnly ~= false) and tostring(C.stage) or 'nil') .. ', function() return ' .. test .. ' end, function()' }
+          if C.test then table.insert(out, '    EdTrace(' .. Q(C.Addr() .. '!') .. ')') end
+          local body = C.Body(n, '    ', true)
           for _, l in body do table.insert(out, l) end
-          if n.once ~= false then
-              table.insert(out, '            return')
-          else
-              table.insert(out, '            while ' .. test .. ' do Wait(1) end')
-          end
-          table.insert(out, '        end')
-          table.insert(out, '        Wait(1)')
-          table.insert(out, '    end')
-          table.insert(out, 'end)')
+          if table.getn(body) == 0 then table.insert(out, '    -- (nothing to do)') end
+          table.insert(out, 'end, ' .. ((n.once ~= false) and 'true' or 'false') .. ')')
           return out
       end },
     { id = 'trg_objective', family = 'trigger', container = true, callback = true, title = 'When an objective is decided',
@@ -535,6 +578,36 @@ KindChecks = {}
 
 function NodeType(id) return byId[id] end
 
+--- A copy of the node whose parameters are safe to write into a script, whatever the sidecar or an edit put there: a choice that is not one of the catalogue's choices becomes the
+--- default, a number that is not finite (text, nan, inf) becomes the default, a boolean that is none becomes the default, any other value of a text-like parameter becomes text, and
+--- the children are a list. Returns the copy and the number of values it had to replace (Check reports those nodes).
+function Clean(node, t)
+    local c = {}
+    for k, v in node do c[k] = v end
+    local fixed = 0
+    for _, p in t.params do
+        local v = node[p.key]
+        if v ~= nil then
+            if p.kind == 'choice' then
+                local known = false
+                for _, ch in p.choices or {} do if v == ch then known = true end end
+                if not known then c[p.key] = p.default fixed = fixed + 1 end
+            elseif p.kind == 'number' then
+                local x = tonumber(v)
+                if not Finite(x) then c[p.key] = p.default fixed = fixed + 1
+                elseif x ~= v then c[p.key] = x end
+            elseif p.kind == 'bool' then
+                if type(v) ~= 'boolean' then c[p.key] = p.default fixed = fixed + 1 end
+            elseif type(v) ~= 'string' then
+                c[p.key] = (type(v) == 'number' and Finite(v)) and tostring(v) or ''
+                fixed = fixed + 1
+            end
+        end
+    end
+    if c.children ~= nil and type(c.children) ~= 'table' then c.children = {} fixed = fixed + 1 end
+    return c, fixed
+end
+
 -- ---- the model and its edits (all with undo) ---------------------------------------------------------------------------------------------------
 
 local function Copy(t)
@@ -548,7 +621,12 @@ end
 --- (Also used by mbase.lua for the base tables.)
 local function Do(label, fn, mergeKey)
     local before = Copy(Data)
-    local ok, why = fn()
+    local called, ok, why = pcall(fn)
+    if not called then
+        -- an edit that raises leaves the model exactly as it was (and says so: the status line, the console and the log)
+        Data = before
+        return nil, Report('the edit "' .. label .. '" failed and was undone', ok)
+    end
     if ok == false then Data = before return nil, why end
     Revision = Revision + 1
     local top = mergeKey and History.Top and History.Top()
@@ -590,6 +668,7 @@ end
 function SetStage(i, field, value, merge)
     if not Data.stages[i] then return nil, 'no such stage' end
     if Data.stages[i].imported then return nil, IMPORTED end
+    if type(value) == 'number' and not Finite(value) then return nil, 'not a finite number' end
     return Do('stage ' .. field, function() Data.stages[i][field] = value end, merge and ('stage' .. i .. field) or nil)
 end
 
@@ -910,6 +989,7 @@ end
 function SetParam(stage, section, path, key, value, merge)
     local _, _, node = Locate(stage, section, path)
     if not node then return nil, 'no such node' end
+    if type(value) == 'number' and not Finite(value) then return nil, 'not a finite number' end       -- (nan / inf would be written into the sidecar and the script)
     return Do('edit node', function()
         local _, _, n = Locate(stage, section, path)
         n[key] = value
@@ -1074,31 +1154,137 @@ local function UsesType(id)
     return false
 end
 
+--- Nodes (and stages) the last Compile had to leave out because they could not be generated: { text, stage, section, path }. Check lists them; the script says so with a WARN.
+Problems = {}
+
+local function OneLine(text)
+    return (string.gsub(tostring(text), '%c', ' '))
+end
+
+local function PathText(path)
+    local parts = {}
+    for _, i in AsPath(path or {}) do table.insert(parts, tostring(i)) end
+    return table.concat(parts, '.')
+end
+
+--- The address of the node being emitted: '<stage>.<section>.<path>' (the id a test run traces).
+local function Address(C)
+    return tostring(C.stage) .. '.' .. tostring(C.section) .. '.' .. PathText(C.path)
+end
+
 local Context
+
+--- The lines of a list of nodes. An emitter that raises, a Raw Lua node that does not compile (and, in `strict` mode, any node whose lines do not load) is left out with a
+--- comment and a WARN in the script; the other nodes stay. A test run (`C.test`) traces every node when the script reaches it.
 local function EmitList(list, C, prefix)
     local out = {}
-    for _, node in list or {} do
-        local t = byId[node.type]
-        if t then
-            for _, line in t.emit(node, C) do table.insert(out, prefix .. line) end
+    local base = C.path
+    for i, node in list or {} do
+        local path = base and Child(base, i) or { i }
+        C.path = path
+        local t = type(node) == 'table' and byId[node.type]
+        if not t then
+            local text = 'unknown node type ' .. OneLine(type(node) == 'table' and node.type or 'not a node')
+            table.insert(Problems, { text = text, stage = C.stage, section = C.section, path = path })
+            table.insert(out, prefix .. '-- ' .. text)
         else
-            table.insert(out, prefix .. '-- unknown node type ' .. tostring(node.type))
+            local clean = Clean(node, t)
+            local ok, lines = pcall(t.emit, clean, C)
+            local why
+            if not ok then
+                why = 'could not be generated (' .. OneLine(lines) .. ')'
+            elseif type(lines) ~= 'table' then
+                why = 'could not be generated (the emitter returned no lines)'
+            elseif node.type == 'raw' or C.strict then
+                local f, err = loadstring(table.concat(lines, '\n'))
+                if not f then why = 'does not compile (' .. OneLine(err) .. ')' end
+            end
+            if not why then
+                if C.test then table.insert(out, prefix .. 'EdTrace(' .. Q(Address(C)) .. ')') end
+                for _, line in lines do table.insert(out, prefix .. tostring(line)) end
+            else
+                local text = t.title .. ': the code ' .. why .. ': the node is left out of the script'
+                if node.type ~= 'raw' then text = t.title .. ': ' .. why .. ': the node is left out of the script' end
+                table.insert(Problems, { text = text, stage = C.stage, section = C.section, path = path })
+                table.insert(out, prefix .. '-- ' .. text)
+                table.insert(out, prefix .. 'WARN(' .. Q('EDITOR mission: stage ' .. tostring(C.stage) .. ', node ' .. PathText(path) .. ': ' .. text) .. ')')
+            end
         end
     end
+    C.path = base
     return out
 end
 
---- What the emitters of one stage may ask: the stage number, the call that starts the next stage and the lines of a container's children.
-Context = function(stage, nextCall, inCallback)
-    local C = { stage = stage, nextCall = nextCall, inCallback = inCallback }
+--- What the emitters of one stage may ask: the stage number, the call that starts the next stage, the lines of a container's children (Body), the address of the node being emitted
+--- (Addr) and whether this is a test run (traces) or a strict pass (every node is checked to load on its own).
+Context = function(stage, nextCall, inCallback, path, test, section, strict)
+    local C = { stage = stage, nextCall = nextCall, inCallback = inCallback, path = path, test = test, section = section, strict = strict }
+    C.Addr = function() return Address(C) end
     C.Body = function(node, prefix, callback)
-        return EmitList(node.children, Context(stage, nextCall, inCallback or callback), prefix or '    ')
+        return EmitList(node.children, Context(stage, nextCall, inCallback or callback, C.path, test, section, strict), prefix or '    ')
     end
     return C
 end
 
+--- The function of one stage as lines.
+local function StageLines(i, stage, test, strict)
+    local out = {}
+    local function Add(line) table.insert(out, line) end
+    Add('-- stage ' .. i .. ': ' .. OneLine(stage.name or ''))
+    Add('Stage[' .. i .. '] = function()')
+    Add('    if ScenarioInfo.MissionNumber >= ' .. i .. ' then return end')
+    Add('    ScenarioInfo.MissionNumber = ' .. i)
+    if test then Add('    EdTrace(' .. Q('stage.' .. i) .. ')') end
+    local objectives = HasObjectives(stage)
+    local nextCall
+    local following = NextActive(i)
+    if following then nextCall = 'ForkThread(Stage[' .. following .. '])' end
+    if objectives then
+        local callback
+        if nextCall then
+            callback = 'function() ' .. nextCall .. ' end'
+        elseif HasEnd(stage) then
+            callback = 'function() end'
+        else
+            callback = 'function() ScenarioFramework.EndOperation(true, true, true) end'
+        end
+        Add('    local obj')
+        Add('    local Group = Objectives.CreateGroup(' .. Q('Stage' .. i) .. ', ' .. callback .. ')')
+    end
+    if (tonumber(stage.failsafe) or 0) > 0 and nextCall then
+        Add('    Timer(function() ' .. nextCall .. ' end, ' .. N(stage.failsafe) .. ')')
+    end
+    for _, section in { 'enter', 'ready' } do
+        local C = Context(i, nextCall, false, nil, test, section, strict)
+        for _, line in EmitList(stage[section], C, '    ') do Add(line) end
+    end
+    if not objectives and nextCall and not HasExit(stage) and not ((tonumber(stage.failsafe) or 0) > 0) then
+        Add('    ' .. nextCall)
+    end
+    Add('end')
+    return out
+end
+
+--- A stage that could not be generated at all: it starts the next one and says so in the log.
+local function StageStub(i, stage, why)
+    local following = NextActive(i)
+    local out = { 'Stage[' .. i .. '] = function()',
+                  '    if ScenarioInfo.MissionNumber >= ' .. i .. ' then return end',
+                  '    ScenarioInfo.MissionNumber = ' .. i,
+                  '    WARN(' .. Q('EDITOR mission: stage ' .. i .. ' could not be generated: ' .. OneLine(why)) .. ')' }
+    if following then table.insert(out, '    ForkThread(Stage[' .. following .. '])') end
+    table.insert(out, 'end')
+    return out
+end
+
 --- Lua text of the region body: header, base functions, one function per stage, OnPopulate / OnStart when `withEntry`.
-function Compile(withEntry)
+--- `opts.test` = a test run of the editor: waits can be skipped and sped up from the run panel, the script exposes its state (ScenarioInfo.EditorMission) and traces every node it
+--- reaches (EdTrace -> the log and the dump of the sim callback EdMissionDump), a play test can start at any stage, coop support functions are installed. Without it (a map that is
+--- saved or released) the script is plain: real waits, no hooks; the only editor-aware lines are the ones that keep an editing session from running the mission before Play
+--- (ScenarioInfo.Options.EditorMode is never set in a game).
+function Compile(withEntry, opts)
+    local test = (opts and opts.test) and true or false
+    Problems = {}
     local out = {}
     local function Add(line) table.insert(out, line) end
     local active = ActiveStages()       -- (stages imported from a hand-written script are never compiled; a stage keeps its position in the list as its number)
@@ -1116,24 +1302,41 @@ function Compile(withEntry)
     Add('local Difficulty = ScenarioInfo.Options.Difficulty or 2')
     for _, line in StringsLines() do Add(line) end
     Add('')
-    Add("-- waits and timers: the editor's run panel can skip and speed them up (EditorSkip / EditorTimeScale are never set in a real game)")
-    Add('local function Wait(seconds)')
-    Add('    local skip = ScenarioInfo.EditorSkip or 0')
-    Add('    local left = seconds * 10')
-    Add('    while left > 0 do')
-    Add('        if (ScenarioInfo.EditorSkip or 0) ~= skip then return end')
-    Add('        WaitTicks(1)')
-    Add('        left = left - (ScenarioInfo.EditorTimeScale or 1)')
-    Add('    end')
-    Add('end')
+    if test then
+        Add("-- test run of the map editor: waits and timers honour the run panel's Skip and speed (EditorSkip / EditorTimeScale); a saved map waits with WaitSeconds")
+        Add('local function Wait(seconds)')
+        Add('    local skip = ScenarioInfo.EditorSkip or 0')
+        Add('    local left = seconds * 10')
+        Add('    while left > 0 do')
+        Add('        if (ScenarioInfo.EditorSkip or 0) ~= skip then return end')
+        Add('        WaitTicks(1)')
+        Add('        left = left - (ScenarioInfo.EditorTimeScale or 1)')
+        Add('    end')
+        Add('end')
+    else
+        Add('-- waits and timers run in game time')
+        Add('local function Wait(seconds)')
+        Add('    WaitSeconds(seconds)')
+        Add('end')
+    end
     Add('')
     Add('local function Timer(callback, seconds)')
     Add('    return ForkThread(function() Wait(seconds) callback() end)')
     Add('end')
     Add('')
-    Add("-- what the editor's run panel looks at")
-    Add('ScenarioInfo.EditorMission = { Stage = Stage, V = V, Objectives = AssignedObjectives }')
-    Add('')
+    if test then
+        Add("-- what the editor's run panel and the sim tests look at: the state, and every node the script reaches (id = '<stage>.<section>.<path>', '!' = the callback of a trigger ran, '~' = it was dropped")
+        Add("-- because the stage had moved on)")
+        Add('ScenarioInfo.EditorMission = { Stage = Stage, V = V, Objectives = AssignedObjectives, Trace = {}, TraceCount = 0 }')
+        Add('local function EdTrace(id)')
+        Add('    local m = ScenarioInfo.EditorMission')
+        Add('    m.TraceCount = m.TraceCount + 1')
+        Add('    m.Trace[m.TraceCount] = id')
+        Add("    LOG('EDMISSION trace ' .. id)")
+        Add('end')
+        Add("if ScenarioInfo.Options.EditorMode then import('/lua/editorsim/mission.lua').Attach() end")
+        Add('')
+    end
     Add('-- helpers of the wait and trigger nodes')
     Add('local function Alive(units)')
     Add('    local n = 0')
@@ -1143,65 +1346,101 @@ function Compile(withEntry)
     Add('    return n')
     Add('end')
     Add('')
+    Add('-- the units of an area, asked from the game once per tick however many nodes look at it')
+    Add('local areaTick, areaUnits = -1, {}')
+    Add('local function UnitsInArea(area)')
+    Add('    local tick = GetGameTick()')
+    Add('    if tick ~= areaTick then areaTick, areaUnits = tick, {} end')
+    Add('    local list = areaUnits[area]')
+    Add('    if not list then')
+    Add('        list = GetUnitsInRect(ScenarioUtils.AreaToRect(area)) or {}')
+    Add('        areaUnits[area] = list')
+    Add('    end')
+    Add('    return list')
+    Add('end')
+    Add('')
     Add('local function CountInArea(area, army, category)')
     Add('    local index = GetArmyBrain(army):GetArmyIndex()')
     Add('    local n = 0')
-    Add('    for _, u in GetUnitsInRect(ScenarioUtils.AreaToRect(area)) or {} do')
+    Add('    for _, u in UnitsInArea(area) do')
     Add('        if not u.Dead and u:GetArmy() == index and EntityCategoryContains(category, u) then n = n + 1 end')
     Add('    end')
     Add('    return n')
     Add('end')
     Add('')
+    if UsesType('trg_area') then
+        Add('-- area triggers: ONE thread polls them all once a second. WatchArea(stage, test, body, once): body runs in its own thread when test() holds; a watcher with a stage ends')
+        Add('-- when the mission has moved on; one that is not `once` is armed again when test() is false again')
+        Add('local AreaWatchers, AreaPoller = {}, nil')
+        Add('local function WatchArea(stage, test, body, once)')
+        Add('    table.insert(AreaWatchers, { stage = stage, test = test, body = body, once = once, live = true, armed = true, busy = false })')
+        Add('    if AreaPoller then return end')
+        Add('    AreaPoller = ForkThread(function()')
+        Add('        while true do')
+        Add('            Wait(1)')
+        Add('            local live = 0')
+        Add('            for _, w in AreaWatchers do')
+        Add('                local item = w')
+        Add('                if item.live then')
+        Add('                    if item.stage and ScenarioInfo.MissionNumber ~= item.stage then')
+        Add('                        item.live = false')
+        Add('                    else')
+        Add('                        live = live + 1')
+        Add('                        if item.armed and not item.busy and item.test() then')
+        Add('                            if item.once then item.live = false else item.armed = false end')
+        Add('                            item.busy = true')
+        Add('                            ForkThread(function() item.body() item.busy = false end)')
+        Add('                        elseif not item.armed and not item.busy and not item.test() then')
+        Add('                            item.armed = true')
+        Add('                        end')
+        Add('                    end')
+        Add('                end')
+        Add('            end')
+        Add('            if live == 0 then AreaPoller = nil AreaWatchers = {} return end')
+        Add('        end')
+        Add('    end)')
+        Add('end')
+        Add('')
+    end
     for _, line in MB.Compile() do Add(line) end
     Add('ScenarioInfo.MissionNumber = 0')
     Add('')
     if active[1] then
-        Add('-- the first stage; in the editor (edit mode) it waits for the Play button')
+        if test then
+            Add('-- the first stage; in the editor (edit mode) it waits for the Play button')
+        else
+            Add('-- the first stage (a map editor session that opens this map waits for its Play button first)')
+        end
         Add('function EditorMissionStart()')
         Add('    if ScenarioInfo.Options.EditorMode then')
         Add('        while not ScenarioInfo.EditorPlaying do WaitSeconds(0.2) end')
         Add('    end')
-        if Data.mode == 'coop' or Data.mode == 'both' then
+        if test and (Data.mode == 'coop' or Data.mode == 'both') then
             Add('    -- coop: a play test in the editor installs the coop support functions (lua/editor/coopshim.lua); in a real game the lobby loads the coop mod')
             Add("    if ScenarioInfo.Options.EditorMode then import('/lua/editor/coopshim.lua').Install() end")
         end
-        Add('    Stage[ScenarioInfo.EditorStartStage or ' .. active[1].i .. ']()           -- a play test can start at any stage (Stages panel: Play from here)')
+        if test then
+            Add('    Stage[ScenarioInfo.EditorStartStage or ' .. active[1].i .. ']()           -- a play test can start at any stage (Stages panel: Play from here)')
+        else
+            Add('    Stage[' .. active[1].i .. ']()')
+        end
         Add('end')
         Add('')
     end
     for _, item in active do
         local i, stage = item.i, item.stage
-        Add('-- stage ' .. i .. ': ' .. string.gsub(tostring(stage.name or ''), '[\r\n]', ' '))
-        Add('Stage[' .. i .. '] = function()')
-        Add('    if ScenarioInfo.MissionNumber >= ' .. i .. ' then return end')
-        Add('    ScenarioInfo.MissionNumber = ' .. i)
-        local objectives = HasObjectives(stage)
-        local nextCall
-        local following = NextActive(i)
-        if following then nextCall = 'ForkThread(Stage[' .. following .. '])' end
-        if objectives then
-            local callback
-            if nextCall then
-                callback = 'function() ' .. nextCall .. ' end'
-            elseif HasEnd(stage) then
-                callback = 'function() end'
-            else
-                callback = 'function() ScenarioFramework.EndOperation(true, true, true) end'
+        local lines = StageLines(i, stage, test, false)
+        local f = loadstring(table.concat(lines, '\n'))
+        if not f then
+            -- some node of the stage does not load: check every node on its own, leave out the broken ones, and as a last resort the whole stage
+            lines = StageLines(i, stage, test, true)
+            f = loadstring(table.concat(lines, '\n'))
+            if not f then
+                table.insert(Problems, { text = 'stage ' .. i .. ' could not be generated: it starts the next stage and says so in the log', stage = i })
+                lines = StageStub(i, stage, 'its code does not compile')
             end
-            Add('    local obj')
-            Add('    local Group = Objectives.CreateGroup(' .. Q('Stage' .. i) .. ', ' .. callback .. ')')
         end
-        if (tonumber(stage.failsafe) or 0) > 0 and nextCall then
-            Add('    Timer(function() ' .. nextCall .. ' end, ' .. N(stage.failsafe) .. ')')
-        end
-        local C = Context(i, nextCall, false)
-        for _, section in { 'enter', 'ready' } do
-            for _, line in EmitList(stage[section], C, '    ') do Add(line) end
-        end
-        if not objectives and nextCall and not HasExit(stage) and not ((tonumber(stage.failsafe) or 0) > 0) then
-            Add('    ' .. nextCall)
-        end
-        Add('end')
+        for _, line in lines do Add(line) end
         Add('')
     end
     if withEntry then
@@ -1219,10 +1458,21 @@ function Compile(withEntry)
     return table.concat(out, '\n') .. '\n'
 end
 
+--- Position of `marker` where it starts a line (a string or a comment of the script that holds the marker's text can never end or start the region).
+local function FindMarker(text, marker, from)
+    local pos = from or 1
+    while true do
+        local s, e = string.find(text, marker, pos, true)
+        if not s then return nil end
+        if s == 1 or string.sub(text, s - 1, s - 1) == '\n' then return s, e end
+        pos = e + 1
+    end
+end
+
 local function RegionBounds(text)
-    local s = string.find(text, BEGIN, 1, true)
+    local s = FindMarker(text, BEGIN)
     if not s then return nil end
-    local e1, e2 = string.find(text, FINISH, s, true)
+    local e1, e2 = FindMarker(text, FINISH, s)
     if not e1 then return nil end
     return s, e2
 end
@@ -1235,13 +1485,14 @@ local function IsStub(text)
         and not string.find(text, 'ForkThread', 1, true) and string.len(text) < 600
 end
 
---- Compile(withEntry), but never a script that does not load: a mission with errors (a Raw Lua node with a syntax error ...) would make the whole map fail to start. Such a
---- mission is written as a stub that starts the army setup and warns in the log; Check() lists the reason in the Stages panel.
-local function SafeCompile(withEntry)
-    local body = Compile(withEntry)
-    local ok, f = pcall(loadstring, body)
+--- Compile(withEntry, opts), but never a script that does not load: a node that cannot be generated is already left out by Compile; this is the last resort for a mission whose
+--- text still does not load: it is written as a stub that starts the army setup and warns in the log; Check() lists the reason in the Stages panel.
+local function SafeCompile(withEntry, opts)
+    local okc, body = pcall(Compile, withEntry, opts)
+    local ok, f = false, nil
+    if okc then ok, f = pcall(loadstring, body) else f = body end
     if ok and f then return body end
-    LOG('EDITOR mission: the generated script does not compile (' .. tostring(f) .. '): a stub is written instead')
+    Report('the generated script does not compile, a stub is written instead', f)
     local lines = { "local ScenarioUtils = import('/lua/sim/ScenarioUtilities.lua')", '',
         "local MISSION_ERROR = 'The mission script of this map has errors and was not generated: open the map in the editor, fix the findings of the Stages panel and save again.'" }
     if withEntry then
@@ -1253,14 +1504,18 @@ local function SafeCompile(withEntry)
     return table.concat(lines, '\n') .. '\n'
 end
 
-function PatchScript(text)
+--- Set while the editor writes a map for a test run (ui.lua Play): the region is then compiled with the test hooks. A map that is saved or released never has them.
+TestRun = false
+
+function PatchScript(text, opts)
     if EditorStageCount() == 0 then return text, 'none' end       -- (nothing imported is ever written: the script of an imported mission stays byte for byte as it is)
+    opts = opts or { test = TestRun }
     local s, e = RegionBounds(text)
     if s then
         local region = string.sub(text, s, e)
         local _, _, stored = string.find(region, 'hash=(%d+)')
         local _, bodyAt = string.find(region, '\n', 1, true)
-        local bodyEnd = string.find(region, FINISH, 1, true)
+        local bodyEnd = string.len(region) - string.len(FINISH) + 1
         local body = bodyAt and string.sub(region, bodyAt + 1, bodyEnd - 1) or ''
         if stored and stored ~= Hash(body) then
             LOG('EDITOR mission: the generated part of the map script was edited by hand: left alone (delete the region to generate it again)')
@@ -1268,13 +1523,13 @@ function PatchScript(text)
         end
         local outside = string.sub(text, 1, s - 1) .. string.sub(text, e + 1)
         local withEntry = not (string.find(outside, 'function OnPopulate', 1, true) or string.find(outside, 'function OnStart', 1, true))
-        local newBody = SafeCompile(withEntry)
+        local newBody = SafeCompile(withEntry, opts)
         local newRegion = BEGIN .. ' (generated: edit the mission in the editor, not between these lines) hash=' .. Hash(newBody) .. '\n' .. newBody .. FINISH
         return string.sub(text, 1, s - 1) .. newRegion .. string.sub(text, e + 1), 'written'
     end
     local stub = IsStub(text)
     local withEntry = stub or not (string.find(text, 'function OnPopulate', 1, true) or string.find(text, 'function OnStart', 1, true))
-    local body = SafeCompile(withEntry)
+    local body = SafeCompile(withEntry, opts)
     local region = BEGIN .. ' (generated: edit the mission in the editor, not between these lines) hash=' .. Hash(body) .. '\n' .. body .. FINISH .. '\n'
     if stub then return region, 'written' end
     if not withEntry then LOG('EDITOR mission: the map script has its own OnPopulate / OnStart: add ForkThread(EditorMissionStart) to OnStart') end
@@ -1350,6 +1605,11 @@ function Check()
                 Add('I', t.title .. ': an objective made by a trigger does not hold up the stage (it stands alone)', si, section, ni)
             end
         end
+        local _, fixed = Clean(n, t)
+        if fixed > 0 then Add('W', t.title .. ': ' .. fixed .. ' value(s) are not valid (not one of the choices, not a number, not text): the defaults are used', si, section, ni) end
+        if t.callback and n.stageOnly ~= false and NextActive(si) then
+            Add('I', t.title .. ': only reacts while stage ' .. si .. ' runs and goes quiet when the mission moves on (untick "Only while this stage runs" to keep it)', si, section, ni)
+        end
         if t.family == 'coop' and Data.mode == 'campaign' then
             Add('E', t.title .. ': the mission mode is campaign, coop nodes need coop or both (Stages panel, Mode)', si, section, ni)
         end
@@ -1413,14 +1673,33 @@ function Check()
         end
     end)
     import('/lua/editor/mbase.lua').Check(Add)
-    -- the generated script must compile (a Raw Lua node with a syntax error would empty the whole script)
-    local ok, f, err = pcall(loadstring, Compile(true))       -- (a bad chunk may raise instead of returning nil, message)
-    if not ok then err = f f = nil end
-    if not f then Add('E', 'the generated script does not compile: ' .. tostring(err)) end
+    -- what the sidecar load had to drop or repair stays visible until the next load
+    for _, text in LoadReport or {} do Add('W', 'when the map was opened: ' .. text) end
+    -- the generated script must compile (a node that cannot be generated is left out of it: listed here; a Raw Lua node with a syntax error is the usual case)
+    local okc, text = pcall(Compile, true, { test = true })
+    if not okc then
+        Add('E', 'the mission script could not be generated: ' .. tostring(text))
+    else
+        for _, p in Problems do Add('E', p.text, p.stage, p.section, p.path) end
+        local ok, f, err = pcall(loadstring, text)       -- (a bad chunk may raise instead of returning nil, message)
+        if not ok then err = f f = nil end
+        if not f then Add('E', 'the generated script does not compile: ' .. tostring(err)) end
+        local okr, release = pcall(Compile, true)
+        local fr = okr and loadstring(release)
+        if okc and f and not fr then Add('E', 'the script for a saved map does not compile') end
+    end
     return list
 end
 
 -- ---- the model travels with the map -----------------------------------------------------------------------------------------------------------------
+-- The sidecar (`<map>_editor.lua`) holds `Mission = { schema = N, mode, stages, bases, dialogues }`. schema 1 = files written before the field existed (same layout), 2 = this editor.
+-- A file of a newer schema is read as far as it is understood and keeps its number when saved again. Loading never raises: the mission part is read in a sandbox (data only), every
+-- node is checked against the catalogue, what cannot be used is dropped and listed in Mission.LoadReport (Check shows it, the log and the status line say so).
+
+SCHEMA = 2
+
+LoadReport = false       -- list of texts about the last load: what was dropped or repaired
+LoadedTest = false     -- did this session load a map that was written for a test run (with the test hooks in its script)?
 
 function SidecarText()
     -- imported stages and dialogues are not written: the next load imports them again from the script (the sidecar keeps only `keepImport`, so that editor stages
@@ -1439,27 +1718,189 @@ function SidecarText()
     end
     if table.getn(saved.stages) == 0 and table.getn(saved.bases or {}) == 0 and not (hadImport and table.getn(saved.dialogues) > 0) then return '' end
     if hadImport then saved.keepImport = true end
+    saved.schema = math.max(SCHEMA, tonumber(Data.schema) or 0)
     return Ser.Chunk({ { 'Mission', saved } })
+end
+
+--- Does the text hold data only (tables, strings, numbers, booleans)? Nothing else may run when a sidecar is read.
+local function DataOnly(text)
+    local bare = string.gsub(text, '\\.', '')
+    bare = string.gsub(bare, "'[^'\n]*'", "''")
+    if string.find(bare, '"', 1, true) or string.find(bare, '[[', 1, true) or string.find(bare, '--', 1, true) then return false, 'it holds a comment or another kind of string' end
+    bare = string.gsub(bare, '%d+%.?%d*[eE][%+%-]?%d+', '0')
+    bare = string.gsub(bare, '%d+%.?%d*', '0')
+    local calls = 0
+    for id in string.gfind(bare, '[%a_][%w_]*') do
+        if id == 'VECTOR3' or id == 'VECTOR2' or id == 'RECTANGLE' then
+            calls = calls + 1
+        elseif id ~= 'Mission' and id ~= 'true' and id ~= 'false' and id ~= 'nil' then
+            return false, 'it holds code (' .. id .. ')'
+        end
+    end
+    local opens = 0
+    for _ in string.gfind(bare, '%(') do opens = opens + 1 end
+    if opens ~= calls then return false, 'it calls a function' end
+    return true
+end
+
+--- A list of nodes read from a sidecar: not-nodes are dropped, a node of a type this editor does not know is kept (Check lists it, a newer editor may know it), the values of a
+--- known node are cleaned like the compiler does. `report(text)` collects what was changed.
+local function ValidNodes(list, where, report, depth)
+    local out = {}
+    if list == nil then return out end
+    if type(list) ~= 'table' then report(where .. ' is not a list of nodes: dropped') return out end
+    for i = 1, table.getn(list) do
+        local node = list[i]
+        if type(node) ~= 'table' or type(node.type) ~= 'string' then
+            report(where .. ' item ' .. i .. ' is not a node: dropped')
+        elseif depth > 2 * MAX_DEPTH then
+            report(where .. ' item ' .. i .. ' is nested too deep: dropped')
+        else
+            local t = byId[node.type]
+            if t then
+                local c, fixed = Clean(node, t)
+                if fixed > 0 then
+                    for _, p in t.params do node[p.key] = c[p.key] end
+                    report(where .. ' item ' .. i .. ' (' .. node.type .. '): ' .. fixed .. ' invalid value(s) replaced by the default')
+                end
+                if t.container then
+                    node.children = ValidNodes(node.children, where .. '.' .. i, report, depth + 1)
+                elseif node.children ~= nil then
+                    node.children = nil
+                end
+            else
+                report(where .. ' item ' .. i .. ': node type ' .. OneLine(node.type) .. ' is not known to this editor (kept, Check lists it)')
+                if node.children ~= nil then node.children = ValidNodes(node.children, where .. '.' .. i, report, depth + 1) end
+            end
+            table.insert(out, node)
+        end
+    end
+    return out
+end
+
+--- The mission table read from a sidecar, made safe: returns the model and the list of what was dropped or repaired (nil when there is no mission in it).
+function ValidModel(m)
+    local report = {}
+    local function Note(text) if table.getn(report) < 60 then table.insert(report, text) end end
+    if type(m) ~= 'table' then return nil, { 'the mission is not a table' } end
+    local out = {}
+    for k, v in m do out[k] = v end
+    local schema = tonumber(m.schema) or 1
+    if schema > SCHEMA then Note('the mission was written by a newer editor (format ' .. schema .. ', this one reads ' .. SCHEMA .. '): read as far as it is understood, saved with its own format number') end
+    out.schema = schema
+    out.mode = 'campaign'
+    for _, mode in MODES do if m.mode == mode then out.mode = mode end end
+    if m.mode ~= nil and out.mode ~= m.mode then Note('mode ' .. OneLine(m.mode) .. ' is not known: campaign used') end
+    out.stages = {}
+    if type(m.stages) == 'table' then
+        for i = 1, table.getn(m.stages) do
+            local s = m.stages[i]
+            if type(s) ~= 'table' then
+                Note('stage ' .. i .. ' is not a stage: dropped')
+            else
+                s.name = (type(s.name) == 'string') and s.name or tostring(s.name == nil and ('Stage ' .. i) or s.name)
+                if not Finite(tonumber(s.failsafe)) then
+                    if s.failsafe ~= nil then Note('stage ' .. i .. ': failsafe is not a number: 0 used') end
+                    s.failsafe = 0
+                else
+                    s.failsafe = tonumber(s.failsafe)
+                end
+                s.enter = ValidNodes(s.enter, 'stage ' .. i .. ' enter', Note, 1)
+                s.ready = ValidNodes(s.ready, 'stage ' .. i .. ' ready', Note, 1)
+                table.insert(out.stages, s)
+            end
+        end
+    end
+    out.bases = {}
+    for i = 1, table.getn(type(m.bases) == 'table' and m.bases or {}) do
+        local b = m.bases[i]
+        if type(b) ~= 'table' or not IsName(b.name) then
+            Note('base ' .. i .. ' has no usable name (letters, digits and _): dropped')
+        else
+            table.insert(out.bases, b)
+        end
+    end
+    out.dialogues = {}
+    for i = 1, table.getn(type(m.dialogues) == 'table' and m.dialogues or {}) do
+        local d = m.dialogues[i]
+        if type(d) ~= 'table' or type(d.name) ~= 'string' then
+            Note('dialogue ' .. i .. ' is not a dialogue: dropped')
+        else
+            local lines = {}
+            for li = 1, table.getn(type(d.lines) == 'table' and d.lines or {}) do
+                local l = d.lines[li]
+                if type(l) == 'table' then
+                    if type(l.text) ~= 'string' then l.text = (l.text == nil) and '' or tostring(l.text) end
+                    if l.seconds ~= nil and not Finite(tonumber(l.seconds)) then l.seconds = 5 end
+                    table.insert(lines, l)
+                else
+                    Note('dialogue ' .. d.name .. ' line ' .. li .. ' is not a line: dropped')
+                end
+            end
+            d.lines = lines
+            table.insert(out.dialogues, d)
+        end
+    end
+    return out, report
+end
+
+--- The `Mission = ...` assignment of the sidecar text (a line from the left margin up to the next one), or nil.
+local function MissionChunk(text)
+    local list = {}
+    local on = false
+    for line in string.gfind(text .. '\n', '([^\n]*)\n') do
+        if string.find(line, '^[%a_][%w_]* *=') then on = (string.find(line, '^Mission *=') ~= nil) end
+        if on then table.insert(list, line) end
+    end
+    if table.getn(list) == 0 then return nil end
+    return table.concat(list, '\n')
+end
+
+--- Reads the mission of a sidecar file without running anything else of it: returns the model (or nil) and the list of problems.
+function ReadSidecar(path)
+    local text = ed_read_file(path)
+    if not text then return nil, { 'the sidecar file cannot be read' } end
+    local chunk = MissionChunk(text)
+    if not chunk then return nil, {} end
+    local ok, why = DataOnly(chunk)
+    if not ok then return nil, { 'the mission data of the sidecar was not read: ' .. why } end
+    local f, err = loadstring(chunk)
+    if not f then return nil, { 'the mission data of the sidecar has a syntax error and was not read: ' .. OneLine(err) } end
+    local env = {}
+    for _, name in { 'VECTOR3', 'VECTOR2', 'RECTANGLE' } do
+        env[name] = function(a, b, c, d) return { a, b, c, d, type = name } end
+    end
+    setfenv(f, env)
+    local called, err2 = pcall(f)
+    if not called then return nil, { 'the mission data of the sidecar could not be run: ' .. OneLine(err2) } end
+    if env.Mission == nil then return nil, {} end
+    return ValidModel(env.Mission)
 end
 
 function LoadSidecar(scenarioFile)
     Data = { mode = 'campaign', stages = {}, bases = {}, dialogues = {} }
+    LoadReport = false
+    LoadedTest = scenarioFile ~= nil and string.find(string.lower(tostring(scenarioFile)), '_playtest', 1, true) ~= nil
     local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
-    if not path or not DiskGetFileInfo(path) then return end
-    local env = {}
-    doscript(path, env)
-    if env.Mission and env.Mission.stages then
-        Data = env.Mission
-        Data.mode = Data.mode or 'campaign'
-        Data.bases = Data.bases or {}
-        Data.dialogues = Data.dialogues or {}
-        for _, s in Data.stages do
-            s.enter = s.enter or {}
-            s.ready = s.ready or {}
+    if path and DiskGetFileInfo(path) then
+        local m, report = ReadSidecar(path)
+        if m and m.stages then Data = m end
+        if report and table.getn(report) > 0 then
+            LoadReport = report
+            Report('the mission of this map', table.getn(report) .. ' problem(s) when it was read, see Check: ' .. report[1])
+            for _, text in report do LOG('EDITOR mission sidecar: ' .. text) end
         end
     end
     Revision = Revision + 1
     LoadedRevision = Revision
+end
+
+--- Does the session's mission script differ from what a play test needs? It does when the mission was edited since the map was loaded, and when the map was loaded from a
+--- saved map (whose script has no test hooks: no skip / speed / trace): Play then writes the test copy and reloads.
+function NeedsReload()
+    if table.getn(Data.stages) == 0 and table.getn(Data.bases or {}) == 0 then return false end
+    if Revision ~= LoadedRevision then return true end
+    return (EditorStageCount() > 0 or table.getn(Data.bases or {}) > 0) and not LoadedTest
 end
 
 -- ---- import of a hand-written mission (missionimport.lua) ---------------------------------------------------------------------------------------------
@@ -1533,4 +1974,4 @@ function ImportScript(doc)
 end
 
 -- the platoon and order nodes live in their own file and register themselves here
-pcall(function() import('/lua/editor/missionplat.lua') end)
+Safe('the platoon nodes (missionplat.lua)', function() import('/lua/editor/missionplat.lua') end)
