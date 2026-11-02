@@ -33,7 +33,7 @@ local DIALOGS = { 'ed_file_dialog', 'ed_files_dialog', 'ed_folder_dialog' }
 local function NoDialog() return nil end
 
 local function Press(entry, errors, where)
-    if Skip(entry.text) then return false end
+    if not entry.button or Skip(entry.text) then return false end
     local b = entry.button
     -- a button of a panel part that was rebuilt meanwhile (destroyed) is stale: pressing it proves nothing
     local okParent, parent = pcall(function() return b:GetParent() end)

@@ -111,6 +111,7 @@ end
 --- Place `c` at (x, y) relative to `parent`; width and height when given (pixels, already scaled).
 function Place(c, parent, x, y, w, h)
     local ctx = parent.scroll
+    if tracking then c.layX, c.layY = x, y end      -- (layoutcheck.lua: where the control belongs, also while a scroll cull has parked it off screen)
     local top, bot
     if ctx then
         top, bot = Extent(ctx, x, y, h or c.Height() or Skin.S(14), c)
@@ -140,6 +141,10 @@ function Label(parent, text, x, y, opts)
     t:SetColor(opts.color or Skin.color.text)
     t:SetText(text or '')
     t:DisableHitTest()
+    if tracking then
+        table.insert(tracking, { label = t, text = text })
+        t.layX, t.layY = x, y
+    end
     t.Left:Set(function() return parent.Left() + x end)
     local ctx = parent.scroll
     if ctx then

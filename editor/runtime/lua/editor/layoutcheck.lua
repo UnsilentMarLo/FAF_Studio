@@ -1,13 +1,18 @@
--- The layout check: buttons, sliders and text fields stay inside their area and do not run into each other. Used by scripts/editor_nightly.py (step `layout`).
+-- The layout check: every control the editor builds (buttons, sliders, text fields, text labels, paragraph lines, list rows) stays inside the area the user sees and
+-- does not run into another one. Used by scripts/editor_nightly.py (step `layout`).
 --
---   Panel(panelId[, scale])  -> widgets checked, list of problems   the panel is shown (as the click sweep does) and its widgets, and those of the dialogs its buttons open, are measured
---   Dialogs() / Shell()      -> widgets checked, list of problems   the dialogs of the menus, the top bar / play bar / start screen / tour
+--   Panel(panelId)            -> widgets checked, list of problems   the panel is shown (as the click sweep does) and its widgets, and those of the dialogs its buttons open, are measured
+--   Dialogs([long])           -> widgets checked, list of problems   the dialogs of the menus; `long`: with long map names, long list entries and every empty status line filled with a long error text
+--   Shell()                   -> widgets checked, list of problems   the top bar / play bar / start screen / tour
+--   Workspace(name, scale)    -> widgets checked, list of problems   every panel a workspace builds, at the UI scale, in the dock at its real size
+--   Resize(name, scale)       -> widgets checked, list of problems   the same workspace after the dock area shrank (a smaller window) and after every split was pulled to its narrowest
 --
 -- Problems (each "where > label: what"):
---   past area     the widget's left / right edge is outside the group it was built in (Maui does not clip: it is drawn over the neighbouring panel)
---   label wider   a button's text is wider than the button
+--   past area     the widget's edge is outside the area the user sees: the panel (the scroll holder), the dialog box, or the group it was built in, and the window
+--   text wider    a label / a paragraph line / a list row text is wider than its box (the panel, the button, the row)
 --   overlap       two widgets of one group cover each other (more than 3 px in both directions)
--- Widgets a scrolling panel moved out of view (top far above / below the screen) or hidden ones are not measured.
+-- The place of a widget is the one it was given (W.Place remembers it), so a control that a scroll cull parked off screen is measured too. Hidden widgets and the ones of
+-- a hidden tab are not measured.
 --
 -- Lua 5.0 dialect.
 
@@ -16,19 +21,76 @@ local TipCheck = import('/lua/editor/tipcheck.lua')
 
 local SLACK = 1
 local OVERLAP = 3
+local LONG = 'a very long text that does not fit any box of the editor, for a map name, a file name or an error line, and goes on and on and on past every edge and every limit'
 
-local function Object(e) return e.button or e.slider or e.field end
-
-local function Label(e)
-    local t = e.text
-    if t == nil or t == '' then
-        local ok, text = pcall(function() return e.button and e.button.label:GetText() end)
-        t = ok and text or '?'
-    end
-    return tostring(t)
+local function Object(e)
+    if e.button then return e.button end
+    if e.slider then return e.slider.track end
+    if e.field then return e.field.frame or e.field end
+    return e.label
 end
 
---- { l, t, r, b, parent } of a tracked widget, or nil when it is destroyed, hidden or scrolled out of view.
+local function Name(e)
+    local t = e.text
+    if t == nil or t == '' then
+        local ok, text = pcall(function()
+            if e.button then return e.button.label:GetText() end
+            if e.label then return e.label:GetText() end
+            if e.slider then return e.slider.opts.label end
+            return nil
+        end)
+        t = (ok and text) or '?'
+    end
+    t = tostring(t)
+    if string.len(t) > 40 then t = string.sub(t, 1, 37) .. '...' end
+    local kind = (e.button and 'button') or (e.slider and 'slider') or (e.field and 'field') or 'text'
+    if kind == 'field' then return '[field]' end
+    if kind == 'slider' then return t .. ' (slider)' end
+    return t
+end
+
+local function Frame()
+    local f = GetFrame(0)
+    return { l = 0, t = 0, r = f.Width(), b = f.Height() }
+end
+
+local function RectOf(c)
+    local ok, l, t, r, b = pcall(function() return c.Left(), c.Top(), c.Right(), c.Bottom() end)
+    if not ok or not l or not r then return nil end
+    return { l = l, t = t, r = r, b = b }
+end
+
+--- The area the user sees for a widget: the holder of the scroll content it was built in (a panel, a scrolling dialog), else a dialog's box, else the widget's immediate parent.
+--- -> kind, rect, group
+local function Scope(o)
+    local ok, p = pcall(function() return o:GetParent() end)
+    local first = ok and p or nil
+    local n = 0
+    local c = first
+    while c and n < 16 do
+        local okS, ctx = pcall(function() return c.scroll end)
+        if okS and ctx then
+            local rc = RectOf(ctx.holder)
+            if rc then return 'panel', rc, c end
+        end
+        local okP, pid = pcall(function() return c.panelId end)
+        if okP and pid == 'dialog' then
+            local rc = RectOf(c)
+            if rc then return 'dialog', rc, c end
+        end
+        local okG, parent = pcall(function() return c:GetParent() end)
+        if not okG then break end
+        c = parent
+        n = n + 1
+    end
+    if first then
+        local rc = RectOf(first)
+        if rc then return 'parent', rc, first end
+    end
+    return nil
+end
+
+--- { l, t, r, b, parent, kind, area } of a tracked widget, or nil when it is destroyed, hidden or in a hidden tab.
 local function Rect(e)
     local o = Object(e)
     if not o then return nil end
@@ -38,12 +100,20 @@ local function Rect(e)
     if ok2 and hidden then return nil end
     local ok3, l, t, r, b = pcall(function() return o.Left(), o.Top(), o.Right(), o.Bottom() end)
     if not ok3 or not l or not r then return nil end
+    -- a control a scroll cull parked off screen: its own place (relative to the group it belongs to) is what is measured
+    local lx, ly = o.layX, o.layY
+    local okP, pl, pt = pcall(function() return parent.Left(), parent.Top() end)
+    if okP and lx and ly and (t < -5000 or l < -5000) then
+        local w, h = r - l, b - t
+        if h < 0 then h = 0 end
+        l, t = pl + lx, pt + ly
+        r, b = l + w, t + h
+    end
     if t < -5000 or t > 20000 or l < -2000 or l > 20000 then return nil end
     if r - l < 2 then return nil end
-    return { l = l, t = t, r = r, b = b, parent = parent }
+    local kind, area, group = Scope(o)
+    return { l = l, t = t, r = r, b = b, parent = parent, kind = kind, area = area, group = group }
 end
-
-local function Same(a, b) return a == b end
 
 --- The id of the panel a widget belongs to (the group a panel builds into carries it, panels.lua Register).
 local function PanelOf(o)
@@ -60,28 +130,53 @@ local function PanelOf(o)
     return nil
 end
 
+--- A text whose parent is a bitmap (a button, a list row, a tab) is judged against that bitmap.
+local function IsBitmap(c)
+    local ok, f = pcall(function() return c.SetSolidColor end)
+    return ok and f ~= nil
+end
+
+local function Px(n) return math.floor(n + 0.5) end
+
 --- The problems of a list of tracked entries (W.tracking) -> list of strings.
 function Analyze(entries, where)
     local out = {}
     local rects = {}
+    local frame = Frame()
     for i, e in entries do
         local rc = Rect(e)
         if rc then
             rects[i] = rc
-            local name = where .. ' > ' .. Label(e)
+            local name = where .. ' > ' .. Name(e)
             local pid = PanelOf(Object(e))
             if pid and not string.find(where, pid, 1, true) then name = name .. ' [' .. pid .. ']' end
-            local ok, pl, pr = pcall(function() return rc.parent.Left(), rc.parent.Right() end)
-            if ok and pl and pr then
-                if rc.r > pr + SLACK then
-                    table.insert(out, name .. ': past area (right edge ' .. (rc.r - pr) .. ' px beyond its group)')
-                elseif rc.l < pl - SLACK then
-                    table.insert(out, name .. ': past area (left edge ' .. (pl - rc.l) .. ' px beyond its group)')
+            -- the box the widget has to stay in: the area the user sees; a text on a bitmap (button, row) the bitmap
+            local box, what = rc.area, 'the ' .. tostring(rc.kind)
+            if e.label and rc.parent ~= rc.group and IsBitmap(rc.parent) then
+                local pr = RectOf(rc.parent)
+                if pr then box, what = pr, 'its button / row' end
+            end
+            if box then
+                if rc.r > box.r + SLACK then
+                    table.insert(out, name .. ': ' .. (e.label and 'text' or 'past area') .. ' runs ' .. Px(rc.r - box.r) .. ' px past the right edge of ' .. what)
+                elseif rc.l < box.l - SLACK then
+                    table.insert(out, name .. ': ' .. (e.label and 'text' or 'past area') .. ' starts ' .. Px(box.l - rc.l) .. ' px left of ' .. what)
                 end
+                -- a dialog does not scroll sideways or up and down unless it was given a scroll: its widgets stay inside the box
+                if rc.kind == 'dialog' or (rc.kind == 'parent' and not e.label) then
+                    if rc.b > box.b + SLACK then
+                        table.insert(out, name .. ': past area, bottom edge ' .. Px(rc.b - box.b) .. ' px below ' .. what)
+                    end
+                end
+            end
+            -- the window
+            if rc.kind ~= 'panel' and (rc.r > frame.r + SLACK or rc.l < frame.l - SLACK or rc.b > frame.b + SLACK) then
+                table.insert(out, name .. ': off the window (' .. Px(rc.l) .. ',' .. Px(rc.t) .. ',' .. Px(rc.r) .. ',' .. Px(rc.b) .. ' in ' .. frame.r .. 'x' .. frame.b .. ')')
             end
             if e.button and e.button.label then
                 local okw, lw = pcall(function() return e.button.label.Width() end)
-                if okw and lw and lw > (rc.r - rc.l) then
+                local okt, lt = pcall(function() return e.button.label:GetText() end)
+                if okw and lw and lw > (rc.r - rc.l) + SLACK and okt and lt ~= '' then
                     table.insert(out, name .. ': label wider than the button (' .. lw .. ' > ' .. (rc.r - rc.l) .. ')')
                 end
             end
@@ -89,11 +184,11 @@ function Analyze(entries, where)
     end
     for i, a in rects do
         for j, b in rects do
-            if j > i and Same(a.parent, b.parent) then
+            if j > i and a.parent == b.parent then
                 local ox = math.min(a.r, b.r) - math.max(a.l, b.l)
                 local oy = math.min(a.b, b.b) - math.max(a.t, b.t)
                 if ox > OVERLAP and oy > OVERLAP then
-                    table.insert(out, where .. ' > ' .. Label(entries[i]) .. ' / ' .. Label(entries[j]) .. ': overlap (' .. ox .. ' x ' .. oy .. ' px) at ' .. a.l .. ',' .. a.t .. ',' .. a.r .. ',' .. a.b .. ' and ' .. b.l .. ',' .. b.t .. ',' .. b.r .. ',' .. b.b)
+                    table.insert(out, where .. ' > ' .. Name(entries[i]) .. ' / ' .. Name(entries[j]) .. ': overlap (' .. Px(ox) .. ' x ' .. Px(oy) .. ' px) at ' .. Px(a.l) .. ',' .. Px(a.t) .. ',' .. Px(a.r) .. ',' .. Px(a.b) .. ' and ' .. Px(b.l) .. ',' .. Px(b.t) .. ',' .. Px(b.r) .. ',' .. Px(b.b))
                 end
             end
         end
@@ -101,14 +196,51 @@ function Analyze(entries, where)
     return out
 end
 
+--- The box of the open dialog against the window: -> list of problems.
+local function DialogBox(where)
+    local out = {}
+    local Dialog = import('/lua/editor/gui/dialog.lua')
+    if not Dialog.IsOpen() then return out end
+    local rc = Dialog.Rect and Dialog.Rect()
+    if not rc then return out end
+    local f = Frame()
+    if rc.l < f.l - SLACK or rc.t < f.t - SLACK or rc.r > f.r + SLACK or rc.b > f.b + SLACK then
+        table.insert(out, where .. ': the dialog box (' .. Px(rc.l) .. ',' .. Px(rc.t) .. ',' .. Px(rc.r) .. ',' .. Px(rc.b) .. ') is not inside the window ' .. f.r .. 'x' .. f.b)
+    end
+    return out
+end
+
+--- Every empty text of the open dialog is filled with a long text (a status or error line a button press would show) and the entries measured again.
+local function Stuff(entries)
+    local n = 0
+    for _, e in entries do
+        if e.label then
+            local ok, text = pcall(function() return e.label:GetText() end)
+            if ok and text == '' then
+                local okS = pcall(function() e.label:SetText(LONG) end)
+                if okS then n = n + 1 end
+            end
+        end
+    end
+    return n
+end
+
+local function Counted(entries)
+    local n = 0
+    for _, e in entries do
+        if Rect(e) then n = n + 1 end
+    end
+    return n
+end
+
 --- The widgets of a panel and of the dialogs its buttons open.
 function Panel(panelId)
     local problems, n, seen = {}, 0, {}
     local function Collect(entries, where)
-        for _, e in entries do
-            if Rect(e) then n = n + 1 end
-        end
-        for _, p in Analyze(entries, where) do
+        n = n + Counted(entries)
+        local list = Analyze(entries, where)
+        for _, p in DialogBox(where) do table.insert(list, p) end
+        for _, p in list do
             if not seen[p] then
                 seen[p] = true
                 table.insert(problems, p)
@@ -122,31 +254,125 @@ function Panel(panelId)
     return n, problems
 end
 
---- Dialogs of the menus (tipcheck.lua opens each one and calls Visit with its widgets).
-function Dialogs()
+--- Shows the panel without pressing anything (the layout of the panel alone) -> widgets checked, list of problems. `where` names the scale.
+function PanelOnly(panelId, where)
+    local W = import('/lua/editor/gui/widgets.lua')
+    local Shell = import('/lua/editor/gui/shell.lua')
+    local list = {}
+    W.tracking = list
+    local ok, err = pcall(function()
+        local main = Shell.S.main
+        if main and main.instances[panelId] then main:DropInstance(panelId) end
+        if main and not main:ShowPanel(panelId) then main:AddPanel(panelId) end
+    end)
+    W.tracking = false
+    if not ok then return 0, { panelId .. ': could not be shown: ' .. tostring(err) } end
+    return Counted(list), Analyze(list, where or panelId)
+end
+
+--- A list of dialogs: each is opened, its widgets recorded and measured (`long`: also with every empty text filled), then closed.
+local function VisitDialogs(list, long)
+    local W = import('/lua/editor/gui/widgets.lua')
+    local Dialog = import('/lua/editor/gui/dialog.lua')
     local problems, n = {}, 0
-    TipCheck.Visit = function(entries, where)
-        for _, e in entries do
-            if Rect(e) then n = n + 1 end
+    for _, d in list do
+        local entries = {}
+        W.tracking = entries
+        local ok, err = pcall(d[2])
+        W.tracking = false
+        local where = d[1] .. (long and ' (long text)' or '')
+        if not ok then
+            table.insert(problems, where .. ': could not be opened: ' .. string.sub(tostring(err), 1, 120))
+        else
+            if long then Stuff(entries) end
+            n = n + Counted(entries)
+            for _, p in Analyze(entries, where) do table.insert(problems, p) end
+            for _, p in DialogBox(where) do table.insert(problems, p) end
         end
-        for _, p in Analyze(entries, where) do table.insert(problems, p) end
+        pcall(Dialog.Close)
     end
-    pcall(TipCheck.Dialogs)
-    TipCheck.Visit = false
+    return n, problems
+end
+
+--- Dialogs of the menus, with a document that has long names when `long`.
+function Dialogs(long)
+    local DM = import('/lua/editor/gui/dialogs_map.lua')
+    local DT = import('/lua/editor/gui/dialogs_terrain.lua')
+    local DX = import('/lua/editor/gui/dialogs_mission.lua')
+    local Maps = import('/lua/editor/maps.lua')
+    local names = {}
+    for i = 1, 30 do table.insert(names, 'Mass ' .. i .. (long and (' ' .. LONG) or '')) end
+    local list = {
+        { 'New map', function() DM.NewMap() end },
+        { 'New map of any size', function() DM.NewCustomMap() end },
+        { 'Open map', function() DM.OpenMap({}) end },
+        { 'Map info', function() DM.MapInfo() end },
+        { 'Lobby slots', function() DM.LobbySlots() end },
+        { 'Unsaved changes', function() DM.Guard(function() end) end },
+        { 'Generate terrain', function() DT.Generate() end },
+        { 'Flatten the map', function() DT.FlattenMap() end },
+        { 'Playable area', function() DT.PlayableArea() end },
+        { 'Pick a type', function() DT.PickType('Pick', '', function() end) end },
+        { 'Pick a name', function() DX.PickName('Pick', names, names[1], function() end) end },
+        { 'Pick several', function() DX.PickMulti('Pick', names, {}, function() end) end },
+        { 'Name', function() DX.NameDialog('Name', 'a name', function() end) end },
+        { 'Find and replace', function() import('/lua/editor/gui/feature_parity.lua').FindDialog() end },
+        { 'Release map', function() import('/lua/editor/gui/feature_release.lua').ReleaseDialog() end },
+        { 'Import mesh', function() import('/lua/editor/gui/dialogs_meshimport.lua').Open() end },
+        { 'Resize map', function() import('/lua/editor/gui/dialogs_resize.lua').Open() end },
+        { 'Mirror', function() import('/lua/editor/gui/dialogs_mirror.lua').Open() end },
+        { 'Texture browser', function() import('/lua/editor/gui/browser.lua').OpenTextures{ sources = { { '/env', '*_albedo.dds' } } } end },
+        { 'Name browser', function() import('/lua/editor/gui/browser.lua').OpenNames{ title = 'Names', names = names } end },
+        { 'Diagnostics', function() import('/lua/editor/gui/feature_crash.lua').CopyDiagnostics() end },
+        { 'Reset settings', function() import('/lua/editor/gui/commands.lua').Run('help.reset_settings') end },
+        { 'Add a node', function() DX.AddNode(1, 'ready') end },
+        { 'Edit a node', function() DX.EditNode(1, 'ready', { 1 }) end },
+        { 'Define a base', function() DX.DefineBase(function() end) end },
+        { 'Base', function() DX.BaseEdit(1) end },
+        { 'Base groups', function() DX.BaseGroups(1) end },
+        { 'Base attacks', function() DX.BaseAttacks(1) end },
+        { 'Base details', function() DX.BaseDetails(1) end },
+        { 'Dialogue lines', function() DX.DialogueLines(1) end },
+        { 'Pick a group', function() DX.PickGroup('Enemy', function() end) end },
+        { 'Platoon builder', function() import('/lua/editor/gui/dialogs_platoons.lua').EditBuilder('Enemy', 'PLATOON_X') end },
+    }
+    local realInfo, realList, realDirty = Maps.Info, Maps.List, Maps.Dirty
+    Maps.Dirty = function() return true end        -- the "Unsaved changes" dialog only opens for a map with unsaved changes
+    if long then
+        Maps.Info = function()
+            local info = realInfo()
+            info.name, info.author, info.description = LONG, LONG, LONG
+            return info
+        end
+        Maps.List = function()
+            return { { name = LONG, folder = 'a_long_folder_name_of_a_map_' .. string.rep('x', 60), path = '/maps/none/none.scmap' }, { name = 'Short', folder = 'short', path = '/maps/short/short.scmap' } }
+        end
+    end
+    local n, problems = VisitDialogs(list, long)
+    Maps.Info, Maps.List, Maps.Dirty = realInfo, realList, realDirty
     return n, problems
 end
 
 --- Top bar, play bar, start screen, tour.
 function Shell()
+    local W = import('/lua/editor/gui/widgets.lua')
     local problems, n = {}, 0
-    TipCheck.Visit = function(entries, where)
-        for _, e in entries do
-            if Rect(e) then n = n + 1 end
-        end
+    local function Look(where, fn, close)
+        local entries = {}
+        W.tracking = entries
+        local ok, err = pcall(fn)
+        W.tracking = false
+        if not ok then table.insert(problems, where .. ': ' .. string.sub(tostring(err), 1, 120)) end
+        n = n + Counted(entries)
         for _, p in Analyze(entries, where) do table.insert(problems, p) end
+        if close then pcall(close) end
     end
-    pcall(TipCheck.Shell)
-    TipCheck.Visit = false
+    local S = import('/lua/editor/gui/shell.lua')
+    Look('top bar and play bar', function() S.RebuildBars() end)
+    local Start = import('/lua/editor/gui/startscreen.lua')
+    Look('start screen', function() Start.Open({}) end, function() Start.Close() end)
+    local Tour = import('/lua/editor/gui/tour.lua')
+    Look('tour', function() Tour.Start() end, function() Tour.Stop(true) end)
     return n, problems
 end
 
@@ -163,9 +389,54 @@ function Workspace(name, scale)
     end)
     W.tracking = false
     if not ok then return 0, { name .. ': ' .. tostring(err) } end
-    local n = 0
-    for _, e in list do
-        if Rect(e) then n = n + 1 end
+    return Counted(list), Analyze(list, name .. '@' .. math.floor((scale or 1) * 100))
+end
+
+local function Splits(node, fn)
+    if node and node.kind == 'split' then
+        fn(node)
+        Splits(node.a, fn)
+        Splits(node.b, fn)
     end
-    return n, Analyze(list, name .. '@' .. math.floor((scale or 1) * 100))
+end
+
+--- The workspace after the dock area got smaller (what a window resize does: the shell calls SetRect with the new size) and after every row split was pulled to its
+--- narrowest and every column split to its shortest. The controls that were built or placed again are measured.
+function Resize(name, scale)
+    local W = import('/lua/editor/gui/widgets.lua')
+    local Shell = import('/lua/editor/gui/shell.lua')
+    local Skin = import('/lua/editor/gui/skin.lua')
+    local tag = name .. '@' .. math.floor((scale or 1) * 100)
+    local problems, n = {}, 0
+    local ok, err = pcall(function()
+        Skin.SetScale(scale or 1)
+        Shell.ShowWorkspace(name)
+        local main = Shell.S.main
+        local x, y, w, h = main.x, main.y, main.w, main.h
+        local list = {}
+        W.tracking = list
+        -- a smaller window
+        main:SetRect(x, y, math.floor(w * 0.7), math.floor(h * 0.8))
+        W.tracking = false
+        n = n + Counted(list)
+        for _, p in Analyze(list, tag .. ' smaller window') do table.insert(problems, p) end
+        -- the narrowest docks
+        list = {}
+        W.tracking = list
+        Splits(main.tree, function(s) if s.dir == 'row' then s.ratio = 0.02 else s.ratio = 0.02 end end)
+        main:Layout()
+        W.tracking = false
+        n = n + Counted(list)
+        for _, p in Analyze(list, tag .. ' narrowest docks') do table.insert(problems, p) end
+        list = {}
+        W.tracking = list
+        Splits(main.tree, function(s) s.ratio = 0.98 end)
+        main:Layout()
+        W.tracking = false
+        n = n + Counted(list)
+        for _, p in Analyze(list, tag .. ' widest first docks') do table.insert(problems, p) end
+    end)
+    W.tracking = false
+    if not ok then table.insert(problems, tag .. ': resize test failed: ' .. tostring(err)) end
+    return n, problems
 end

@@ -92,7 +92,7 @@ class Inst:
             time.sleep(0.25)
         raise RuntimeError('no answer within %d s' % timeout)
 
-    def start(self, exe, editor=None):
+    def start(self, exe, editor=None, size=None):
         if not os.path.isdir(os.path.join(self.dir, 'bin')):
             EI.cmd_new(argparse.Namespace(tag=self.tag, editor=editor))
         elif editor:
@@ -101,7 +101,7 @@ class Inst:
             if os.path.normcase(os.path.realpath(link)) != os.path.normcase(os.path.realpath(editor)):
                 EI.junction(link, os.path.abspath(editor))
         with contextlib.redirect_stdout(io.StringIO()):
-            EI.cmd_start(argparse.Namespace(tag=self.tag, map='editor_blank', exe=exe, wait=90))
+            EI.cmd_start(argparse.Namespace(tag=self.tag, map='editor_blank', exe=exe, wait=90, size=size or '1280x720'))
 
     def shot(self, path):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -377,53 +377,96 @@ def step_tips(inst, rep):
     rep.add('tips', not missing, '%d widgets and menu items checked, %d without a tooltip' % (checked, len(missing)), missing)
 
 
-LAYOUT_LUA = r"""
+# The layout step: window sizes (the engine's window cannot be resized while it runs: the instance is restarted at each size; the shrinking of the dock area that a
+# resize causes is exercised in the editor by layoutcheck.Resize) x UI scales. Last size = the default size of the other steps.
+LAYOUT_SIZES = ('1920x1080', '1280x720')
+LAYOUT_SCALES = (1.0, 1.5, 2.0)
+LAYOUT_PANEL_SWEEPS = (('1280x720', 1.5), ('1280x720', 2.0))      # the panels are also pressed through (their dialogs are measured) at these
+
+# {scale} {fn} {ids} {tag} {long}
+LAYOUT_WORKSPACES_LUA = r"""
 local LC = import('/lua/editor/layoutcheck.lua')
-local out, total = {}, 0
-for _, scale in { 1.0, 1.5 } do
-    for _, ws in import('/lua/editor/gui/workspace.lua').Presets() do
-        local n, p = LC.Workspace(ws, scale)
-        total = total + n
-        for _, l in p do table.insert(out, l) end
-    end
+local out, total = {{}}, 0
+for _, ws in import('/lua/editor/gui/workspace.lua').Presets() do
+    local n, p = LC.{fn}(ws, {scale})
+    total = total + n
+    for _, l in p do table.insert(out, l) end
 end
 import('/lua/editor/gui/skin.lua').SetScale(1.0)
 import('/lua/editor/gui/shell.lua').ShowWorkspace('Terrain')
 return total .. '|' .. table.concat(out, ' @@ ')
 """
 
+LAYOUT_PANELS_LUA = r"""
+local LC = import('/lua/editor/layoutcheck.lua')
+import('/lua/editor/gui/skin.lua').SetScale({scale})
+import('/lua/editor/gui/shell.lua').ShowWorkspace('Mission')
+local out, total = {{}}, 0
+for _, id in {{ {ids} }} do
+    local n, p = LC.PanelOnly(id, id .. '@{pct}')
+    total = total + n
+    for _, l in p do table.insert(out, l) end
+end
+import('/lua/editor/gui/skin.lua').SetScale(1.0)
+return total .. '|' .. table.concat(out, ' @@ ')
+"""
 
-def step_layout(inst, rep):
-    """No widget runs past its panel or over another one (layoutcheck.lua): the workspaces at 100 % and 150 %, then every panel on its own."""
+LAYOUT_PART_LUA = r"""
+import('/lua/editor/gui/skin.lua').SetScale({scale})
+import('/lua/editor/gui/shell.lua').ShowWorkspace('Mission')
+local n, p = import('/lua/editor/layoutcheck.lua').{fn}({arg})
+import('/lua/editor/gui/skin.lua').SetScale(1.0)
+return n .. '|' .. table.concat(p, ' @@ ')
+"""
+
+
+def step_layout(inst, rep, exe=None, editor=None):
+    """No control runs past the area the user sees or over another one, no text is wider than its box (layoutcheck.lua): every workspace, its resized and narrowest docks,
+    every panel on its own, the dialogs (also with long text) and the bars, at 1920x1080 and 1280x720 and UI 100 / 150 / 200 %."""
     problems, checked = [], 0
-    try:
-        inst.lua("return import('/lua/editor/clicksweep.lua').Fixture()")
-        res = inst.lua(LAYOUT_LUA, timeout=300)
+
+    def add(label, res):
+        nonlocal checked
         n, _, tail = res.partition('|')
         checked += int(n or 0)
-        problems += [t.replace(NL, ' ')[:200] for t in tail.split(' @@ ') if t.strip()]
-    except RuntimeError as e:
-        problems.append('workspaces: %s' % e)
-    ids = inst.lua(PANEL_LUA).split()
-    for pid in ids:
+        problems.extend('%s %s' % (label, t.replace(NL, ' ')[:260]) for t in tail.split(' @@ ') if t.strip())
+
+    def call(label, src, timeout=300):
         try:
-            res = inst.lua("local n, p = import('/lua/editor/layoutcheck.lua').Panel('%s') return n .. '|' .. table.concat(p, ' @@ ')" % pid, timeout=120)
+            add(label, inst.lua(src, timeout=timeout))
         except RuntimeError as e:
-            problems.append('%s: %s' % (pid, e))
-            continue
-        n, _, tail = res.partition('|')
-        checked += int(n or 0)
-        problems += [t.replace(NL, ' ')[:200] for t in tail.split(' @@ ') if t.strip()]
-    for what in ('Dialogs', 'Shell'):
+            problems.append('%s: %s' % (label, str(e)[:200]))
+            if not inst.alive() or 'no answer' in str(e):
+                # a dead or hung editor: a fresh one for the rest (the failure above is kept)
+                inst.start(exe or 'main_x64_la_p2.exe', editor, size=inst.size)
+                try:
+                    inst.lua("return import('/lua/editor/clicksweep.lua').Fixture()")
+                except RuntimeError:
+                    pass
+
+    for size in LAYOUT_SIZES:
+        if size != getattr(inst, 'size', None):
+            inst.size = size
+            inst.start(exe or 'main_x64_la_p2.exe', editor, size=size)
         try:
-            res = inst.lua("local n, p = import('/lua/editor/layoutcheck.lua').%s() return n .. '|' .. table.concat(p, ' @@ ')" % what, timeout=120)
+            inst.lua("return import('/lua/editor/clicksweep.lua').Fixture()")
         except RuntimeError as e:
-            problems.append('%s: %s' % (what, e))
+            problems.append('%s: the fixture could not be built: %s' % (size, e))
             continue
-        n, _, tail = res.partition('|')
-        checked += int(n or 0)
-        problems += [what.lower() + ': ' + t.replace(NL, ' ')[:200] for t in tail.split(' @@ ') if t.strip()]
-    inst.lua("import('/lua/editor/gui/shell.lua').ShowWorkspace('Terrain') return 'ok'")
+        ids = inst.lua(PANEL_LUA).split()
+        for scale in LAYOUT_SCALES:
+            pct = int(scale * 100)
+            tag = '%s@%d' % (size, pct)
+            for fn in ('Workspace', 'Resize'):
+                call('%s %s' % (tag, fn.lower()), LAYOUT_WORKSPACES_LUA.format(fn=fn, scale=scale))
+            # every panel on its own (shown, not pressed), then the dialogs and the bars
+            call('%s panel' % tag, LAYOUT_PANELS_LUA.format(scale=scale, pct=pct, ids=', '.join("'%s'" % i for i in ids)), timeout=600)
+            for fn, arg, label in (('Dialogs', 'false', 'dialogs'), ('Dialogs', 'true', 'dialogs (long text)'), ('Shell', '', 'bars')):
+                call('%s %s' % (tag, label), LAYOUT_PART_LUA.format(scale=scale, fn=fn, arg=arg), timeout=600)
+            if (size, scale) in LAYOUT_PANEL_SWEEPS:
+                for pid in ids:
+                    call('%s sweep' % tag, LAYOUT_PART_LUA.format(scale=scale, fn='Panel', arg="'%s'" % pid), timeout=120)
+        inst.lua("import('/lua/editor/gui/skin.lua').SetScale(1.0) import('/lua/editor/gui/shell.lua').ShowWorkspace('Terrain') return 'ok'")
     rep.add('layout', not problems, '%d widgets measured, %d problems' % (checked, len(problems)), sorted(set(problems)))
 
 
@@ -576,7 +619,7 @@ def main():
         ('clicks', lambda: step_clicks(inst, rep)),
         ('tips', lambda: step_tips(inst, rep)),
         ('workspaces', lambda: step_workspaces(inst, rep, outdir)),
-        ('layout', lambda: step_layout(inst, rep)),
+        ('layout', lambda: step_layout(inst, rep, a.exe, editor)),
         ('log', lambda: step_log(inst, rep)),
         ('maps', lambda: step_maps(inst, rep, a.maps)),
         ('simstress', lambda: step_simstress(inst, rep, a.sim_cycles)),

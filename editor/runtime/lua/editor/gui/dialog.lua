@@ -29,6 +29,13 @@ function IsOpen()
     return current ~= false
 end
 
+--- The box of the open dialog in window coordinates { l, t, r, b } (nil without one): the layout check measures it against the window.
+function Rect()
+    if not current then return nil end
+    local g = current.group
+    return { l = g.Left(), t = g.Top(), r = g.Left() + g.Width(), b = g.Top() + g.Height() }
+end
+
 function Open(title, width, height, onClose)
     Close()
     local frame = GetFrame(0)
