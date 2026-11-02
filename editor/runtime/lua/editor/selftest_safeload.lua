@@ -143,6 +143,8 @@ function Run()
     Ok(r1 == false and okTry == true and value == 5, 'Try returns like pcall')
     Ok(table.getn(lines) == 2 and Safe.Failures('selftest.site') == 25, 'a site that fails 25 times is logged twice (the 1st and the 10th failure): ' .. table.getn(lines))
     Ok(Safe.Call('selftest.call', function() return 'x' end) == 'x' and Safe.Call('selftest.call', function() error('y') end) == nil, 'Call returns the first result or nil')
+    local okNative, nativeValue = Safe.Try('selftest.native', gcinfo)
+    Ok(okNative and type(gcinfo) == 'cfunction' and Safe.Failures('selftest.native') == 0, 'Try runs a native function (type cfunction in this Lua), it is not reported as "not a function"')
     Ok(Safe.Wrap('selftest.wrap', function(a) return a * 2 end)(4) == 8, 'Wrap passes arguments and results through')
     Safe.Reset()
 

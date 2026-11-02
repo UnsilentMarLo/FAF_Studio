@@ -50,7 +50,7 @@ function Report(site, err)
 end
 
 function Try(site, fn, ...)
-    if type(fn) ~= 'function' then
+    if type(fn) ~= 'function' and type(fn) ~= 'cfunction' then       -- (a native function is type 'cfunction' in this Lua: ConExecute, ed_vfs_mount ...)
         Report(site, 'not a function: ' .. type(fn))
         return false
     end
