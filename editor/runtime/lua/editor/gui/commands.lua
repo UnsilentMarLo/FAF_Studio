@@ -3,6 +3,7 @@
 --
 --   Commands.Register{ id = 'workspace.terrain', title = 'Workspace: Terrain', keys = 'Ctrl+1', run = function() ... end }
 --   Commands.Run(id)            Commands.Find(text) -> list of commands whose title contains every word of `text`
+--   A command registered with `mod = 'My mod'` (api.lua Mod(name).Command does it) that raises is reported with the mod's name and turned off for the session; every command is protected.
 --   Commands.OpenPalette(frame) overlay with a filter field and a list; Enter or a click runs the selected command, Esc closes
 
 local Group = import('/lua/maui/group.lua').Group
@@ -18,6 +19,9 @@ function Register(def)
     if not def or not def.id or not def.run then
         error('Commands.Register: a command needs an id and a run function')
     end
+    if registry[def.id] and registry[def.id].mod and registry[def.id].mod ~= def.mod then
+        WARN('EDITOR commands: ' .. def.id .. ' of mod ' .. tostring(registry[def.id].mod) .. ' is replaced by ' .. tostring(def.mod or 'the editor'))
+    end
     if not registry[def.id] then order[table.getn(order) + 1] = def.id end
     registry[def.id] = def
 end
@@ -32,12 +36,18 @@ end
 function Run(id)
     local def = registry[id]
     if not def then return false end
+    local Api = import('/lua/editor/api.lua')
+    if Api.IsDisabled('command', id) then
+        LOG('EDITOR gui: command ' .. id .. ' is disabled (mod ' .. tostring(def.mod) .. ' failed earlier in this session)')
+        return false
+    end
     for _, fn in interceptors do
         local ok, used = pcall(fn, id)
+        if not ok then Api.Failed('interceptor', id, nil, used) end
         if ok and used then return true end
     end
     local ok, err = pcall(def.run)
-    if not ok then LOG('EDITOR gui: command ' .. id .. ' failed: ' .. tostring(err)) end
+    if not ok then Api.Failed('command', id, def.mod, err) end
     return ok
 end
 
@@ -48,7 +58,7 @@ function Find(text)
     for _, id in order do
         local def = registry[id]
         local hay = string.lower(def.title or id)
-        local all = true
+        local all = not (def.mod and import('/lua/editor/api.lua').IsDisabled('command', id))
         for _, w in words do
             if not string.find(hay, w, 1, true) then all = false end
         end

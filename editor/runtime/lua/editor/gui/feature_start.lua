@@ -27,6 +27,13 @@ function OnStart()
     local boot = ed_read_file('editor_boot.txt')
     local first = (boot == nil or boot == '' or boot == '0')
     ed_write_file('editor_boot.txt', '1')
+    -- a map that could not be opened (schook SinglePlayerLaunch.lua opened the blank map instead): say so, then the start screen
+    local Launch = import('/lua/editor/gui/feature_launcherror.lua')
+    local failedLaunch = Launch.Take()
+    if failedLaunch then
+        Launch.Show(failedLaunch, function() StartScreen().Open{ afterNoMap = true } end)
+        return
+    end
     if first then
         local noMap = not HasCommandLineArg('/map')
         if noMap and UserData.Get('startScreen', true) ~= false then

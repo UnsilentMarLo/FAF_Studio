@@ -4,11 +4,8 @@
 do
     local baseStartCommandLineSession = StartCommandLineSession
 
-    function StartCommandLineSession(mapName, isPerfTest)
-        if not HasCommandLineArg('/editor') then
-            return baseStartCommandLineSession(mapName, isPerfTest)
-        end
-
+    -- the editor's session start; raises when the map cannot be opened (the caller below catches it)
+    local function EditorStartSession(mapName)
         if not mapName then
             error('editor: a map is required (/map <name>)')
         end
@@ -20,10 +17,15 @@ do
         VerifyScenarioConfiguration(scenario)
 
         -- the map's own list of loaded mods becomes the session's selection (lua/editor/mods.lua)
+        -- (a sidecar that cannot be read must not stop the map from opening: ApplySidecar reads it protected, and a failure here only costs the map's mod list)
         local EditorMods = import('/lua/editor/mods.lua')
-        if not EditorMods.RecoverAtLaunch() then
-            EditorMods.ApplySidecar(scenario.file)
-        end
+        local okMods, errMods = pcall(function()
+            EditorMods.BeginEditorTrial()
+            if not EditorMods.RecoverAtLaunch() then
+                EditorMods.ApplySidecar(scenario.file)
+            end
+        end)
+        if not okMods then WARN('EDITOR: the mod list of the map could not be applied: ' .. tostring(errMods)) end
 
         scenario.Options = {
             FogOfWar = 'none',
@@ -80,5 +82,21 @@ do
         end
 
         LaunchSinglePlayerSession(sessionInfo)
+    end
+
+    -- Opening a map can fail before a session exists (the scenario file is not there, it does not load, FixupMapName raises: "Error launching session: Map scenario file does not
+    -- exist"). The engine then logs the error and has no session to show: the editor window stays dead (found 2026-11-02 with /map /maps/nope/nope_scenario.lua). The editor opens its blank
+    -- map instead and leaves the reason in editor_launch_error.txt; the start screen shows it (lua/editor/gui/feature_launcherror.lua).
+    function StartCommandLineSession(mapName, isPerfTest)
+        if not HasCommandLineArg('/editor') then
+            return baseStartCommandLineSession(mapName, isPerfTest)
+        end
+        local ok, err = pcall(EditorStartSession, mapName)
+        if ok then return end
+        WARN('EDITOR: the map ' .. tostring(mapName) .. ' could not be opened: ' .. tostring(err))
+        if mapName == 'editor_blank' or not rawget(_G, 'ed_write_file') then error(err) end
+        ed_write_file('editor_launch_error.txt', tostring(mapName) .. '\n' .. tostring(err))
+        local ok2, err2 = pcall(EditorStartSession, 'editor_blank')
+        if not ok2 then error('editor: neither the map nor the blank map could be opened: ' .. tostring(err2)) end
     end
 end

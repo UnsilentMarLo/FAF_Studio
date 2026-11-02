@@ -94,13 +94,144 @@ function WithDependencies(set)
     return result
 end
 
+-- ---- editor mods: which ones may load ----------------------------------------------------------------------------------------------------------
+-- An editor mod's hook is appended to the editor module it hooks and compiled with it as one chunk (the game's import): a syntax error or a runtime error at the top level of a hook breaks
+-- the importing module, and with it the editor (tried 2026-11-02: the editor never came up). Lua cannot run a hook protected, so the editor keeps such a mod out before it can do harm:
+--   * a mod that needs another editor API version (`editor_api` in mod_info.lua, api.lua) is not loaded;
+--   * every hook file is compiled once on its own; a syntax error keeps the mod out;
+--   * a trial (like the map mods' trial below): the active editor mods are written to `editor_emods_trial.txt` when the first session of a process starts and the file is emptied when the
+--     editor is up (control.Start -> EndTrial). A launch that finds the file filled knows the last start failed: the mods that were active are put on the off list
+--     (`editor_emods_off.txt`) and stay out until the maker enables them again (command "Mods: enable editor mods that were turned off", ReenableEditorMods).
+-- Problems() lists the mods that are kept out and why.
+
+local EMOD_TRIAL = 'editor_emods_trial.txt'
+local EMOD_OFF = 'editor_emods_off.txt'
+local EMOD_ACTIVE = 'editor_emods_active.txt'
+local emodStatus = false        -- { off = set, problems = list, active = set } for the process; computed once
+
+local function ReadUidLines(file)
+    local set = {}
+    local text = ed_read_file(file)
+    for line in string.gfind(text or '', '[^\r\n]+') do
+        if line ~= 'trial' then set[line] = true end
+    end
+    return set
+end
+
+local function WriteUidLines(file, set, first)
+    local lines = { first }
+    local uids = {}
+    for uid, on in set do if on then table.insert(uids, uid) end end
+    table.sort(uids)
+    for _, uid in uids do table.insert(lines, uid) end
+    ed_write_file(file, table.concat(lines, '\n') .. '\n')
+end
+
+--- Syntax problems of the hook files of a mod: list of texts. A hook inside an archive cannot be read and is not checked.
+function HookProblems(mod)
+    local list = {}
+    local ok, files = pcall(DiskFindFiles, tostring(mod.location) .. '/hook', '*.lua')
+    if not ok or type(files) ~= 'table' then return list end
+    for _, vfsPath in files do
+        local disk = ed_vfs_to_disk(vfsPath)
+        local text = disk and ed_read_file(disk)
+        if text then
+            local fn, err = loadstring(text, vfsPath)
+            if not fn then table.insert(list, vfsPath .. ': ' .. tostring(err)) end
+        end
+    end
+    return list
+end
+
+local function ComputeStatus()
+    local st = { off = ReadUidLines(EMOD_OFF), problems = {}, active = {} }
+    local Api = import('/lua/editor/api.lua')
+    local ui = rawget(_G, 'ed_vfs_to_disk') ~= nil          -- the UI state computes; the sim state (no ed_vfs_to_disk) reads what the UI state decided
+    local decided = (not ui) and ed_read_file(EMOD_ACTIVE)
+    local decidedSet = decided and ReadUidLines(EMOD_ACTIVE)
+    for uid, mod in All() do
+        if mod.editor_mod then
+            local why
+            if st.off[uid] then
+                why = 'turned off after a start that did not come up'
+            else
+                local good, reason = Api.Compatible(mod)
+                if not good then
+                    why = reason
+                elseif ui then
+                    local bad = HookProblems(mod)
+                    if table.getn(bad) > 0 then why = 'a hook does not compile: ' .. bad[1] end
+                elseif decidedSet and not decidedSet[uid] then
+                    why = 'kept out by the UI state'
+                end
+            end
+            if why then
+                table.insert(st.problems, { uid = uid, name = tostring(mod.name), why = why })
+            else
+                st.active[uid] = true
+            end
+        end
+    end
+    if ui then WriteUidLines(EMOD_ACTIVE, st.active, 'active') end
+    return st
+end
+
+local function EditorModStatus()
+    if not emodStatus then
+        emodStatus = ComputeStatus()
+        for _, p in emodStatus.problems do LOG('EDITOR: editor mod ' .. p.name .. ' is not loaded: ' .. p.why) end
+    end
+    return emodStatus
+end
+
+--- UI state, once per process at the first session start (SinglePlayerLaunch hook): a trial file that is still filled means the last start did not come up, so the mods that were loaded then
+--- go on the off list; then the mods of this start are written to the trial file (control.Start empties it through EndTrial). Returns the uids that were turned off.
+function BeginEditorTrial()
+    if rawget(_G, 'EdEditorTrialBegun') then return {} end
+    rawset(_G, 'EdEditorTrialBegun', true)
+    local turnedOff = {}
+    local trial = ReadUidLines(EMOD_TRIAL)
+    if next(trial) then
+        local off = ReadUidLines(EMOD_OFF)
+        for uid in trial do
+            off[uid] = true
+            table.insert(turnedOff, uid)
+        end
+        WriteUidLines(EMOD_OFF, off, 'off')
+        LOG('EDITOR: the last start did not come up; the editor mods that were loaded then are turned off until they are enabled again')
+    end
+    emodStatus = false
+    WriteUidLines(EMOD_TRIAL, EditorModStatus().active, 'trial')
+    return turnedOff
+end
+
+--- The editor mods that are kept out and why: list of { uid, name, why }.
+function Problems()
+    return EditorModStatus().problems
+end
+
+--- Puts every editor mod back on (the off list is emptied); takes effect at the next launch.
+function ReenableEditorMods()
+    emodStatus = false
+    ed_write_file(EMOD_OFF, 'off\n')
+    ed_write_file(EMOD_TRIAL, '')
+end
+
+--- ModInfo list of the editor mods that are loaded, sorted by name.
+function ActiveEditorMods()
+    local st = EditorModStatus()
+    local list = {}
+    for _, mod in EditorMods() do
+        if st.active[mod.uid] then table.insert(list, mod) end
+    end
+    return list
+end
+
 --- The set of active mod uids of the editor session (what mods.GetSelectedMods answers in /editor).
 function ActiveSet()
     local set = {}
-    for uid, mod in All() do
-        if mod.editor_mod then
-            set[uid] = true
-        end
+    for uid in EditorModStatus().active do
+        set[uid] = true
     end
     for uid in WithDependencies(GetSelection()) do
         set[uid] = true
@@ -137,6 +268,7 @@ end
 
 function EndTrial()
     ed_write_file(TRIAL_FILE, '')
+    ed_write_file(EMOD_TRIAL, '')           -- the editor is up: the editor mods that were loaded did no harm
 end
 
 --- At the first map open of a process: undo a mod load that never came up. Returns true when it did.

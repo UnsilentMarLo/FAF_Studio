@@ -7,6 +7,14 @@ local Skin = import('/lua/editor/gui/skin.lua')
 local Panels = import('/lua/editor/gui/panels.lua')
 local UI = import('/lua/editor/ui.lua')
 local Mods = import('/lua/editor/mods.lua')
+local Commands = import('/lua/editor/gui/commands.lua')
+
+-- Editor mods that were kept out (an incompatible editor_api, a hook that does not compile, a start that did not come up) are listed under the loaded ones; this command lets them try again
+-- at the next launch.
+Commands.Register{ id = 'mods.enable_editor', title = 'Mods: enable the editor mods that were turned off', run = function()
+    Mods.ReenableEditorMods()
+    pcall(function() import('/lua/editor/ui.lua').Say('Editor mods enabled again: restart the editor to load them') end)
+end }
 
 live = {}
 NoAutoRefresh = true       -- refreshed by its own events, not by the shell tick
@@ -85,8 +93,10 @@ Panels.Register{
             local pad = Skin.S(8)
             for _, l in P.header do l:Destroy() end
             local always = {}
-            for _, mod in Mods.EditorMods() do table.insert(always, tostring(mod.name)) end
+            for _, mod in Mods.ActiveEditorMods() do table.insert(always, tostring(mod.name)) end
             local text = 'Editor mods (always loaded): ' .. (table.getn(always) > 0 and table.concat(always, ', ') or 'none')
+            for _, p in Mods.Problems() do text = text .. '\nNot loaded: ' .. p.name .. ' (' .. p.why .. ')' end
+            if table.getn(Mods.Problems()) > 0 then text = text .. '\nCommand palette: "Mods: enable the editor mods that were turned off"' end
             local labels, below = W.Paragraph(group, text, pad, pad, math.max(Skin.S(80), w - 2 * pad), { color = Skin.color.textDim, size = 'small' })
             P.header = labels
             local fy = below + Skin.S(4)

@@ -36,8 +36,8 @@ local COLOR_MARKER = 'ffffc830'
 local COLOR_AREA = 'ff30c8ff'
 
 --- Tools. kind 'brush' = terrain brush mode of terrain.lua; 'marker' / 'area' / 'none' are document tools; kind 'select' with `pick = 'marker' | 'area'` selects only that kind of object;
---- 'custom' calls tool.OnPress(wx, wz, event) (return false to let the click through). Editor mods add tools by
---- appending to this table from a hook on /lua/editor/ui.lua.
+--- 'custom' calls tool.OnPress(wx, wz, event) (return false to let the click through; a raising OnPress is caught, logged and lets the click through). Editor mods add tools by
+--- appending to this table from a hook on /lua/editor/ui.lua (api.lua Mod(name).Tool(Tools, def) also names the mod and turns the tool off after its first failure).
 Tools = {
     { id = 'select',  label = 'Select marker',  kind = 'select', pick = 'marker' },
     { id = 'raise',   label = 'Raise',   kind = 'brush' },
@@ -637,7 +637,7 @@ function OnWorldPress(event)
         PostDragger(GetFrame(0), event.KeyCode, dragger)
         return true
     elseif tool.kind == 'custom' and tool.OnPress then
-        return tool.OnPress(wx, wz, event) ~= false
+        return import('/lua/editor/api.lua').RunTool(tool, wx, wz, event)          -- protected: a tool that raises lets the click through (api.lua)
     elseif tool.kind == 'marker' then
         PlaceMarkerAt(wx, wz)
         return true
