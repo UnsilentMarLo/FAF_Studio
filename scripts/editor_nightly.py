@@ -699,8 +699,9 @@ def step_perf(inst, rep, exe, seconds=28):
 
 
 
-def step_missionsim(inst, rep):
+def step_missionsim(inst, rep, exe=None):
     """Missions covering every node type are played in the real sim (scripts/editor_mission_sim.py): triggers fire, objectives complete, stages advance, the operation ends."""
+    inst.start(exe)               # the cases build their own world on the usual blank document (the steps before left a real map open, without the armies and unit tables the cases extend)
     cmd = [sys.executable, os.path.join(HERE, 'editor_mission_sim.py'), inst.tag]
     p = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
     lines = [l for l in p.stdout.splitlines() if l.strip()]
@@ -760,7 +761,7 @@ def main():
         ('layout', lambda: step_layout(inst, rep, a.exe, editor)),
         ('log', lambda: step_log(inst, rep)),
         ('maps', lambda: step_maps(inst, rep, a.maps)),
-        ('missionsim', lambda: step_missionsim(inst, rep)),
+        ('missionsim', lambda: step_missionsim(inst, rep, a.exe)),
         ('simstress', lambda: step_simstress(inst, rep, a.sim_cycles)),
         ('stress', lambda: step_stress(inst, rep, a.loads, outdir)),
         ('perf', lambda: step_perf(inst, rep, a.exe)),
