@@ -46,7 +46,7 @@ local handleKey = ''
 local TerrainEpoch = import('/lua/editor/terrainepoch.lua')
 -- The overlay's own "the ground may have changed" counter, `groundEpoch`. TerrainEpoch.Epoch moves on every history step and every 5 seconds as a net, and each move laid every area
 -- outline and resource footprint onto the terrain again (a 50-70 ms hitch with 600 resource markers and 40 areas, every 5 s). The ground really changes with the history (a stroke,
--- an undo), a height write that records none (the native height revision, TerrainEpoch.Touch) or a mesh terrain edit; so this one moves with those, and the plain net is 30 s (5 s on
+-- an undo), a height write that records none (the native height revision, TerrainEpoch.Touch) or a mesh terrain edit; so this one moves with those, and the plain net is 90 s (5 s on
 -- a mesh map, whose edits it cannot see). Like the TerrainEpoch it stands still while a stroke is dragged.
 local groundEpoch = 0
 local ground = { rev = -1, touch = -1, hist = -1, at = -100, mode = -1 }
@@ -1661,7 +1661,7 @@ local function StepGround(stroking)
     local hist = Mod('history', '/lua/editor/history.lua').Version
     local mode = Mod('meshview', '/lua/editor/meshview.lua').Mode()
     local now = GetSystemTimeSeconds()
-    local net = Mod('meshview', '/lua/editor/meshview.lua').Active() and 5 or 30
+    local net = Mod('meshview', '/lua/editor/meshview.lua').Active() and 5 or 90
     if rev ~= g.rev or TerrainEpoch.Revision ~= g.touch or hist ~= g.hist or mode ~= g.mode or now - g.at >= net then
         g.rev, g.touch, g.hist, g.mode, g.at = rev, TerrainEpoch.Revision, hist, mode, now
         groundEpoch = groundEpoch + 1

@@ -52,3 +52,4 @@ selftest_detail
 selftest_erosionpaint
 selftest_oversample
 selftest_alphagen
+selftest_perfbudget

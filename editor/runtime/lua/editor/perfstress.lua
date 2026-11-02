@@ -5,6 +5,8 @@
 --   Build(opts)     opts = { markers = 3000, areas = 40, units = 600, seed = 1 }; returns a text with the numbers made. Calling it again first removes what the last call made.
 --   Remove()        takes the objects of Build away again
 --   Frames(n)       runs overlay.Update n times in a row (as the frame tick does) and returns { ms = ms per frame, kb = Lua garbage made per frame (KB), worst = slowest frame (ms) }
+--   Paced(secs, fps)  runs overlay.Update at `fps` frames per second for `secs` seconds of wall time (the editor stands still meanwhile) and returns
+--                   { perSecond = Lua ms per second spent in it, worst = slowest frame (ms), kb = garbage per frame (KB), frames = n, growth = KB the heap grew over the run (both ends after a collection) }
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
@@ -16,10 +18,13 @@ local UNIT_BPS = { 'uel0106', 'url0106', 'ual0106', 'xsl0201', 'uel0201', 'url01
 
 local madeMarkers, madeAreas, madeUnits = {}, {}, {}
 
+-- (Lua numbers are 32-bit floats: a generator whose products pass 2^24 degenerates; this one stays below 5 million. Two numbers are mixed per call so that x and z do not line up.)
 local seed = 1
 local function Rand()
-    seed = math.mod(seed * 16807, 2147483647)
-    return seed / 2147483647
+    seed = math.mod(seed * 75 + 74, 65537)
+    local a = seed
+    seed = math.mod(seed * 75 + 74, 65537)
+    return (a + seed / 65537) / 65537
 end
 
 function Remove()
@@ -95,4 +100,35 @@ function Frames(n)
         last = now
     end
     return { ms = total * 1000 / n, worst = worst * 1000, kb = garbage / n }
+end
+
+function Paced(secs, fps)
+    local Overlay = import('/lua/editor/overlay.lua')
+    local ui = import('/lua/editor/ui.lua')
+    local clock = GetSystemTimeSeconds
+    local step = 1 / (fps or 60)
+    collectgarbage(0)
+    collectgarbage(0)
+    local heap0 = gcinfo()
+    local start = clock()
+    local total, worst, garbage, frames = 0, 0, 0, 0
+    local last = gcinfo()
+    local nextAt = start
+    while clock() - start < secs do
+        local t0 = clock()
+        Overlay.Update(ui)
+        local dt = clock() - t0
+        total = total + dt
+        if dt > worst then worst = dt end
+        frames = frames + 1
+        local now = gcinfo()
+        if now > last then garbage = garbage + (now - last) end
+        last = now
+        nextAt = nextAt + step
+        while clock() < nextAt do end          -- (the frame's other work, the render and the wait for the display, are not ours: spin)
+    end
+    local elapsed = clock() - start
+    collectgarbage(0)
+    collectgarbage(0)
+    return { perSecond = total * 1000 / elapsed, worst = worst * 1000, kb = garbage / math.max(1, frames), frames = frames, growth = gcinfo() - heap0 }
 end
