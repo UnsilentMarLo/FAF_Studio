@@ -19,7 +19,7 @@ TESTS = {"MapDocumentTest": ["moho/editor/MapDocument.cpp"], "EdFieldTest": ["mo
          "EdSymTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldSc.cpp"],
          "EdErosionTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdErosion.cpp"],
          "EdLandTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdFieldGen.cpp", "moho/editor/EdFieldLand.cpp"],
-         "EdBrushTest": ["moho/editor/MapDocument.cpp"], "MeshLodDepthTest": [], "EdTerrainTypeTest": [], "EdOverlayGeomTest": [], "EdOverlaySlopeTest": [], "EdOverlayNodesTest": [], "EdOverlayDrapeTest": [], "EdOverlayLodTest": [], "EdOverlayFieldTest": [], "EdDdsDecodeTest": [], "EdTexConvTest": [], "EdDirtyRectTest": [], "EdPerfPolicyTest": [], "EdRenderOptTest": [],
+         "EdBrushTest": ["moho/editor/MapDocument.cpp"], "MeshLodDepthTest": [], "EdTerrainTypeTest": [], "EdOverlayGeomTest": [], "EdOverlaySlopeTest": [], "EdOverlayNodesTest": [], "EdOverlayDrapeTest": [], "EdOverlayLodTest": [], "EdOverlayLinesTest": [], "EdOverlayFieldTest": [], "EdDdsDecodeTest": [], "EdTexConvTest": [], "EdDirtyRectTest": [], "EdPerfPolicyTest": [], "EdRenderOptTest": [],
          "EdNormalMapParTest": ["moho/editor/EdFieldCore.cpp", "moho/render/textures/DXTCodec.cpp"],
          # GPU compute foundation: the kernels run as C++ through gpu/hlsl_cpp_shim.h on a CPU emulator; on Windows the test also tries the real Direct3D 11 device (docs/projects/editor/GPU_COMPUTE.md)
          "EdGpuTest": ["moho/editor/EdFieldCore.cpp", "moho/editor/EdGpuOps.cpp", "moho/editor/EdGpu.cpp"],
