@@ -38,7 +38,7 @@ REGIONS = { 'map', 'playable', 'rect' }
 CHANNELS = { 'gray', 'r', 'g', 'b', 'a' }
 
 local function Say(text)
-    pcall(function() import('/lua/editor/ui.lua').Say(text) end)
+    pcall(function() import('/lua/editor/ui.lua').Say(text) end)       -- best effort: a status line message
     LOG('EDITOR interop: ' .. text)
 end
 

@@ -11,7 +11,7 @@ do
     local function FreezeUnit(u)
         if u and not u.Dead and not u.EdFrozen then
             u.EdFrozen = true
-            pcall(function() u:SetImmobile(true) end)
+            pcall(function() u:SetImmobile(true) end)       -- best effort: the unit may be dead or have no motion
         end
     end
     EdFreezeUnit = FreezeUnit
@@ -34,10 +34,10 @@ do
                 for _, u in units do
                     if u.EdFrozen and not u.Dead then
                         u.EdFrozen = nil
-                        pcall(function() u:SetImmobile(false) end)
+                        pcall(function() u:SetImmobile(false) end)       -- best effort
                         -- structures get the footprint decal the editor withheld (schook/lua/sim/units/StructureUnit.lua)
                         if u.CreateTarmac and EntityCategoryContains(categories.STRUCTURE, u) then
-                            pcall(function() u:CreateTarmac(true, true, true) end)
+                            pcall(function() u:CreateTarmac(true, true, true) end)       -- best effort
                         end
                     end
                 end
@@ -49,7 +49,7 @@ do
             -- a splat cannot be removed again, and Stop opens the map afresh.
             ScenarioInfo.EditorDepositsMade = true
             for _, d in data.deposits do
-                pcall(function()
+                pcall(function()       -- best effort: one deposit that cannot get its prop does not stop the others
                     local mass = (d.type == 'Mass')
                     local y = GetTerrainHeight(d.x, d.z)
                     CreatePropHPR(mass and '/env/common/props/massDeposit01_prop.bp' or '/env/common/props/hydrocarbonDeposit01_prop.bp', d.x, y, d.z, Random(0, 360), 0, 0)
@@ -67,7 +67,7 @@ do
         if data.on then
             -- a test run starts like a game: the human army gets its commander at its start position (the game's own CreateInitialArmyGroup does that; the editor
             -- world has none while editing, schook/lua/sim/scenarioutilities.lua). Armies that already have one (a mission map's INITIAL group) are left alone.
-            pcall(function()
+            local okCdr, errCdr = pcall(function()
                 local ScenarioUtils = import('/lua/sim/ScenarioUtilities.lua')
                 for _, brain in ArmyBrains do
                     if brain.BrainType == 'Human' then
@@ -83,6 +83,7 @@ do
                     end
                 end
             end)
+            if not okCdr then WARN('editor: the test run could not give the army its commander: ' .. tostring(errCdr)) end
         end
     end
 
@@ -206,14 +207,14 @@ do
             -- the engine turns a new unit to the slope under it (pitch and roll that make it look rotated from above on uneven ground); the map only records the heading, and a structure
             -- stands upright, so the entity gets the plain turn about the vertical axis (the same quaternion as the props above)
             local h = data.heading or 0
-            pcall(function() unit:SetOrientation(Quaternion(0, math.sin(h * 0.5), 0, math.cos(h * 0.5)), true) end)
+            pcall(function() unit:SetOrientation(Quaternion(0, math.sin(h * 0.5), 0, math.cos(h * 0.5)), true) end)       -- best effort
             FreezeUnit(unit)
         end
         if ok and unit and data.group == '_view' then unit.EdViewUnit = true end      -- the unit viewer's own units (EdClearLab takes them down)
         -- no shooting while editing: hold fire (the viewer's units are skipped, they are protected); the armies are neutral already, Enter again in case the session start missed it
         if ok and unit and not ScenarioInfo.EditorPlaying then
             Peace('Enter')
-            pcall(function() import('/lua/editorsim/peace.lua').Hold(unit) end)
+            pcall(function() import('/lua/editorsim/peace.lua').Hold(unit) end)       -- best effort: Peace.Enter holds fire for every unit again
         end
         -- units of the mission's own groups are shown while editing only: the script spawns them when the mission plays
         if ok and unit and data.group and data.group ~= 'INITIAL' and string.sub(data.group, 1, 8) ~= 'INITIAL/' then

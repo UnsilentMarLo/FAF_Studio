@@ -18,6 +18,7 @@ local Thumbs = import('/lua/editor/thumbs.lua')
 local Tips = import('/lua/editor/tips.lua')
 local Version = import('/lua/editor/version.lua')
 local UserData = import('/lua/editor/userdata.lua')
+local Safe = import('/lua/editor/safe.lua')
 
 local current = false
 
@@ -136,11 +137,11 @@ function Open(opts)
     y = y + Skin.S(10)
     Btn('Tutorial', function()
         Close()
-        pcall(function() import('/lua/editor/gui/tour.lua').Start() end)
+        Safe.Try('startscreen:fn139', function() import('/lua/editor/gui/tour.lua').Start() end)
     end)
     Btn('Help  (F1)', function()
         Close()
-        pcall(function() import('/lua/editor/gui/commands.lua').Run('help.open') end)
+        Safe.Try('startscreen:fn143', function() import('/lua/editor/gui/commands.lua').Run('help.open') end)
     end)
 
     local show = W.Button(g, 'Show this screen at start', M, fh - M - bh, lw, bh, function(self)
@@ -176,7 +177,7 @@ function Open(opts)
                     return true
                 end
                 if not Maps.TemplateReady(Maps.Sizes[index].template) then
-                    pcall(function() import('/lua/editor/gui/shell.lua').Say('the blank map for ' .. Maps.Sizes[index].label .. ' is not installed: run  python scripts/studio.py generate') end)
+                    Safe.Try('startscreen:fn179', function() import('/lua/editor/gui/shell.lua').Say('the blank map for ' .. Maps.Sizes[index].label .. ' is not installed: run  python scripts/studio.py generate') end)
                     return true
                 end
                 Maps_().Guard(function() Close() Maps.New(index, 'My map') end)
@@ -252,7 +253,7 @@ function Open(opts)
     end)
     local go = W.Button(g, opts.afterNoMap and 'Start with a blank map' or 'Close', rx + rw - Skin.S(220), fh - M - bh, Skin.S(220), bh, function()
         Close()
-        pcall(function() import('/lua/editor/gui/feature_start.lua').MaybeTour() end)
+        Safe.Try('startscreen:fn255', function() import('/lua/editor/gui/feature_start.lua').MaybeTour() end)
     end)
 
     -- ---- thumbnails arrive one per frame (reading a big .scmap takes a moment) --------------------------------------------------------------

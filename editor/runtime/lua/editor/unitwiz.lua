@@ -911,7 +911,7 @@ function ReadTexture(path)
                 local y1 = math.min(h - 1, y + rowsPerRead - 1)
                 local values = ed_field_read(field, 0, y, w - 1, y1)
                 if not values then
-                    pcall(ed_field_free, field)
+                    pcall(ed_field_free, field)       -- best effort: frees a native field       -- best effort: frees a native field
                     return nil, 'cannot read the picture channels'
                 end
                 local k = 0
@@ -925,7 +925,7 @@ function ReadTexture(path)
                 end
                 y = y1 + 1
             end
-            pcall(ed_field_free, field)
+            pcall(ed_field_free, field)       -- best effort: frees a native field
         end
     end
     if not hasAlpha then

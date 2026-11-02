@@ -3,7 +3,7 @@
 -- baseline: CreateInitialArmyGroup, CreateResources
 do
     local baseCreateInitialArmyGroup = CreateInitialArmyGroup
-    pcall(function() import('/lua/editor/hookcheck.lua').Expect('scenarioutilities', getfenv(1), { 'CreateInitialArmyGroup', 'CreateResources' }) end)
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('scenarioutilities', getfenv(1), { 'CreateInitialArmyGroup', 'CreateResources' }) end)       -- best effort (the check only warns)
 
     function CreateInitialArmyGroup(strArmy, createCommander)
         if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then
@@ -12,9 +12,9 @@ do
             for _, u in group or {} do
                 if u and not u.Dead and u.SetImmobile then
                     u.EdFrozen = true
-                    pcall(function() u:SetImmobile(true) end)
+                    pcall(function() u:SetImmobile(true) end)       -- best effort
                     -- ... and does not fire (hold fire; the armies are made neutral in CreateResources below, editorsim/peace.lua)
-                    pcall(function() import('/lua/editorsim/peace.lua').Hold(u) end)
+                    pcall(function() import('/lua/editorsim/peace.lua').Hold(u) end)       -- best effort: Peace.Enter holds fire for every unit again
                 end
             end
             return group, cdr

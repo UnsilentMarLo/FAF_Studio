@@ -127,7 +127,7 @@ function GuardPanel(def, create, group, host)
         Failed(kind, def.id, def.mod, inst)
         local panels = import('/lua/editor/gui/panels.lua')
         panels.failed[def.id] = tostring(inst)
-        for _, fn in panels.failureListeners do pcall(fn, def.id, tostring(inst), def.mod) end
+        for _, fn in panels.failureListeners do Safe().Try('api.failurelistener', fn, def.id, tostring(inst), def.mod) end
         ShowFailure(group, def, inst)
         return { failed = true }
     end

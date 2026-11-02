@@ -76,7 +76,7 @@ function Listen(fn) table.insert(listeners, fn) end
 
 local function Touch()
     Doc.rev = Doc.rev + 1
-    for _, fn in listeners do pcall(fn) end
+    for _, fn in listeners do import('/lua/editor/safe.lua').Try('layout.listener', fn) end
 end
 
 --- The playable area (x0, z0, x1, z1) of the open map; the whole terrain without one, 256 units square without a map.

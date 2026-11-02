@@ -1,7 +1,7 @@
 -- baseline: OnFirstUpdate, CreateWldUIProvider
 do
     local baseOnFirstUpdate = OnFirstUpdate
-    pcall(function() import('/lua/editor/hookcheck.lua').Expect('gamemain', getfenv(1), { 'OnFirstUpdate', 'CreateWldUIProvider' }) end)
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('gamemain', getfenv(1), { 'OnFirstUpdate', 'CreateWldUIProvider' }) end)       -- best effort (the check only warns)
     function OnFirstUpdate()
         -- The game's own first update builds the score UI, the army lines ... from the armies of the map. A map whose armies do not fit it (an army without a faction icon, a
         -- campaign script that creates UI) makes it raise: with the editor's start after it, the session came up as a plain game without the editor (found 2026-10-19 by
@@ -25,11 +25,13 @@ do
             provider.StartLoadingDialog = function(self)
                 GetCursor():Hide()
                 supressExitDialog = true
-                pcall(function() import('/lua/editor/gui/loading.lua').Start() end)
+                local ok, err = pcall(function() import('/lua/editor/gui/loading.lua').Start() end)
+                if not ok then WARN('EDITOR: the loading screen could not start: ' .. tostring(err)) end
             end
             provider.UpdateLoadingDialog = function(self, elapsedTime) end
             provider.StopLoadingDialog = function(self)
-                pcall(function() import('/lua/editor/gui/loading.lua').Stop() end)
+                local ok, err = pcall(function() import('/lua/editor/gui/loading.lua').Stop() end)
+                if not ok then WARN('EDITOR: the loading screen could not stop: ' .. tostring(err)) end
                 GetCursor():Show()
                 FlushEvents()
             end

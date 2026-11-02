@@ -4,7 +4,7 @@
 -- baseline: Create, ToggleTabDisplay, ToggleTab, Expand, InitialAnimation
 do
     local baseCreate = Create
-    pcall(function() import('/lua/editor/hookcheck.lua').Expect('tabs', getfenv(1), { 'Create', 'ToggleTabDisplay', 'ToggleTab', 'Expand', 'InitialAnimation' }) end)
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('tabs', getfenv(1), { 'Create', 'ToggleTabDisplay', 'ToggleTab', 'Expand', 'InitialAnimation' }) end)       -- best effort (the check only warns)
     function Create(parent)
         baseCreate(parent)
         if HasCommandLineArg('/editor') then

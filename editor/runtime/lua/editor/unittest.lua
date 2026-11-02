@@ -13,6 +13,7 @@
 
 local Bp = import('/lua/editor/bpedit.lua')
 local Wiz = import('/lua/editor/unitwiz.lua')
+local Safe = import('/lua/editor/safe.lua')
 
 ENEMY = 'UNIT_TEST_TARGETS'      -- the army of the dummy targets (an enemy of ARMY_1), added to the map for the test
 Active = false
@@ -23,7 +24,7 @@ local TARGETS = { ground = 'uel0106', structure = 'ueb2101', air = 'uea0101', sh
 
 local function Say(text)
     Message = text
-    pcall(function() import('/lua/editor/ui.lua').Say(text) end)
+    Safe.Try('unittest:fn26', function() import('/lua/editor/ui.lua').Say(text) end)
 end
 
 local function PendingPath() return Bp.ROOT .. '/unittest.lua' end
@@ -36,7 +37,7 @@ function Pending()
     if not fn then return nil end
     local env = {}
     setfenv(fn, env)
-    pcall(fn)
+    Safe.Try('unittest:fn', fn)
     return env.Test
 end
 

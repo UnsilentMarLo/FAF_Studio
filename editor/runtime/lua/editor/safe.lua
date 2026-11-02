@@ -43,7 +43,7 @@ function Report(site, err)
     if Logged(e.count) then
         Say('EDITOR ' .. site .. ': failed' .. (e.count > 1 and (' (x' .. e.count .. ')') or '') .. ': ' .. e.last)
         for _, fn in S.listeners do
-            pcall(fn, site, e.last, e.count)
+            pcall(fn, site, e.last, e.count)       -- best effort: a listener that fails must not report through here again
         end
     end
     return e.count

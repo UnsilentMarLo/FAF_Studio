@@ -21,6 +21,7 @@
 
 local Wiz = import('/lua/editor/unitwiz.lua')
 local Scm = import('/lua/editor/scm.lua')
+local Safe = import('/lua/editor/safe.lua')
 
 Rules = { 'files', 'id', 'blueprint', 'bones', 'weapon labels', 'categories', 'build menu', 'extents', 'LODs', 'limits', 'animations', 'icon' }
 
@@ -280,7 +281,7 @@ function Check(id, spec, edits)
     local function Write()
         local n, report = Wiz.Write(dir, spec, edits)
         Bp.TouchNew(id)
-        pcall(function() import('/lua/editor/modcheck.lua').Touch() end)
+        Safe.Try('unitcheck.touch', function() import('/lua/editor/modcheck.lua').Touch() end)
         return n
     end
 

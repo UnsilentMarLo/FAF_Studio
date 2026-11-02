@@ -7,6 +7,7 @@ local Map = import('/lua/editor/map.lua')
 local History = import('/lua/editor/history.lua')
 local Dragger = import('/lua/maui/dragger.lua').Dragger
 local Grid = import('/lua/editor/grid.lua')
+local Safe = import('/lua/editor/safe.lua')
 
 --- The primary selected object (the one the properties panel edits): kind 'marker' | 'area' (false = nothing), and its name.
 Selection = { kind = false, name = false }
@@ -58,7 +59,7 @@ end
 LimitAreas = true
 LimitPlayable = false
 
-pcall(function()
+Safe.Try('tools:fn61', function()
     local UD = import('/lua/editor/userdata.lua')
     LimitAreas = UD.Get('areaLimitMap', true) ~= false
     LimitPlayable = UD.Get('areaLimitPlayable', false) == true
@@ -66,13 +67,13 @@ end)
 
 function SetLimitAreas(on)
     LimitAreas = on and true or false
-    pcall(function() import('/lua/editor/userdata.lua').Set('areaLimitMap', LimitAreas) end)
+    Safe.Try('tools:fn69', function() import('/lua/editor/userdata.lua').Set('areaLimitMap', LimitAreas) end)
     Bump()
 end
 
 function SetLimitPlayable(on)
     LimitPlayable = on and true or false
-    pcall(function() import('/lua/editor/userdata.lua').Set('areaLimitPlayable', LimitPlayable) end)
+    Safe.Try('tools:fn75', function() import('/lua/editor/userdata.lua').Set('areaLimitPlayable', LimitPlayable) end)
     Bump()
 end
 
@@ -1040,13 +1041,13 @@ end
 -- hidden behind a hill. Per object the cost is one Project call, once, when the button is released (nothing is scanned while the box is dragged).
 
 SelectBoxFollowsCamera = true
-pcall(function()
+Safe.Try('tools:fn1043', function()
     SelectBoxFollowsCamera = import('/lua/editor/userdata.lua').Get('selectBoxCamera', true) ~= false
 end)
 
 function SetSelectBoxFollowsCamera(on)
     SelectBoxFollowsCamera = on and true or false
-    pcall(function() import('/lua/editor/userdata.lua').Set('selectBoxCamera', SelectBoxFollowsCamera) end)
+    Safe.Try('tools:fn1049', function() import('/lua/editor/userdata.lua').Set('selectBoxCamera', SelectBoxFollowsCamera) end)
 end
 
 local NEAR_PLANE = 0.5

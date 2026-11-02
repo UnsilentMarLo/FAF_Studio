@@ -6,7 +6,7 @@
 -- baseline: HandleEsc
 do
     local baseHandleEsc = HandleEsc
-    pcall(function() import('/lua/editor/hookcheck.lua').Expect('eschandler', getfenv(1), { 'HandleEsc' }) end)
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('eschandler', getfenv(1), { 'HandleEsc' }) end)       -- best effort (the check only warns)
     function HandleEsc(quit_game)
         if HasCommandLineArg('/editor') then
             if quit_game then

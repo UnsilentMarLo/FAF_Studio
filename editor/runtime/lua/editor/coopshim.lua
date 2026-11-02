@@ -1,7 +1,7 @@
 -- Coop support for play tests in the editor. In a real coop game the lobby loads the FAF coop support mod (lobby_coop.cop), which hooks ScenarioFramework (SetSharedUnitCap,
 -- PlayerDeath, RemoveRestrictionForAllHumans, SimAnnouncement, ...) and fills ScenarioInfo.HumanPlayers from the armies named Player<N>. A coop or both-mode mission script calls
--- Install() when it runs in the editor (ScenarioInfo.Options.EditorMode): the editor session does not load that mod (its files cannot be read with doscript from the .cop archive,
--- and the engine's mod hooks are not applied to the sim of an editor session), so this module defines the functions the generated nodes use, with the same names and meaning
+-- Install() when it runs in the editor (ScenarioInfo.Options.EditorMode): the editor session does not load that mod (its files cannot be read with doscript from the .cop archive; editor mods with
+-- ui_only = false DO hook the sim of an editor session, tested 2026-11-02: docs/EDITOR_MODDING.md, Sim state), so this module defines the functions the generated nodes use, with the same names and meaning
 -- (simplified: the editor's play test has one real human; the other Player<N> slots are passive armies). Own implementation, not a copy of the mod.
 --
 -- Lua 5.0 dialect. Runs in the sim state.

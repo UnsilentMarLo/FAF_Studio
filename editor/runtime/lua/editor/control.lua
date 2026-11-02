@@ -6,6 +6,7 @@
 -- Everything here is data under editor/: the binary only provides the ed_* functions (moho/editor/EditorLua.cpp).
 
 local Bitmap = import('/lua/maui/bitmap.lua').Bitmap
+local Safe = import('/lua/editor/safe.lua')
 
 local started = false
 
@@ -24,7 +25,7 @@ end
 --- The field engine's grids (masks, graph node results, undo copies) live in the exe, not in the Lua state: the handles of an ended session are unreachable
 --- and the exe does not free them at session end (EdField.cpp keeps them in a static table), so every session start and every map load frees them all.
 function FreeNativeStores()
-    if rawget(_G, 'ed_field_free_all') then pcall(ed_field_free_all) end
+    if rawget(_G, 'ed_field_free_all') then Safe.Try('control:ed_field_free_all', ed_field_free_all) end
 end
 
 --- What the user had open besides the map, so that a session restart (open another map, apply mods, Test in the unit lab) does not throw them back to the Terrain
@@ -50,13 +51,13 @@ end
 function Teardown()
     for _, name in { 'markervis', 'placer' } do
         local mod = __modules and __modules['/lua/editor/' .. name .. '.lua']      -- only a module that is loaded: nothing is imported here
-        if mod and mod.Shutdown then pcall(mod.Shutdown) end
+        if mod and mod.Shutdown then Safe.Try('control:fn53', mod.Shutdown) end
     end
     ClearOverlays()
 end
 
 function LoadMap(name)
-    pcall(SaveSessionUI)
+    Safe.Try('control:SaveSessionUI', SaveSessionUI)
     Teardown()
     FreeNativeStores()
     ed_write_file(NextMapFile, name)

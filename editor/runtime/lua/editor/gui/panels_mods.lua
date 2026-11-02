@@ -13,7 +13,7 @@ local Commands = import('/lua/editor/gui/commands.lua')
 -- at the next launch.
 Commands.Register{ id = 'mods.enable_editor', title = 'Mods: enable the editor mods that were turned off', run = function()
     Mods.ReenableEditorMods()
-    pcall(function() import('/lua/editor/ui.lua').Say('Editor mods enabled again: restart the editor to load them') end)
+    pcall(function() import('/lua/editor/ui.lua').Say('Editor mods enabled again: restart the editor to load them') end)       -- best effort: a status line message
 end }
 
 live = {}
@@ -21,7 +21,7 @@ NoAutoRefresh = true       -- refreshed by its own events, not by the shell tick
 
 function Refresh()
     for _, inst in live do
-        if inst.Refresh then pcall(inst.Refresh, inst) end
+        if inst.Refresh then import('/lua/editor/safe.lua').Try('panel:mods.refresh', inst.Refresh, inst) end
     end
 end
 

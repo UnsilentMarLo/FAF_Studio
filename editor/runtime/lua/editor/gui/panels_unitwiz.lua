@@ -21,6 +21,7 @@ local Bp = import('/lua/editor/bpedit.lua')
 local Wiz = import('/lua/editor/unitwiz.lua')
 local Check = import('/lua/editor/unitcheck.lua')
 local Test = import('/lua/editor/unittest.lua')
+local Safe = import('/lua/editor/safe.lua')
 
 live = {}
 
@@ -31,7 +32,7 @@ local mounted = false
 local resumeTicks = 0
 
 local function Say(text)
-    pcall(function() import('/lua/editor/ui.lua').Say(text) end)
+    Safe.Try('unitwiz.say', function() import('/lua/editor/ui.lua').Say(text) end)
 end
 
 local function Pick(title, options, current, done)
@@ -108,12 +109,12 @@ Panels.Register{
         local function Keep(c) table.insert(P.controls, c) return c end
 
         local function Clear()
-            for _, c in P.controls do pcall(function() c:Destroy() end) end
+            for _, c in P.controls do pcall(function() c:Destroy() end) end       -- best effort: a control that is gone already
             P.controls = {}
             for _, s in P.sliders do
-                for _, k in { 'label', 'track', 'fill', 'thumb', 'minus', 'plus' } do pcall(function() s[k]:Destroy() end) end
-                pcall(function() s.field.frame:Destroy() end)
-                pcall(function() s.field:Destroy() end)
+                for _, k in { 'label', 'track', 'fill', 'thumb', 'minus', 'plus' } do pcall(function() s[k]:Destroy() end) end       -- best effort
+                pcall(function() s.field.frame:Destroy() end)       -- best effort
+                pcall(function() s.field:Destroy() end)       -- best effort
             end
             P.sliders = {}
             P.thumb = false
@@ -510,7 +511,7 @@ Panels.Register{
             if fixable > 0 then
                 Buttons({ { 'Fix ' .. fixable .. ' (*)', 90, function()
                     for _, p in Check.Check(id, spec, Bp.Edits[id]) do
-                        if p.fix then pcall(p.fix) end
+                        if p.fix then Safe.Try('unitwiz.fix', p.fix) end
                     end
                     P:Rebuild()
                 end } })
@@ -680,14 +681,14 @@ Panels.Register{
             if P.tab == 'Test' and P.statusLabel then
                 local s = Test.Status()
                 if s then
-                    pcall(function()
+                    Safe.Try('unitwiz.teststatus', function()
                         P.statusLabel:SetText(string.format('%s  health %d / %d   orders %d   pos %.0f, %.0f', s.alive and 'alive' or 'dead', s.health or 0, s.max or 0, s.orders or 0, s.x or 0, s.z or 0))
                         local parts = {}
                         for i, t in s.targets do table.insert(parts, string.format('%d/%d', t.health, t.max)) end
                         P.statusLabel2:SetText(string.format('targets %s   damage dealt %d   built %d%s', table.concat(parts, ' '), s.damage or 0, s.built or 0, s.error and ('   ' .. s.error) or ''))
                     end)
                 else
-                    pcall(function() P.statusLabel:SetText(Test.Active and 'waiting for the test ...' or 'no test running') P.statusLabel2:SetText('') end)
+                    Safe.Try('unitwiz.teststatus', function() P.statusLabel:SetText(Test.Active and 'waiting for the test ...' or 'no test running') P.statusLabel2:SetText('') end)
                 end
             end
         end
@@ -712,11 +713,11 @@ Panels.Register{
 function Refresh()
     resumeTicks = resumeTicks + 1
     if resumeTicks == 12 then
-        pcall(Test.Resume)
+        Safe.Try('unitwiz.testresume', Test.Resume)
     end
     local P = live.unitwiz
     if P then
-        if P.tab == 'Test' then pcall(function()
+        if P.tab == 'Test' then Safe.Try('unitwiz.testrefresh', function()
             if resumeTicks > 12 and math.mod(resumeTicks, 4) == 0 then Test.Refresh() end
             P:Refresh()
         end) end

@@ -152,7 +152,7 @@ end
 
 local function Say(text)
     Message = text
-    pcall(function() import('/lua/editor/ui.lua').State.message = text end)
+    pcall(function() import('/lua/editor/ui.lua').State.message = text end)       -- best effort: a status line message
 end
 
 local function Lerp(a, b, t) return a + (b - a) * t end
@@ -1565,7 +1565,7 @@ function FreeResults()
     end
     Created = {}
     Results = {}
-    for _, release in Released do pcall(release) end
+    for _, release in Released do import('/lua/editor/safe.lua').Try('paths.release', release) end
     Released = {}
 end
 

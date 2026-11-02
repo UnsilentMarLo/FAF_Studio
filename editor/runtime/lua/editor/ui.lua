@@ -26,6 +26,7 @@ local Decals = import('/lua/editor/decals.lua')
 local ObjectTools = import('/lua/editor/tools.lua')
 local Overlay = import('/lua/editor/overlay.lua')
 local Perf = import('/lua/editor/perf.lua')
+local Safe = import('/lua/editor/safe.lua')
 
 local COLOR_PANEL = 'e0101820'
 local COLOR_BTN = 'ff2a3a4a'
@@ -167,7 +168,7 @@ end
 function Say(text)
     State.message = text
     -- the Console panel lists the status line messages too (consolelog.lua; a repeat of the newest line only raises its count)
-    if text ~= nil and text ~= '' then pcall(function() import('/lua/editor/consolelog.lua').Add('status', text, 'status') end) end
+    if text ~= nil and text ~= '' then Safe.Try('ui:fn170', function() import('/lua/editor/consolelog.lua').Add('status', text, 'status') end) end
 end
 
 local function FindTool(id)
@@ -711,9 +712,9 @@ end
 
 --- The unit life / fuel bars and the selection box are game HUD (gamemain.lua switches them on at the start of a game): off while editing (placed units, the unit viewer's unit), on in a test run.
 local function UnitBars(on)
-    pcall(ConExecute, 'UI_RenderUnitBars ' .. (on and 'true' or 'false'))
-    pcall(ConExecute, 'ren_SelectBoxes ' .. (on and 'true' or 'false'))       -- the game's selection / hover box of a unit (the editor draws its own selection)
-    pcall(ConExecute, 'ren_Ranges ' .. (on and 'true' or 'false'))            -- the game's range rings of a unit (the editor draws its own: unitrings.lua)
+    Safe.Try('ui:ConExecute', ConExecute, 'UI_RenderUnitBars ' .. (on and 'true' or 'false'))
+    Safe.Try('ui:ConExecute', ConExecute, 'ren_SelectBoxes ' .. (on and 'true' or 'false'))       -- the game's selection / hover box of a unit (the editor draws its own selection)
+    Safe.Try('ui:ConExecute', ConExecute, 'ren_Ranges ' .. (on and 'true' or 'false'))            -- the game's range rings of a unit (the editor draws its own: unitrings.lua)
 end
 
 local dots = {}      -- pool of { dot = Bitmap, text = Text }
@@ -752,7 +753,7 @@ function SetMode(mode)
     end
     State.mode = mode
     -- (a test run also gets the rock and splat of every resource marker: the editing sim leaves them out, markervis.lua)
-    pcall(function() SimCallback({ Func = 'EdSetPlay', Args = { on = (mode == 'play'), deposits = (mode == 'play') and import('/lua/editor/markervis.lua').DepositList() or nil } }, false) end)       -- mission scripts start their first stage on Play
+    Safe.Try('ui:fn755', function() SimCallback({ Func = 'EdSetPlay', Args = { on = (mode == 'play'), deposits = (mode == 'play') and import('/lua/editor/markervis.lua').DepositList() or nil } }, false) end)       -- mission scripts start their first stage on Play
     if mode == 'play' then
         GameUIHidden(false)
         UnitBars(true)
@@ -763,10 +764,10 @@ function SetMode(mode)
             for i = 1, 25 do
                 WaitSeconds(0.2)
                 if State.mode ~= 'play' then return end
-                pcall(UISelectionByCategory, 'COMMAND', false, false, false, false)
+                Safe.Try('ui:UISelectionByCategory', UISelectionByCategory, 'COMMAND', false, false, false, false)
                 local sel = GetSelectedUnits()
                 if sel and table.getn(sel) > 0 then
-                    pcall(UIZoomTo, sel, 0.4)
+                    Safe.Try('ui:UIZoomTo', UIZoomTo, sel, 0.4)
                     return
                 end
             end
@@ -781,7 +782,7 @@ function SetMode(mode)
         Say('editing')
     end
     if OnModeChange then
-        pcall(OnModeChange, mode)
+        Safe.Try('ui:OnModeChange', OnModeChange, mode)
     end
 end
 
@@ -799,7 +800,7 @@ function Play(stage)
     if State.mode == 'play' then
         return
     end
-    pcall(function() import('/lua/editor/unitview.lua').Close() end)        -- nothing the unit viewer made belongs in a test run
+    Safe.Try('ui:fn802', function() import('/lua/editor/unitview.lua').Close() end)        -- nothing the unit viewer made belongs in a test run
     local scenario, why = Map.SaveAs('../mapout/_playtest.v0001', '_playtest')
     if not scenario then
         Say('play: autosave failed: ' .. tostring(why))
@@ -815,7 +816,7 @@ function Play(stage)
         return
     end
     if stage and stage > 1 then
-        pcall(function() SimCallback({ Func = 'EdMissionStartAt', Args = { stage = stage } }, false) end)
+        Safe.Try('ui:fn818', function() SimCallback({ Func = 'EdMissionStartAt', Args = { stage = stage } }, false) end)
     end
     SetMode('play')
 end

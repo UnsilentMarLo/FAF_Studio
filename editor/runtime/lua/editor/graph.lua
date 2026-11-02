@@ -606,7 +606,7 @@ local mounted = false
 function Files()
     local names = {}
     if not mounted and rawget(_G, 'ed_vfs_mount') then
-        pcall(ed_vfs_mount, 'graphs', '/usergraphs')
+        import('/lua/editor/safe.lua').Try('graph.mount', ed_vfs_mount, 'graphs', '/usergraphs')
         mounted = true
     end
     local files = DiskFindFiles('/usergraphs', '*.lua') or {}
@@ -667,7 +667,7 @@ function SidecarText()
 end
 
 function LoadSidecar(scenarioFile)
-    pcall(function() import('/lua/editor/graphrun.lua').Forget() end)
+    import('/lua/editor/safe.lua').Try('graph.forget', function() import('/lua/editor/graphrun.lua').Forget() end)
     New('untitled')
     local env = import('/lua/editor/mods.lua').SidecarEnv(scenarioFile)           -- protected, shared read (mods.lua)
     if env and type(env.Graph) == 'table' then
@@ -681,7 +681,7 @@ function LoadSidecar(scenarioFile)
 end
 
 function Reset()
-    pcall(function() import('/lua/editor/graphrun.lua').Forget() end)
+    import('/lua/editor/safe.lua').Try('graph.forget', function() import('/lua/editor/graphrun.lua').Forget() end)
     New('untitled')
 end
 

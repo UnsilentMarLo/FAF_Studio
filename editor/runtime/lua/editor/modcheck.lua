@@ -11,6 +11,7 @@
 
 local Bp = import('/lua/editor/bpedit.lua')
 local Fx = import('/lua/editor/fxedit.lua')
+local Safe = import('/lua/editor/safe.lua')
 
 Issues = {}
 Revision = 0
@@ -66,7 +67,7 @@ function Run()
                 local env = {}
                 local fn = loadstring(info)
                 setfenv(fn, env)
-                pcall(fn)
+                Safe.Try('modcheck:fn', fn)
                 if not env.name or env.name == '' then Add(list, 'E', 'mod_info.lua has no name') end
                 if not env.uid or string.len(tostring(env.uid)) ~= 36 then Add(list, 'E', 'mod_info.lua has no uid of the form XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX') end
                 if env.name and env.name ~= project then Add(list, 'W', 'the mod name (' .. tostring(env.name) .. ') differs from the project folder (' .. project .. ')') end

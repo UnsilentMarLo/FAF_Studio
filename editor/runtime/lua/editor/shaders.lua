@@ -334,7 +334,7 @@ function Set(id, quiet)
     ed_stratum_shader(id)
     NoteSwitch(old, id)
     if not quiet and ClassOf(id) == 'splat' then SplatLighting('fix') end
-    if not quiet then pcall(function() import('/lua/editor/alphagen.lua').FitBase() end) end          -- the base layer's alpha is an opacity in the macrotexture variants
+    if not quiet then import('/lua/editor/safe.lua').Try('shaders.fitbase', function() import('/lua/editor/alphagen.lua').FitBase() end) end          -- the base layer's alpha is an opacity in the macrotexture variants
     return true
 end
 
@@ -355,7 +355,7 @@ end
 function SetSpecColor(t)
     if not t or not rawget(_G, 'ed_world_set') then return end
     ed_world_set({ spec_r = t.spec_r, spec_g = t.spec_g, spec_b = t.spec_b, spec_a = t.spec_a }, false)
-    pcall(function() import('/lua/editor/world.lua').Invalidate() end)
+    import('/lua/editor/safe.lua').Try('shaders.invalidate', function() import('/lua/editor/world.lua').Invalidate() end)
 end
 
 local lightStash = false          -- the SpecularColor the map had before 'enter'
@@ -398,7 +398,7 @@ function SplatLighting(mode)
     end
     if same then return nil end
     ed_world_set(after, false)
-    pcall(function() import('/lua/editor/world.lua').Invalidate() end)
+    import('/lua/editor/safe.lua').Try('shaders.invalidate', function() import('/lua/editor/world.lua').Invalidate() end)
     return before, after
 end
 

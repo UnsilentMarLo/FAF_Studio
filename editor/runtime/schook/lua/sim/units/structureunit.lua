@@ -6,7 +6,7 @@
 -- the files that subclass it (TStructureUnit ...) import the module after this hook ran and get the class below.)
 do
     local baseStructureUnit = StructureUnit
-    pcall(function() import('/lua/editor/hookcheck.lua').Expect('structureunit', baseStructureUnit, { 'CreateTarmac', 'FlattenSkirt', 'FlattenSkirtHorizontally', 'RotateTowardsEnemy' }) end)
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('structureunit', baseStructureUnit, { 'CreateTarmac', 'FlattenSkirt', 'FlattenSkirtHorizontally', 'RotateTowardsEnemy' }) end)       -- best effort (the check only warns)
     StructureUnit = ClassUnit(baseStructureUnit) {
         CreateTarmac = function(self, createAlbedoTarmac, createNormalTarmac, createGlowTarmac, orientation, tarmac, lifeTime)
             if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.EditorPlaying then

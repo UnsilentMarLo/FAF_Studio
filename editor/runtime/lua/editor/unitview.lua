@@ -18,6 +18,7 @@
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
+local Safe = import('/lua/editor/safe.lua')
 Stage = 'viewer'
 Id = false
 EntityId = false
@@ -152,7 +153,7 @@ end
 local function StageSpot()
     local w = ed_terrain_info() or 257
     local objects = {}
-    pcall(function()
+    Safe.Try('unitview:fn155', function()
         local Map = import('/lua/editor/map.lua')
         if Map.Doc then
             for _, m in Map.Doc.save.MasterChain._MASTERCHAIN_.Markers or {} do
@@ -261,7 +262,7 @@ function Close()
     StageOff()
     if origCamera then
         local cam = GetCamera('WorldCamera')
-        pcall(function() cam:RestoreSettings(origCamera) end)
+        Safe.Try('unitview:fn264', function() cam:RestoreSettings(origCamera) end)
         origCamera = false
     end
 end
@@ -532,7 +533,7 @@ function Spawn(id, keepCamera)
             local again = ReadInfo()
             if again and again.ext then Info = again end
         end
-        pcall(DrawBones)
+        Safe.Try('unitview:DrawBones', DrawBones)
         Refresh()
         if not keepCamera then Frame('iso') end
     end)
@@ -823,7 +824,7 @@ function SetColor(name)
                 SimCallback({ Func = 'EdArmyColor', Args = { army = 'ARMY_1', r = c.rgb[1], g = c.rgb[2], b = c.rgb[3] } }, false)
             else
                 local index = 1
-                pcall(function()
+                Safe.Try('unitview:fn826', function()
                     local a = import('/lua/editor/armysetup.lua').Get('ARMY_1')
                     if a and a.color then index = a.color end
                 end)
