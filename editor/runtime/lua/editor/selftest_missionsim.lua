@@ -41,6 +41,8 @@ local function Units(bp, n, x, z)
     return list
 end
 
+Reset = false       -- set by Prepare: the initial units of the armies are replaced, not added to
+
 --- The armies, groups, markers, chains and areas the cases use. Safe to call again (it only adds what is missing).
 function World()
     if not Map.Doc then Map.Load() end
@@ -49,45 +51,75 @@ function World()
     end
     local save = Map.Doc.save
     local enemy = save.Armies.Enemy.Units.Units
-    enemy.INITIAL.Units = { UNIT_9 = Unit('uel0106', 200, 200) }       -- (exactly these: leftovers of other tests in the open map would change the unit counts)
-    enemy.WAVE1 = Group(Units('uel0106', 3, 150, 150))
-    for d = 1, 3 do enemy['WAVE1_D' .. d] = Group(Units('uel0106', 1, 150, 150)) end
-    enemy.WAVE2 = Group(Units('uel0106', 2, 160, 140))
-    enemy.NUKE = Group({ UNIT_1 = Unit('uab2305', 215, 215) })
-    enemy.TDROP = Group({ UNIT_1 = Unit('uea0107', 190, 190), UNIT_2 = Unit('uel0106', 192, 190), UNIT_3 = Unit('uel0106', 194, 190) })
-    enemy.DEF1 = Group({ UNIT_1 = Unit('ueb1101', 205, 150) })
-    save.Armies.ARMY_1.Units.Units.INITIAL.Units = { UNIT_A1 = Unit('uel0106', 80, 80) }
-    save.Armies.Player1.Units.Units.INITIAL.Units = { Commander = Unit('uel0001', 30, 30) }
+    -- a real run starts from exactly these initial units (leftovers of other tests in the open map would change the unit counts); a selftest only adds its own
+    if Reset then enemy.INITIAL.Units = {} end
+    -- (a unit of a spawned group: its name is registered in ScenarioInfo.UnitNames by the spawn. The initial units of an EDITOR session are created by the editor itself
+    -- (EdSpawnUnit, no name), so a "unit is killed" trigger on one of those finds nothing in a test run)
+    enemy.SIM_ONE = Group({ SIM_U9 = Unit('uel0106', 200, 200) })
+    enemy.SIM_WAVE1 = Group(Units('uel0106', 3, 150, 150))
+    for d = 1, 3 do enemy['SIM_WAVE1_D' .. d] = Group(Units('uel0106', 1, 150, 150)) end
+    enemy.SIM_WAVE2 = Group(Units('uel0106', 2, 160, 140))
+    enemy.SIM_NUKE = Group({ UNIT_1 = Unit('uab2305', 215, 215) })
+    enemy.SIM_TDROP = Group({ UNIT_1 = Unit('uea0107', 190, 190), UNIT_2 = Unit('uel0106', 192, 190), UNIT_3 = Unit('uel0106', 194, 190) })
+    enemy.SIM_DEF1 = Group({ UNIT_1 = Unit('ueb1101', 205, 150) })
+    if Reset then
+        save.Armies.ARMY_1.Units.Units.INITIAL.Units = {}
+        save.Armies.Player1.Units.Units.INITIAL.Units = {}
+    end
+    save.Armies.ARMY_1.Units.Units.INITIAL.Units.UNIT_A1 = Unit('uel0106', 80, 80)
+    save.Armies.Player1.Units.Units.INITIAL.Units.Commander = Unit('uel0001', 30, 30)
 
     local markers = save.MasterChain._MASTERCHAIN_.Markers
     local function Marker(name, kind, x, z)
         if not markers[name] then Tools.PlaceMarker(x, z, kind, name) end
     end
-    Marker('PATROL_1', 'Blank Marker', 150, 150)
-    Marker('PATROL_2', 'Blank Marker', 175, 175)
-    Marker('LAND_1', 'Blank Marker', 120, 200)
-    Marker('NUKE_TGT', 'Blank Marker', 235, 235)
-    Marker('VIEW_1', 'Blank Marker', 100, 220)
-    Marker('CAM_1', 'Camera Info', 100, 100)
-    Marker('BASE_1', 'Blank Marker', 205, 150)
+    Marker('SIM_PATROL_1', 'Blank Marker', 150, 150)
+    Marker('SIM_PATROL_2', 'Blank Marker', 175, 175)
+    Marker('SIM_LAND_1', 'Blank Marker', 120, 200)
+    Marker('SIM_NUKE_TGT', 'Blank Marker', 235, 235)
+    Marker('SIM_VIEW_1', 'Blank Marker', 100, 220)
+    Marker('SIM_CAM_1', 'Camera Info', 100, 100)
+    Marker('SIM_BASE_1', 'Blank Marker', 205, 150)
     save.Chains = save.Chains or {}
-    save.Chains.PATROL = { Markers = { 'PATROL_1', 'PATROL_2' } }
-    save.Chains.LANDING = { Markers = { 'LAND_1' } }
+    save.Chains.SIM_PATROL = { Markers = { 'SIM_PATROL_1', 'SIM_PATROL_2' } }
+    save.Chains.SIM_LANDING = { Markers = { 'SIM_LAND_1' } }
     save.Areas = save.Areas or {}
-    save.Areas.TRG_AREA = { rectangle = { 60, 60, 110, 110, type = 'RECTANGLE' } }
-    save.Areas.PLAY_AREA = { rectangle = { 10, 10, 245, 245, type = 'RECTANGLE' } }
-    save.Areas.CAM_AREA = { rectangle = { 90, 90, 130, 130, type = 'RECTANGLE' } }
+    save.Areas.SIM_AREA = { rectangle = { 60, 60, 110, 110, type = 'RECTANGLE' } }
+    save.Areas.SIM_PLAY = { rectangle = { 10, 10, 245, 245, type = 'RECTANGLE' } }
+    save.Areas.SIM_CAMAREA = { rectangle = { 90, 90, 130, 130, type = 'RECTANGLE' } }
 
+    -- platoon template, order queue and builder, written straight into the save (no undo entries: a test must not leave anything for the undo tests of other modules)
     local PL = import('/lua/editor/platoons.lua')
-    if not save.Platoons or not save.Platoons.TPL1 then
-        PL.NewPlatoon('TPL1', '')
-        PL.AddRow('TPL1', { 'uel0106', 0, 2 })
+    save.Platoons = save.Platoons or {}
+    save.Platoons.SIM_TPL = { 'SIM_TPL', '', { 'uel0106', 0, 2, 'Attack', 'None' } }
+    save.Orders = save.Orders or {}
+    save.Orders.SIM_ORD = { { type = 'Patrol', chain = 'SIM_PATROL', target = '' } }
+    local builders = save.Armies.Enemy.PlatoonBuilders
+    if not builders then builders = { next_platoon_builder_id = '0', Builders = {} } save.Armies.Enemy.PlatoonBuilders = builders end
+    builders.Builders = builders.Builders or {}
+    builders.Builders.SIM_BLD = PL.DefaultBuilderData('SIM_TPL')
+end
+
+--- Takes everything World() added out of the open map again (the selftests of other modules count platoons, groups ...).
+function Clear()
+    local save = Map.Doc and Map.Doc.save
+    if not save then return end
+    local function Sim(name) return type(name) == 'string' and string.sub(name, 1, 4) == 'SIM_' end
+    for _, army in save.Armies or {} do
+        local top = army.Units and army.Units.Units
+        for name, _ in top or {} do if Sim(name) then top[name] = nil end end
+        local initial = top and top.INITIAL and top.INITIAL.Units
+        if initial then initial.UNIT_A1 = nil initial.Commander = nil end
+        if army.PlatoonBuilders and army.PlatoonBuilders.Builders then army.PlatoonBuilders.Builders.SIM_BLD = nil end
     end
-    if not save.Orders or not save.Orders.ORD1 then
-        PL.NewOrders('ORD1')
-        PL.AddOrder('ORD1', { type = 'Patrol', chain = 'PATROL' })
+    local markers = save.MasterChain._MASTERCHAIN_.Markers
+    for _, tbl in { save.Platoons, save.Orders, save.Chains, save.Areas, markers } do
+        for name, _ in tbl or {} do if Sim(name) then tbl[name] = nil end end
     end
-    if not PL.Builders('Enemy') or not PL.Builders('Enemy').BLD1 then PL.NewBuilder('Enemy', 'BLD1', 'TPL1') end
+    markers.Alpha_Marker = nil
+    Tools.Prune()
+    -- the cases push hundreds of undo entries (every node is an edit): the history is capped, and tests of other modules count its depth
+    import('/lua/editor/history.lua').Clear()
 end
 
 -- ---- building a case -------------------------------------------------------------------------------------------------------------------------------
@@ -136,22 +168,22 @@ local function Actions()
     local s = Stage('Actions')
     Node(s, 'ready', 'set_alliance', { army = 'Enemy', other = 'ARMY_1', state = 'Ally' })
     Node(s, 'ready', 'set_alliance', { army = 'ARMY_1', other = 'Enemy', state = 'Ally' })
-    Node(s, 'ready', 'spawn', { army = 'Enemy', group = 'WAVE1', var = 'w1' })
-    Node(s, 'ready', 'spawn', { army = 'Enemy', group = 'WAVE1', bydiff = true, var = 'w2' })
-    Node(s, 'ready', 'spawn', { army = 'Enemy', group = 'NUKE', var = 'nk' })
-    Node(s, 'ready', 'platoon_patrol', { army = 'Enemy', group = 'WAVE2', chain = 'PATROL', var = 'p1' })
-    Node(s, 'ready', 'group_patrol', { var = 'w1', chain = 'PATROL' })
+    Node(s, 'ready', 'spawn', { army = 'Enemy', group = 'SIM_WAVE1', var = 'w1' })
+    Node(s, 'ready', 'spawn', { army = 'Enemy', group = 'SIM_WAVE1', bydiff = true, var = 'w2' })
+    Node(s, 'ready', 'spawn', { army = 'Enemy', group = 'SIM_NUKE', var = 'nk' })
+    Node(s, 'ready', 'platoon_patrol', { army = 'Enemy', group = 'SIM_WAVE2', chain = 'SIM_PATROL', var = 'p1' })
+    Node(s, 'ready', 'group_patrol', { var = 'w1', chain = 'SIM_PATROL' })
     Node(s, 'ready', 'dialogue', { text = 'Mission text node', seconds = 1 })
     Node(s, 'ready', 'dialogue_table', { name = 'INTRO' })
     Node(s, 'ready', 'restrict', { mode = 'restrict', army = 'ARMY_1', categories = 'categories.TECH3' })
     Node(s, 'ready', 'restrict', { mode = 'allow', army = 'ARMY_1', categories = 'categories.TECH3' })
     Node(s, 'ready', 'resources', { army = 'ARMY_1', mass = 500, energy = 800 })
-    Node(s, 'ready', 'playable', { area = 'PLAY_AREA' })
-    Node(s, 'ready', 'vision', { marker = 'VIEW_1', radius = 20, seconds = 3, army = 'ARMY_1' })
+    Node(s, 'ready', 'playable', { area = 'SIM_PLAY' })
+    Node(s, 'ready', 'vision', { marker = 'SIM_VIEW_1', radius = 20, seconds = 3, army = 'ARMY_1' })
     Node(s, 'ready', 'set_flag', { flag = 'GOFLAG', value = true })
     Node(s, 'ready', 'set_flag', { flag = 'OFFFLAG', value = false })
     Node(s, 'ready', 'taunt', { head = 1, taunt = 1 })
-    Node(s, 'ready', 'nuke_barrage', { var = 'nk', marker = 'NUKE_TGT', count = 1, spread = 5, fill = true })
+    Node(s, 'ready', 'nuke_barrage', { var = 'nk', marker = 'SIM_NUKE_TGT', count = 1, spread = 5, fill = true })
     Node(s, 'ready', 'kill_group', { var = 'w2' })
     Node(s, 'ready', 'give_group', { var = 'w1', army = 'ARMY_1' })
     Node(s, 'ready', 'raw', { code = 'V.rawran = true' })
@@ -162,7 +194,7 @@ local function Actions()
     B.ended = true B.success = true
     B.rel = { ['2>1'] = 'ally', ['1>2'] = 'ally' }
     B.eco = { ARMY_1 = { mass = 300, energy = 500 } }
-    B.units = { ARMY_1 = { min = 4 }, Enemy = { min = 3 } }       -- UNIT_A1 + the group given away; UNIT_9, the launcher, the platoon (the killed group is gone)
+    B.units = { ARMY_1 = { min = 4 }, Enemy = { min = 3 } }       -- UNIT_A1 + the group given away; SIM_U9, the launcher, the platoon (the killed group is gone)
     B.playable = true
     B.stage = 1
     return B
@@ -171,7 +203,7 @@ end
 local function Flow()
     Fresh('campaign')
     local s1 = Stage('Flow one')
-    Node(s1, 'ready', 'spawn', { army = 'Enemy', group = 'WAVE1', var = 'w1' })
+    Node(s1, 'ready', 'spawn', { army = 'Enemy', group = 'SIM_WAVE1', var = 'w1' })
     Node(s1, 'ready', 'wait', { seconds = 1 })
     local t, taddr = Node(s1, 'ready', 'trg_timer', { seconds = 2 })
     Body(taddr)
@@ -182,7 +214,7 @@ local function Flow()
     local p = Node(s1, 'ready', 'if_players', { compare = '>=', count = 1 })
     Node(s1, 'ready', 'set_flag', { flag = 'IFPLAYERS', value = true }, p)
     Node(s1, 'ready', 'if_difficulty', { compare = '>', level = 3 })       -- never true: its body must NOT run
-    Node(s1, 'ready', 'wait_area', { area = 'TRG_AREA', army = 'ARMY_1', category = 'categories.ALLUNITS', compare = '>=', value = 1 })
+    Node(s1, 'ready', 'wait_area', { area = 'SIM_AREA', army = 'ARMY_1', category = 'categories.ALLUNITS', compare = '>=', value = 1 })
     Node(s1, 'ready', 'next_stage', {})
     local s2 = Stage('Flow two', 2)
     Node(s2, 'ready', 'dialogue', { text = 'stage two', seconds = 0 })
@@ -200,7 +232,8 @@ end
 local function Triggers()
     Fresh('campaign')
     local s1 = Stage('Triggers one', 7)
-    Node(s1, 'ready', 'spawn', { army = 'Enemy', group = 'WAVE1', var = 'w1' })
+    Node(s1, 'ready', 'spawn', { army = 'Enemy', group = 'SIM_WAVE1', var = 'w1' })
+    Node(s1, 'ready', 'spawn', { army = 'Enemy', group = 'SIM_ONE', var = 'one' })
     local t1, a1 = Node(s1, 'ready', 'trg_timer', { seconds = 2 })
     Body(a1)
     Node(s1, 'ready', 'dialogue', { text = 'timer fired', seconds = 0 }, t1)
@@ -211,18 +244,18 @@ local function Triggers()
     local g2, ga2 = Node(s1, 'ready', 'trg_group_dead', { var = 'w1', count = 2 })
     Body(ga2)
     Node(s1, 'ready', 'set_flag', { flag = 'GD2', value = true }, g2)
-    local u, ua = Node(s1, 'ready', 'trg_unit_killed', { army = 'Enemy', unit = 'UNIT_9' })
+    local u, ua = Node(s1, 'ready', 'trg_unit_killed', { army = 'Enemy', unit = 'SIM_U9' })
     Body(ua)
     Node(s1, 'ready', 'set_flag', { flag = 'UK', value = true }, u)
-    local ar, aa = Node(s1, 'ready', 'trg_area', { area = 'TRG_AREA', army = 'ARMY_1', category = 'categories.ALLUNITS', compare = '>=', value = 1, once = true })
+    local ar, aa = Node(s1, 'ready', 'trg_area', { area = 'SIM_AREA', army = 'ARMY_1', category = 'categories.ALLUNITS', compare = '>=', value = 1, once = true })
     Body(aa)
     Node(s1, 'ready', 'set_flag', { flag = 'TA', value = true }, ar)
-    local ar2, aa2 = Node(s1, 'ready', 'trg_area', { area = 'TRG_AREA', army = 'ARMY_1', category = 'categories.ALLUNITS', compare = '>=', value = 1, once = false })
+    local ar2, aa2 = Node(s1, 'ready', 'trg_area', { area = 'SIM_AREA', army = 'ARMY_1', category = 'categories.ALLUNITS', compare = '>=', value = 1, once = false })
     Body(aa2)
     Node(s1, 'ready', 'set_flag', { flag = 'TA2', value = true }, ar2)
     local k1, ka = Node(s1, 'ready', 'trg_timer', { seconds = 3 })
     Body(ka)
-    Node(s1, 'ready', 'raw', { code = "ScenarioInfo.UnitNames[GetArmyBrain('Enemy'):GetArmyIndex()]['UNIT_9']:Kill()" }, k1)
+    Node(s1, 'ready', 'raw', { code = "ScenarioInfo.UnitNames[GetArmyBrain('Enemy'):GetArmyIndex()]['SIM_U9']:Kill()" }, k1)
     local k2, kb = Node(s1, 'ready', 'trg_timer', { seconds = 4 })
     Body(kb)
     Node(s1, 'ready', 'kill_group', { var = 'w1' }, k2)
@@ -248,7 +281,7 @@ end
 local function Objectives()
     Fresh('campaign')
     local s1 = Stage('Objectives one')
-    Node(s1, 'ready', 'spawn', { army = 'Enemy', group = 'WAVE1', var = 'w1' })
+    Node(s1, 'ready', 'spawn', { army = 'Enemy', group = 'SIM_WAVE1', var = 'w1' })
     Node(s1, 'ready', 'obj_kill', { var = 'w1', name = 'k1', title = 'Kill the wave', description = 'Destroy it.' })
     local r, ra = Node(s1, 'ready', 'trg_objective', { objective = 'k1', result = 'complete' })
     Body(ra)
@@ -257,10 +290,10 @@ local function Objectives()
     Body(ka)
     Node(s1, 'ready', 'kill_group', { var = 'w1' }, k)
     local s2 = Stage('Objectives two')
-    Node(s2, 'ready', 'spawn', { army = 'Enemy', group = 'WAVE2', var = 'w2' })
+    Node(s2, 'ready', 'spawn', { army = 'Enemy', group = 'SIM_WAVE2', var = 'w2' })
     Node(s2, 'ready', 'obj_protect', { var = 'w2', name = 'p1', title = 'Protect the pair', description = 'Keep them alive.' })
     Node(s2, 'ready', 'obj_timer', { seconds = 3, expire = 'complete', name = 't1', title = 'Hold out', description = 'Survive.' })
-    Node(s2, 'ready', 'obj_area', { area = 'TRG_AREA', army = 'ARMY_1', icon = 'move', compare = '>=', value = 1, name = 'a1', title = 'Reach the area', description = 'Be there.' })
+    Node(s2, 'ready', 'obj_area', { area = 'SIM_AREA', army = 'ARMY_1', icon = 'move', compare = '>=', value = 1, name = 'a1', title = 'Reach the area', description = 'Be there.' })
     local pt, pa = Node(s2, 'ready', 'trg_timer', { seconds = 4 })
     Body(pa)
     Node(s2, 'ready', 'raw', { code = 'if V.p1 and V.p1.Active then V.p1:ManualResult(true) end' }, pt)
@@ -277,10 +310,10 @@ local function Platoons()
     Fresh('campaign')
     local s = Stage('Platoons')
     Node(s, 'ready', 'set_alliance', { army = 'Enemy', other = 'ARMY_1', state = 'Ally' })
-    Node(s, 'ready', 'platoon_group', { army = 'Enemy', group = 'WAVE1', platoon = 'TPL1', formation = 'GrowthFormation', orders = 'ORD1', var = 'pl' })
-    Node(s, 'ready', 'orders_apply', { var = 'pl', orders = 'ORD1', clear = true })
-    Node(s, 'ready', 'transport_drop', { army = 'Enemy', group = 'TDROP', landing = 'LANDING', attack = 'PATROL', instant = true, formation = 'GrowthFormation' })
-    Node(s, 'ready', 'pbm_remove', { army = 'Enemy', builder = 'BLD1' })
+    Node(s, 'ready', 'platoon_group', { army = 'Enemy', group = 'SIM_WAVE1', platoon = 'SIM_TPL', formation = 'GrowthFormation', orders = 'SIM_ORD', var = 'pl' })
+    Node(s, 'ready', 'orders_apply', { var = 'pl', orders = 'SIM_ORD', clear = true })
+    Node(s, 'ready', 'transport_drop', { army = 'Enemy', group = 'SIM_TDROP', landing = 'SIM_LANDING', attack = 'SIM_PATROL', instant = true, formation = 'GrowthFormation' })
+    Node(s, 'ready', 'pbm_remove', { army = 'Enemy', builder = 'SIM_BLD' })
     Node(s, 'ready', 'end', { result = 'win' })
     B.ended = true B.success = true
     B.stage = 1
@@ -292,8 +325,8 @@ local function Cutscene()
     Fresh('campaign')
     local s = Stage('Cutscene')
     local c = Node(s, 'ready', 'cutscene', {})
-    Node(s, 'ready', 'cam_area', { area = 'CAM_AREA', seconds = 1 }, c)
-    Node(s, 'ready', 'cam_marker', { marker = 'CAM_1', seconds = 1 }, c)
+    Node(s, 'ready', 'cam_area', { area = 'SIM_CAMAREA', seconds = 1 }, c)
+    Node(s, 'ready', 'cam_marker', { marker = 'SIM_CAM_1', seconds = 1 }, c)
     Node(s, 'ready', 'cam_reset', {}, c)
     Node(s, 'ready', 'end', { result = 'win' })
     B.ended = true B.success = true
@@ -321,7 +354,7 @@ local function Bases()
     local MB = import('/lua/editor/mbase.lua')
     if not Map.Doc.save.MasterChain._MASTERCHAIN_.Markers.Alpha_Marker then Tools.PlaceMarker(205, 150, 'Blank Marker', 'Alpha_Marker') end
     MB.AddBase('Alpha', 'Enemy')
-    MB.AddGroup(1, 'DEF1', 100)
+    MB.AddGroup(1, 'SIM_DEF1', 100)
     local s = Stage('Bases')
     Node(s, 'ready', 'base_start', { base = 'Alpha' })
     Node(s, 'ready', 'base_active', { base = 'Alpha', on = false })
@@ -344,7 +377,10 @@ end
 -- ---- running a case --------------------------------------------------------------------------------------------------------------------------------
 
 function Prepare(case)
-    Build(case)
+    Reset = true
+    local ok, err = pcall(Build, case)
+    Reset = false
+    if not ok then return 'fail the case does not build: ' .. tostring(err) end
     local findings = {}
     for _, p in M.Check() do
         if p.sev == 'E' then table.insert(findings, p.text) end
@@ -462,6 +498,7 @@ function Run()
     end
     Check(table.getn(unused) == 0, 'every node type of the catalogue is used by a case of the sim test (not used: ' .. table.concat(unused, ', ') .. ')')
     M.Data = saved
+    Clear()
     table.insert(out, failed == 0 and 'ALL PASS' or (failed .. ' FAILED'))
     return table.concat(out, '\n')
 end

@@ -384,7 +384,7 @@ function RunStrings()
     Check(string.find(testText, 'local function Wait(seconds)', 1, true) and string.find(testText, 'ScenarioInfo.EditorMission = ', 1, true) and string.find(testText, 'EdTrace(', 1, true), 'a test run script has the Wait shim, the editor state and the node trace')
     Check(loadstring(testText) ~= nil, 'and loads')
     -- the script of a saved or released map has none of the editor's test hooks
-    Check(string.find(text, 'local function Wait(seconds)', 1, true) and string.find(text, 'WaitSeconds(seconds)', 1, true) and not string.find(text, 'WaitTicks', 1, true), 'a saved map waits with WaitSeconds (no polling shim)')
+    Check(string.find(text, 'local function Wait(seconds)', 1, true) and string.find(text, 'WaitSeconds(seconds)', 1, true) and not string.find(text, 'left = left', 1, true), 'a saved map waits with WaitSeconds (no polling shim)')
     for _, hook in { 'EditorSkip', 'EditorTimeScale', 'EditorMission =', 'EdTrace', 'EditorStartStage', 'coopshim', 'editorsim' } do
         Check(not string.find(text, hook, 1, true), 'a saved map script has no ' .. hook)
     end

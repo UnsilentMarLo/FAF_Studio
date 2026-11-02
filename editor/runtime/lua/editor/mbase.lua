@@ -345,7 +345,7 @@ function Compile()
       local ok, err = pcall(function()
         local name = b.name
         if not M.ValidName(name) then error('the base name ' .. tostring(name) .. ' is not usable (letters, digits and _)') end
-        table.insert(out, '-- base ' .. name .. ' (army ' .. tostring(b.army) .. '): started by a Start a base node')
+        table.insert(out, '-- base ' .. name .. ' (army ' .. M.Comment(b.army) .. '): started by a Start a base node')
         table.insert(out, 'function Base.Start_' .. name .. '()')
         table.insert(out, '    if Base.Manager_' .. name .. ' then return end')
         table.insert(out, '    local brain = GetArmyBrain(' .. Q(b.army) .. ')')

@@ -26,7 +26,7 @@ end
 --- The lines that give platoon expression `target` the orders of queue `name`. An unknown queue gives a comment (the check reports it).
 function OrderLines(target, name)
     local queue = (Map.Doc and Map.Doc.save.Orders and Map.Doc.save.Orders[name]) or nil
-    if not queue then return { '-- (order queue ' .. tostring(name) .. ' does not exist)' } end
+    if not queue then return { '-- (order queue ' .. M.Comment(name) .. ' does not exist)' } end
     local out = {}
     for _, o in queue do
         local chain = (o.chain or '') ~= '' and o.chain or nil
@@ -44,7 +44,7 @@ function OrderLines(target, name)
             elseif marker then table.insert(out, target .. ':AggressiveMoveToLocation(' .. Pos(marker) .. ')') end
         end
     end
-    if table.getn(out) == 0 then table.insert(out, '-- (order queue ' .. tostring(name) .. ' is empty)') end
+    if table.getn(out) == 0 then table.insert(out, '-- (order queue ' .. M.Comment(name) .. ' is empty)') end
     return out
 end
 

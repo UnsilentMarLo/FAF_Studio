@@ -157,6 +157,13 @@ local function Lines(text)
     return list
 end
 
+--- Text for a comment line: one line, no control characters, not longer than 200 characters (a newline in a comment would start code).
+function Comment(text)
+    local s = string.gsub(tostring(text == nil and '' or text), '%c', ' ')
+    if string.len(s) > 200 then s = string.sub(s, 1, 200) .. '...' end
+    return s
+end
+
 -- shared with mbase.lua
 Quote = Q
 Num = N
@@ -442,7 +449,17 @@ Catalogue = {
       end },
     { id = 'raw', family = 'action', title = 'Raw Lua',
       params = { { key = 'code', label = 'Lua', kind = 'text' } },
-      emit = function(n) return Lines(n.code or '') end },
+      emit = function(n)
+          local code = n.code or ''
+          -- code that ends its block (a trailing `return`) cannot have more statements behind it in the stage: it is wrapped in do ... end, then it ends the stage's thread as written
+          if not loadstring('local function f()\n' .. code .. '\nlocal _ = 0\nend') and loadstring('local function f()\n' .. code .. '\nend') then
+              local lines = Lines(code)
+              table.insert(lines, 1, 'do')
+              table.insert(lines, 'end')
+              return lines
+          end
+          return Lines(code)
+      end },
     { id = 'end', family = 'flow', title = 'End the mission',
       params = { { key = 'result', label = 'Result', kind = 'choice', choices = { 'win', 'lose' }, default = 'win' } },
       emit = function(n)
@@ -780,8 +797,8 @@ local function StringsLines()
       if not d.imported then       -- (imported dialogues belong to the script's own strings file: never written)
         table.insert(out, '    [' .. Q(d.name) .. '] = {')
         for _, l in d.lines or {} do
-            local text = tostring(l.text or '')
-            if l.speaker and l.speaker ~= '' then text = l.speaker .. ': ' .. text end
+            local text = (type(l.text) == 'string') and l.text or tostring(l.text == nil and '' or l.text)
+            if type(l.speaker) == 'string' and l.speaker ~= '' then text = l.speaker .. ': ' .. text end
             -- optional voice-over / video of the line (ScenarioFramework.Dialogue: bank + cue play a sound, vid a movie of /movies, faction picks the portrait)
             local extra = ''
             for _, key in { 'bank', 'cue', 'vid', 'faction' } do
@@ -1731,11 +1748,18 @@ local function DataOnly(text)
     bare = string.gsub(bare, '%d+%.?%d*[eE][%+%-]?%d+', '0')
     bare = string.gsub(bare, '%d+%.?%d*', '0')
     local calls = 0
-    for id in string.gfind(bare, '[%a_][%w_]*') do
+    local pos = 1
+    while true do
+        local a, b = string.find(bare, '[%a_][%w_]*', pos)
+        if not a then break end
+        local id = string.sub(bare, a, b)
+        pos = b + 1
         if id == 'VECTOR3' or id == 'VECTOR2' or id == 'RECTANGLE' then
             calls = calls + 1
         elseif id ~= 'Mission' and id ~= 'true' and id ~= 'false' and id ~= 'nil' then
-            return false, 'it holds code (' .. id .. ')'
+            -- anything else must be a field name of a table constructor: followed by `=` (not `==`)
+            local rest = string.sub(bare, pos, pos + 8)
+            if not string.find(rest, '^%s*=') or string.find(rest, '^%s*==') then return false, 'it holds code (' .. id .. ')' end
         end
     end
     local opens = 0
@@ -1767,6 +1791,7 @@ local function ValidNodes(list, where, report, depth)
                 if t.container then
                     node.children = ValidNodes(node.children, where .. '.' .. i, report, depth + 1)
                 elseif node.children ~= nil then
+                    report(where .. ' item ' .. i .. ' (' .. node.type .. ') holds no children: they are dropped')
                     node.children = nil
                 end
             else
@@ -1860,7 +1885,7 @@ end
 --- Reads the mission of a sidecar file without running anything else of it: returns the model (or nil) and the list of problems.
 function ReadSidecar(path)
     local text = ed_read_file(path)
-    if not text then return nil, { 'the sidecar file cannot be read' } end
+    if not text or text == '' then return nil, {} end       -- (an empty file is a sidecar without a mission; a file that cannot be read gives the same, the other sections report their own)
     local chunk = MissionChunk(text)
     if not chunk then return nil, {} end
     local ok, why = DataOnly(chunk)
@@ -1882,9 +1907,18 @@ function LoadSidecar(scenarioFile)
     Data = { mode = 'campaign', stages = {}, bases = {}, dialogues = {} }
     LoadReport = false
     LoadedTest = scenarioFile ~= nil and string.find(string.lower(tostring(scenarioFile)), '_playtest', 1, true) ~= nil
-    local path = scenarioFile and import('/lua/editor/mods.lua').SidecarPath(scenarioFile)
+    local Mods = import('/lua/editor/mods.lua')
+    local path = scenarioFile and Mods.SidecarPath(scenarioFile)
     if path and DiskGetFileInfo(path) then
-        local m, report = ReadSidecar(path)
+        local m, report
+        local sharedRead = rawget(Mods, 'SidecarEnv')       -- (ed/robust: the one protected read of the sidecar; absent in older trees)
+        if sharedRead then
+            -- the shared protected read of the sidecar (mods.lua / safeload.lua: sandbox, size cap, per-section salvage, backup of a bad file, format version); the mission is still validated here
+            local env = sharedRead(scenarioFile)
+            if env and env.Mission ~= nil then m, report = ValidModel(env.Mission) end
+        else
+            m, report = ReadSidecar(path)
+        end
         if m and m.stages then Data = m end
         if report and table.getn(report) > 0 then
             LoadReport = report

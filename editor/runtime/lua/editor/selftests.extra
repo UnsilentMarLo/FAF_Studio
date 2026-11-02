@@ -52,3 +52,6 @@ selftest_detail
 selftest_erosionpaint
 selftest_oversample
 selftest_alphagen
+selftest_missionsim
+selftest_missiondry
+selftest_missionfuzz
