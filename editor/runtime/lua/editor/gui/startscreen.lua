@@ -29,8 +29,10 @@ end
 function Close()
     if current then
         local g = current.group
+        local content = current.content
         current = false
         g.OnFrame = function() end
+        if content then pcall(W.ScrollRelease, content) end
         g:Destroy()
     end
 end
@@ -102,23 +104,26 @@ function Open(opts)
     bg.HandleEvent = function(self, event) return true end        -- nothing falls through to the editor underneath
     local state = { group = g, cards = {}, tip = 1, seenW = fw, seenH = fh }
     current = state
+    -- the page scrolls when the window is too small for it (a big UI scale): everything below is placed in this content group
+    local content = W.ScrollContent(g, nil)
+    state.content = content
 
-    local M = Skin.S(40)
-    local lw = Skin.S(300)                       -- left column
-    local rx = M + lw + Skin.S(40)               -- right column
+    local M = math.min(Skin.S(40), math.floor(fw / 24))
+    local lw = math.min(Skin.S(300), math.floor(fw * 0.32))          -- left column
+    local rx = M + lw + math.min(Skin.S(40), M)                      -- right column
     local rw = fw - rx - M
 
     -- ---- left column --------------------------------------------------------------------------------------------------------------------
-    local title = W.Label(g, Version.Name, M, M, { size = 28 })
+    local title = W.Label(content, Version.Name, M, M, { size = 28, maxW = function() return lw end })
     title.Depth:Set(function() return g.Depth() + 20 end)
-    local sub = W.Label(g, Version.Text() == Version.Name and '' or string.sub(Version.Text(), string.len(Version.Name) + 2), M, M + Skin.S(40), { color = c.textDim, size = 'small' })
+    local sub = W.Label(content, Version.Text() == Version.Name and '' or string.sub(Version.Text(), string.len(Version.Name) + 2), M, M + Skin.S(40), { color = c.textDim, size = 'small', maxW = function() return lw end })
     sub.Depth:Set(function() return g.Depth() + 20 end)
-    W.Label(g, 'Create Supreme Commander maps, missions and mods.', M, M + Skin.S(58), { color = c.textDim, size = 'small' })
+    W.Label(content, 'Create Supreme Commander maps, missions and mods.', M, M + Skin.S(58), { color = c.textDim, size = 'small', maxW = function() return lw end })
 
     local y = M + Skin.S(100)
     local bh, gap = Skin.S(34), Skin.S(8)
     local function Btn(text, onClick)
-        local b = W.Button(g, text, M, y, lw, bh, onClick)
+        local b = W.Button(content, text, M, y, lw, bh, onClick)
         y = y + bh + gap
         return b
     end
@@ -144,7 +149,7 @@ function Open(opts)
         Safe.Try('startscreen:fn143', function() import('/lua/editor/gui/commands.lua').Run('help.open') end)
     end)
 
-    local show = W.Button(g, 'Show this screen at start', M, fh - M - bh, lw, bh, function(self)
+    local show = W.Button(content, 'Show this screen at start', M, math.max(fh - M - bh, y + gap), lw, bh, function(self)
         UserData.Set('startScreen', self.on and true or false)
         UserData.Flush()
     end, { toggle = true })
@@ -152,14 +157,16 @@ function Open(opts)
 
     -- ---- right column -------------------------------------------------------------------------------------------------------------------
     local ry = M
-    W.Label(g, 'New map', rx, ry, { color = c.textDim })
+    W.Label(content, 'New map', rx, ry, { color = c.textDim })
     ry = ry + Skin.S(24)
     local tileGap = Skin.S(12)
     local sizes = {}
     for _, s in Maps.Sizes do table.insert(sizes, s) end
     table.insert(sizes, { label = 'Any size...', custom = true })          -- any width and height: the terrain of the next power of two, the playable area cut to the size
     local count = table.getn(sizes)
-    local tw = math.floor((rw - tileGap * (count - 1)) / count)
+    -- the tiles wrap into rows when the column is too narrow for their texts
+    local perRow = math.max(1, math.min(count, math.floor((rw + tileGap) / (Skin.S(120) + tileGap))))
+    local tw = math.floor((rw - tileGap * (perRow - 1)) / perRow)
     local th = Skin.S(64)
     local subtitles = { 'a small, quick map: 1v1, practice', 'the usual 1v1 and 2v2 size', 'big maps for 4+ players', 'huge maps, many players', 'the largest the game supports', 'your width and height, with a playable area' }
     for i, s in sizes do
@@ -167,7 +174,7 @@ function Open(opts)
         local tile = Bitmap(g)
         tile.Depth:Set(function() return g.Depth() + 4 end)
         tile:SetSolidColor(c.button)
-        W.Place(tile, g, rx + (i - 1) * (tw + tileGap), ry, tw, th)
+        W.Place(tile, content, rx + math.mod(i - 1, perRow) * (tw + tileGap), ry + math.floor((i - 1) / perRow) * (th + tileGap), tw, th)
         tile.HandleEvent = function(self, event)
             if event.Type == 'MouseEnter' then self:SetSolidColor(c.buttonHi) return true
             elseif event.Type == 'MouseExit' then self:SetSolidColor(c.button) return true
@@ -185,20 +192,20 @@ function Open(opts)
             end
             return false
         end
-        local l1 = W.Label(tile, s.label, Skin.S(10), Skin.S(10), { color = c.text })
-        local l2 = W.Label(tile, subtitles[i] or 'blank terrain', Skin.S(10), Skin.S(34), { color = c.textDim, size = 'small' })
-        W.Fit(l2, subtitles[i] or 'blank terrain', tw - Skin.S(20))
+        local l1 = W.Label(tile, s.label, Skin.S(10), Skin.S(10), { color = c.text, maxW = function() return tw - Skin.S(20) end })
+        local l2 = W.Label(tile, subtitles[i] or 'blank terrain', Skin.S(10), Skin.S(34), { color = c.textDim, size = 'small', maxW = function() return tw - Skin.S(20) end })
     end
-    ry = ry + th + Skin.S(28)
+    ry = ry + math.ceil(count / perRow) * (th + tileGap) + Skin.S(16)
 
-    W.Label(g, 'Recent maps', rx, ry, { color = c.textDim })
+    W.Label(content, 'Recent maps', rx, ry, { color = c.textDim })
     ry = ry + Skin.S(24)
     local recent = Recent.List(8)
     local cardW, cardH = Skin.S(150), Skin.S(190)
     local cols = math.max(1, math.floor((rw + Skin.S(12)) / (cardW + Skin.S(12))))
-    local areaBottom = fh - M - bh - gap - Skin.S(96) - Skin.S(12)
+    local tipY = math.max(fh - M - bh - gap - Skin.S(96), ry + Skin.S(24) + Skin.S(40))      -- (under the recent maps; in a window too small for both, the page scrolls)
+    local areaBottom = tipY - Skin.S(12)
     if table.getn(recent) == 0 then
-        W.Label(g, 'No maps yet. Create a new map above, or open one from the left.', rx, ry + Skin.S(8), { color = c.textDim, size = 'small' })
+        W.Label(content, 'No maps yet. Create a new map above, or open one from the left.', rx, ry + Skin.S(8), { color = c.textDim, size = 'small', maxW = function() return rw end })
     end
     for i, m in recent do
         local col, row = math.mod(i - 1, cols), math.floor((i - 1) / cols)
@@ -208,7 +215,7 @@ function Open(opts)
             local card = Bitmap(g)
             card.Depth:Set(function() return g.Depth() + 4 end)
             card:SetSolidColor(c.panelAlt)
-            W.Place(card, g, cx, cy, cardW, cardH)
+            W.Place(card, content, cx, cy, cardW, cardH)
             card.HandleEvent = function(self, event)
                 if event.Type == 'MouseEnter' then self:SetSolidColor(c.hover) return true
                 elseif event.Type == 'MouseExit' then self:SetSolidColor(c.panelAlt) return true
@@ -223,7 +230,7 @@ function Open(opts)
             thumb.Depth:Set(function() return card.Depth() + 5 end)
             thumb:SetSolidColor(c.panel)
             thumb:DisableHitTest()
-            W.Place(thumb, g, cx + Skin.S(6), cy + Skin.S(6), ts, ts)
+            W.Place(thumb, content, cx + Skin.S(6), cy + Skin.S(6), ts, ts)
             local cached = Thumbs.Cached(path)
             if cached then thumb:SetTexture(cached) else table.insert(state.cards, { thumb = thumb, path = path }) end
             local name = W.Label(card, m.name, Skin.S(6), ts + Skin.S(10), { color = c.text })
@@ -234,24 +241,24 @@ function Open(opts)
     end
 
     -- ---- tip and way out ----------------------------------------------------------------------------------------------------------------
-    local ty = fh - M - bh - gap - Skin.S(96)
+    local ty = tipY
     local tipBox = Bitmap(g)
     tipBox.Depth:Set(function() return g.Depth() + 3 end)
     tipBox:SetSolidColor(c.panel)
-    W.Place(tipBox, g, rx, ty, rw, Skin.S(96))
-    W.Label(g, 'Tip', rx + Skin.S(12), ty + Skin.S(8), { color = c.accent, size = 'small' })
+    W.Place(tipBox, content, rx, ty, rw, Skin.S(96))
+    W.Label(content, 'Tip', rx + Skin.S(12), ty + Skin.S(8), { color = c.accent, size = 'small' })
     state.tipLabels = {}
     local function ShowTip()
         for _, l in state.tipLabels do l:Destroy() end
-        state.tipLabels = W.Paragraph(g, Tips.Get(state.tip), rx + Skin.S(12), ty + Skin.S(26), rw - Skin.S(24), { color = c.text, size = 'small' }, Skin.S(18), ty + Skin.S(92))
+        state.tipLabels = W.Paragraph(content, Tips.Get(state.tip), rx + Skin.S(12), ty + Skin.S(32), rw - Skin.S(24), { color = c.text, size = 'small' }, Skin.S(18), ty + Skin.S(94))
     end
     state.tip = math.mod(math.floor(GetSystemTimeSeconds()), Tips.Count()) + 1
     ShowTip()
-    W.Button(g, 'Next tip', rx + rw - Skin.S(96), ty + Skin.S(6), Skin.S(86), Skin.S(24), function()
+    W.Button(content, 'Next tip', rx + rw - Skin.S(96), ty + Skin.S(6), Skin.S(86), Skin.S(24), function()
         state.tip = state.tip + 1
         ShowTip()
     end)
-    local go = W.Button(g, opts.afterNoMap and 'Start with a blank map' or 'Close', rx + rw - Skin.S(220), fh - M - bh, Skin.S(220), bh, function()
+    local go = W.Button(content, opts.afterNoMap and 'Start with a blank map' or 'Close', rx + rw - Skin.S(220), math.max(fh - M - bh, ty + Skin.S(96) + gap), Skin.S(220), bh, function()
         Close()
         Safe.Try('startscreen:fn255', function() import('/lua/editor/gui/feature_start.lua').MaybeTour() end)
     end)

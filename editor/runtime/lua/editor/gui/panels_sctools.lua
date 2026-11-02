@@ -387,7 +387,8 @@ Panels.Register{
             local function Flow(buttons)
                 local bx = pad
                 for _, b in buttons do
-                    local bw = b.Width()
+                    b.designW = b.designW or b.Width()
+                    local bw = math.min(b.designW, w - 2 * pad)         -- (a button wider than the panel is narrowed to it, its text is cut)
                     if bx > pad and bx + bw > w - pad then
                         bx = pad
                         y = y + Skin.S(26)

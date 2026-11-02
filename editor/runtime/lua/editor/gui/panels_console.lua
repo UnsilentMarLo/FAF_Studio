@@ -224,7 +224,8 @@ Panels.Register{
             P.filter.Width:Set(fw - 2)
             P.filter.Height:Set(rh - 2)
 
-            local cy = h - pad - rh
+            -- the command line sits at the bottom; in a panel too short for the toolbar rows, a list and the line, it goes under a list of the least height instead (the panel scrolls)
+            local cy = math.max(h - pad - rh, top + gap + Skin.S(60) + gap)
             W.Place(P.command.frame, group, pad, cy, inner, rh)
             P.command.Width:Set(inner - 2)
             P.command.Height:Set(rh - 2)

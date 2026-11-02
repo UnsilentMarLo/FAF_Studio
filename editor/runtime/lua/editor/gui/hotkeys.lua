@@ -416,7 +416,10 @@ Panels.Register{
             local bottom = h - pad - rowsH
             local rowAbove = bottom - Skin.S(28)
             local listTop = pad + Skin.S(28)
-            P.list:SetRect(pad, listTop, w - 2 * pad, math.max(Skin.S(40), rowAbove - listTop - Skin.S(4)))
+            local listH = math.max(Skin.S(40), rowAbove - listTop - Skin.S(4))
+            P.list:SetRect(pad, listTop, w - 2 * pad, listH)
+            rowAbove = math.max(rowAbove, listTop + listH + Skin.S(4))      -- (under the list, also in a panel too short for both: the panel scrolls)
+            bottom = rowAbove + Skin.S(28)
             W.Place(P.status, group, pad, rowAbove + Skin.S(6))
             W.Flow(group, btns, pad, bottom, w - 2 * pad, Skin.S(24), Skin.S(6))
             Rebuild()

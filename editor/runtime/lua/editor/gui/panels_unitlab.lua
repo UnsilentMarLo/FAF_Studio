@@ -169,8 +169,9 @@ Panels.Register{
             local top = u1 + Skin.S(24)
             local lower = W.Flow(group, { { P.revert, Skin.S(54) }, { P.revertAll, Skin.S(76) }, { P.derive, Skin.S(96) } }, 0, 0, w - 2 * pad, Skin.S(22), Skin.S(6), true)
             local foot = Skin.S(86) + (lower - Skin.S(22))
-            P.list:SetRect(pad, top, w - 2 * pad, math.max(Skin.S(60), h - top - foot - pad))
-            local y = h - foot
+            local listH = math.max(Skin.S(60), h - top - foot - pad)
+            P.list:SetRect(pad, top, w - 2 * pad, listH)
+            local y = math.max(h - foot, top + listH + Skin.S(6))      -- (under the list, also in a panel too short for both: the panel scrolls)
             P.slider:Place(pad, y, w - 2 * pad)
             W.Flow(group, { { P.revert, Skin.S(54) }, { P.revertAll, Skin.S(76) }, { P.derive, Skin.S(96) } }, pad, y + Skin.S(50), w - 2 * pad, Skin.S(22), Skin.S(6))
             P:Refresh()

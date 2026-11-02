@@ -346,8 +346,9 @@ Panels.Register{
             W.Place(P.pSub, group, tx, ty + Skin.S(20))
             W.Place(P.pTags, group, tx, ty + Skin.S(36))
             W.Place(P.pPath, group, tx, ty + Skin.S(52))
-            W.Place(P.star, group, tx, ty + Skin.S(72), Skin.S(56), bh)
-            W.Place(P.use, group, tx + Skin.S(62), ty + Skin.S(72), Skin.S(56), bh)
+            local bw = math.max(Skin.S(36), math.min(Skin.S(56), math.floor((pw - (tx - x0) - Skin.S(12)) / 2)))      -- two buttons that fit the room the picture leaves
+            W.Place(P.star, group, tx, ty + Skin.S(72), bw, bh)
+            W.Place(P.use, group, tx + bw + Skin.S(6), ty + Skin.S(72), bw, bh)
         end
 
         --- Short and wide (the bottom dock): everything in two rows above the grid. Returns the y below them.

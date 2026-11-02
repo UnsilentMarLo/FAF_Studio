@@ -191,8 +191,7 @@ Panels.Register{
                 s:Place(pad, y, w - 2 * pad)
                 y = y + Skin.S(46)
             end
-            W.Place(P.bRandom, group, pad, y, Skin.S(140), bh)
-            W.Place(P.bBase, group, pad + Skin.S(146), y, Skin.S(120), bh)
+            W.Flow(group, { { P.bRandom, Skin.S(140) }, { P.bBase, Skin.S(120) } }, pad, y, w - 2 * pad, bh, Skin.S(6))
             P:Rebuild()
             P:Refresh()
         end

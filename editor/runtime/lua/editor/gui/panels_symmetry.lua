@@ -92,12 +92,10 @@ Panels.Register{
             y = y + Skin.S(52)
             P.cz:Place(pad, y, w - 2 * pad)
             y = y + Skin.S(52)
-            W.Place(P.reset, group, pad, y, Skin.S(150), Skin.S(24))
-            W.Place(P.armyMap, group, pad, y + Skin.S(30), Skin.S(150), Skin.S(24))
-            W.Place(P.half, group, pad + Skin.S(156), y + Skin.S(30), Skin.S(150), Skin.S(24))
-            W.Place(P.note, group, pad, y + Skin.S(62))
-            W.Place(P.detect, group, pad, y + Skin.S(84), Skin.S(150), Skin.S(24))
-            W.Place(P.detected, group, pad, y + Skin.S(114))
+            y = W.Flow(group, { { P.reset, Skin.S(150) }, { P.armyMap, Skin.S(150) }, { P.half, Skin.S(150) } }, pad, y, w - 2 * pad, Skin.S(24), Skin.S(6))
+            W.Place(P.note, group, pad, y + Skin.S(8))
+            y = W.Flow(group, { { P.detect, Skin.S(150) } }, pad, y + Skin.S(30), w - 2 * pad, Skin.S(24), Skin.S(6))
+            W.Place(P.detected, group, pad, y + Skin.S(6))
             P:Refresh()
         end
         return P

@@ -184,7 +184,7 @@ function NewHost(frame, ctx)
             -- and buttons that end at its right edge stay clear of the bar (they ran under it, hiding the right border of the fields). The space is always kept, not only
             -- while the bar shows: the layout must not jump when the content grows past the panel.
             local pw = w
-            if self.contents[id] then pw = math.max(Skin.S(60), w - Skin.S(Skin.size.scrollW) - Skin.S(2)) end
+            if self.contents[id] then pw = math.max(1, w - Skin.S(Skin.size.scrollW) - Skin.S(2)) end
             local ok, err = pcall(inst.OnResize, inst, pw, h)
             if not ok then LOG('EDITOR gui: panel ' .. tostring(id) .. ' resize failed: ' .. tostring(err)) end
         end
@@ -209,12 +209,39 @@ function NewHost(frame, ctx)
     local function MinW() return Skin.S(120) end
     local function MinH() return Skin.S(60) end
 
+    --- The narrowest a node can be drawn: a stack needs what its widest panel declares (Panels.Register minW, logical pixels; panels that declare nothing get DEFAULT_MIN_W,
+    --- the width their controls were laid out for), a row split the sum of both sides and a column split the larger of them. A tab bar is no obstacle: it scrolls (">>").
+    local function NodeMinW(node)
+        if node.kind == 'split' then
+            local a, b = NodeMinW(node.a), NodeMinW(node.b)
+            if node.dir == 'row' then return a + Skin.S(Skin.size.splitter) + b end
+            return math.max(a, b)
+        end
+        local m = MinW()
+        for _, id in node.tabs do
+            local def = Panels.Get(id)
+            if def and not def.transparent then
+                local dm = Skin.S(def.minW or Panels.DEFAULT_MIN_W)
+                if dm > m then m = dm end
+            end
+        end
+        return m
+    end
+
     local function Compute(node, x, y, w, h)
         node.rect = { x, y, w, h }
         if node.kind ~= 'split' then return end
         local gap = Skin.S(Skin.size.splitter)
         if node.dir == 'row' then
             local aw = math.floor((w - gap) * node.ratio)
+            local minA, minB = NodeMinW(node.a), NodeMinW(node.b)
+            -- what the panels need, as far as the room allows: when both do not fit, each gets a share of the room in proportion to its need, but never less than the basic minimum
+            if minA + minB > w - gap then
+                local share = minA / math.max(1, minA + minB)
+                minA = math.max(MinW(), math.floor((w - gap) * share))
+                minB = math.max(MinW(), w - gap - minA)
+            end
+            aw = math.max(minA, math.min(w - gap - minB, aw))
             aw = math.max(MinW(), math.min(w - gap - MinW(), aw))
             node.gap = { x + aw, y, gap, h }
             Compute(node.a, x, y, aw, h)

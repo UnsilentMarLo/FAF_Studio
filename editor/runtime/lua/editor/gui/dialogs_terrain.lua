@@ -16,7 +16,7 @@ end
 local function Slider(d, label, key, min, max, step, fmt, x, y, w, params)
     local s = W.Slider(d.group, { label = label, min = min, max = max, step = step, fmt = fmt, compact = true,
         get = function() return params[key] end, set = function(v) params[key] = v end })
-    s:Place(Skin.S(x), Skin.S(y), Skin.S(w))
+    s:Place(Skin.S(x), Skin.S(y), Skin.S(math.min(w, d:Span(x))))
     for _, c in { s.label, s.track, s.fill, s.thumb, s.minus, s.plus } do d:Raise(c) end
     d:Raise(s.field) d:Raise(s.field.frame)
     return s
@@ -40,24 +40,29 @@ function Generate()
     local labels = { fbm = 'Rolling', ridged = 'Ridged', billow = 'Billow' }
     local buttons = {}
     d:Label('Style', 266, 196, { color = c.textDim })
+    local modeRow = {}
     for i, m in modes do
         local mode = m
-        buttons[mode] = d:Button(labels[mode], 310 + (i - 1) * 66, 192, 62, 24, function()
+        buttons[mode] = d:Button(labels[mode], 0, 0, 62, 24, function()
             P.mode = mode
             for k, b in buttons do b:SetOn(k == mode) end
         end, { toggle = true })
+        modeRow[i] = { buttons[mode], 62 }
     end
+    local modeBottom = d:Flow(modeRow, 192, 24, 310)
     buttons[P.mode]:SetOn(true)
-    local replace = d:Button('Replace the heights (off: add to them)', 14, 244, 300, 24, function(self) P.replace = self.on end, { toggle = true })
+    local replaceY = math.max(244, modeBottom + 12)
+    local replace = d:Button('Replace the heights (off: add to them)', 14, replaceY, math.min(300, d:Span(14)), 24, function(self) P.replace = self.on end, { toggle = true })
     replace:SetOn(P.replace)
-    d:Label('Runs in the native field engine (fields.lua): a 20 km map takes a fraction of a second.', 14, 276, { color = c.textDim, size = 'small' })
-    d:Button('Generate', 14, 316, 110, 28, function()
+    local y = d:Text('Runs in the native field engine (fields.lua): a 20 km map takes a fraction of a second.', 14, replaceY + 32, { color = c.textDim, size = 'small' })
+    local go = d:Button('Generate', 0, 0, 110, 28, function()
         for k, v in P do Gen.Params[k] = v end
         Dialog.Close()
         local n = Gen.Generate()
         Say('generated terrain: ' .. n .. ' samples')
     end)
-    d:Button('Cancel', 134, 316, 100, 28, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 100, 28, function() Dialog.Close() end)
+    d:Flow({ { go, 110 }, { cancel, 100 } }, math.max(316, y + 14), 28)
 end
 
 function FlattenMap()
@@ -65,15 +70,16 @@ function FlattenMap()
     local P = { height = 30 }
     local s = W.Slider(d.group, { label = 'Height (units)', min = 0, max = 300, step = 1, fmt = '%d',
         get = function() return P.height end, set = function(v) P.height = v end })
-    s:Place(Skin.S(14), Skin.S(34), Skin.S(390))
+    s:Place(Skin.S(14), Skin.S(34), Skin.S(d:Span(14)))
     for _, c in { s.label, s.track, s.fill, s.thumb, s.minus, s.plus } do d:Raise(c) end
     d:Raise(s.field) d:Raise(s.field.frame)
-    d:Button('Flatten', 14, 106, 100, 28, function()
+    local go = d:Button('Flatten', 0, 0, 100, 28, function()
         Dialog.Close()
         Gen.Flatten(P.height)
         Say('flattened the map to ' .. P.height)
     end)
-    d:Button('Cancel', 124, 106, 100, 28, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 100, 28, function() Dialog.Close() end)
+    d:Flow({ { go, 100 }, { cancel, 100 } }, 106, 28)
 end
 
 --- A list of the terrain types (swatch, name, code) with a filter; `done(code)` gets the chosen TypeCode, or false for "the default of the texture".
@@ -85,7 +91,7 @@ function PickType(title, current, done)
     for _, t in TT.Types() do table.insert(all, t) end
     local state = { shown = all }
     local list
-    local field = d:Field(14, 30, 392, 22, {
+    local field = d:Field(14, 30, d:Span(14), 22, {
         onChange = function(text)
             local f = string.lower(text or '')
             state.shown = {}
@@ -126,7 +132,7 @@ function PickType(title, current, done)
             end
         end,
     })
-    list:SetRect(Skin.S(8), Skin.S(58), Skin.S(404), Skin.S(366))
+    list:SetRect(d:Room(8, 58, 404, 366, 8))
     field:AcquireFocus()
 end
 
@@ -147,7 +153,7 @@ function PlayableArea()
         return s
     end
     local function Place(s, x, y)
-        s:Place(Skin.S(x), Skin.S(y), Skin.S(190))
+        s:Place(Skin.S(x), Skin.S(y), Skin.S(math.min(190, d:Span(x))))
         for _, c2 in { s.label, s.track, s.fill, s.thumb, s.minus, s.plus } do d:Raise(c2) end
         d:Raise(s.field) d:Raise(s.field.frame)
     end
@@ -155,11 +161,11 @@ function PlayableArea()
     Place(a, 14, 36) Place(c1, 228, 36)
     Place(b, 14, 92) Place(d1, 228, 92)
     d:Label(exists and 'The map already has a playable area.' or 'No playable area yet: the whole map can be played.', 14, 150, { color = c.textDim, size = 'small' })
-    d:Button('Whole map', 14, 172, 110, 26, function()
+    local whole = d:Button('Whole map', 0, 0, 110, 26, function()
         P.x0, P.z0, P.x1, P.z1 = 0, 0, size, size
         for _, s in { a, b, c1, d1 } do s:Refresh() end
     end)
-    d:Button('Apply', 14, 208, 100, 28, function()
+    local apply = d:Button('Apply', 0, 0, 100, 28, function()
         Dialog.Close()
         if Playable.Set(P.x0, P.z0, P.x1, P.z1) then
             Say('playable area set')
@@ -167,5 +173,6 @@ function PlayableArea()
             Say('the playable area must be at least 8 x 8 units')
         end
     end)
-    d:Button('Cancel', 124, 208, 100, 28, function() Dialog.Close() end)
+    local cancel = d:Button('Cancel', 0, 0, 100, 28, function() Dialog.Close() end)
+    d:Flow({ { whole, 110 }, { apply, 100 }, { cancel, 100 } }, 172, 28)
 end

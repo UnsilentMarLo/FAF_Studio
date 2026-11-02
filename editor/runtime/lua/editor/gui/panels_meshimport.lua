@@ -292,8 +292,9 @@ Panels.Register{
             local lower = 0
             for _, set in sets do lower = math.max(lower, W.Flow(group, set, 0, 0, iw, rowH, gap, true)) end
             local foot = Skin.S(104) + (lower - rowH)
-            P.list:SetRect(pad, top, w - 2 * pad, math.max(Skin.S(60), h - pad - foot - top))
-            local y = h - foot + Skin.S(4)
+            local listH = math.max(Skin.S(60), h - pad - foot - top)
+            P.list:SetRect(pad, top, w - 2 * pad, listH)
+            local y = math.max(h - foot + Skin.S(4), top + listH + Skin.S(6))      -- (under the list, also in a panel too short for both: the panel scrolls)
             for _, set in sets do W.Flow(group, set, pad, y, iw, rowH, gap) end
             y = y + lower - rowH
             local fw = math.max(Skin.S(80), w - 2 * pad - Skin.S(52))

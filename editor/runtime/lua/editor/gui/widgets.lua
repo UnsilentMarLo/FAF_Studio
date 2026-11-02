@@ -77,25 +77,40 @@ end
 --- A compound widget (Slider) wraps its parts in CullBox(y, h) so all parts appear and disappear together.
 local cullBox = false
 
-function CullBox(y, h)
-    cullBox = y and { y, h } or false
+--- The extent the parts of a compound widget (a slider) share: all of them appear and disappear together at the edge of a scrolled panel. x and w (optional): the same sideways.
+function CullBox(y, h, x, w)
+    cullBox = y and { y, h, x, w } or false
 end
 
 --- The vertical extent used for the cull test and for the content height of a placed control. The control is remembered with its lower edge: the content height is the lowest edge of the controls
 --- that are there and show something (ctx:Measure), so a row reserved for text that is empty, a hidden control or a destroyed one does not leave blank scroll range behind.
-local function Extent(ctx, x, y, ch, c)
+local function Extent(ctx, x, y, ch, c, w)
     local top, bot = y, y + ch
-    if cullBox then top, bot = cullBox[1], cullBox[1] + cullBox[2] end
+    local left, right = x, w and (x + w) or nil
+    if cullBox then
+        top, bot = cullBox[1], cullBox[1] + cullBox[2]
+        if cullBox[3] then left, right = cullBox[3], cullBox[3] + cullBox[4] end
+    end
     if y >= 0 and x > -1000 then
-        if c then ctx.items[c] = bot end
+        if c then
+            ctx.items[c] = bot
+            ctx.itemsX[c] = left
+            ctx.itemsR[c] = right      -- nil: a text, its width is read when the content is measured
+        end
         if bot > ctx.extent then
             ctx.extent = bot
             ctx.dirty = true
         end
+        if right and right > ctx.extentX then
+            ctx.extentX = right
+            ctx.dirty = true
+        end
     elseif c then
         ctx.items[c] = nil
+        ctx.itemsX[c] = nil
+        ctx.itemsR[c] = nil
     end
-    return top, bot
+    return top, bot, left, right
 end
 
 --- Lazy vertical position of a direct child of a scroll content group: its place, or off the screen when it is not fully inside the panel.
@@ -103,26 +118,58 @@ local function ScrollTop(c, parent, ctx, y, top, bot)
     c.Top:Set(function()
         local t = parent.Top()
         local holder = ctx.holder
-        if t + top < holder.Top() or t + bot > holder.Bottom() then return -20000 end
+        if t + top < holder.Top() + ctx.inset or t + bot > holder.Bottom() then
+            c.culledY = true
+            return -20000
+        end
+        c.culledY = false
         return t + y
+    end)
+end
+
+--- Lazy horizontal position of a direct child of a scroll content group: its place, or off the screen when it does not lie inside the panel sideways (the panel then scrolls
+--- sideways, ScrollContent). A few pixels of overshoot (the scrollbar's strip) are tolerated.
+local function ScrollLeft(c, parent, ctx, x, left, right)
+    c.Left:Set(function()
+        local l = parent.Left()
+        local holder = ctx.holder
+        local r = right
+        if not r and c.GetText then r = left + c.Width() end
+        local tol = ctx.tol
+        if l + left < holder.Left() - tol or (r and l + r > holder.Right() + tol) then
+            c.culledX = true
+            return -20000
+        end
+        c.culledX = false
+        return l + x
     end)
 end
 
 --- Place `c` at (x, y) relative to `parent`; width and height when given (pixels, already scaled).
 function Place(c, parent, x, y, w, h)
     local ctx = parent.scroll
-    local top, bot
+    if tracking then c.layX, c.layY = x, y end      -- (layoutcheck.lua: where the control belongs, also while a scroll cull has parked it off screen)
+    local top, bot, left, right
     if ctx then
-        top, bot = Extent(ctx, x, y, h or c.Height() or Skin.S(14), c)
+        top, bot, left, right = Extent(ctx, x, y, h or c.Height() or Skin.S(14), c, w)
     end
-    c.Left:Set(function() return parent.Left() + x end)
     if ctx then
+        ScrollLeft(c, parent, ctx, x, left, right)
         ScrollTop(c, parent, ctx, y, top, bot)
     else
+        c.Left:Set(function() return parent.Left() + x end)
         c.Top:Set(function() return parent.Top() + y end)
     end
     if w then c.Width:Set(w) end
     if h then c.Height:Set(h) end
+    -- a text that fits itself to the room it has: it moved or the box it sits in changed size
+    if c.maxW then
+        c.fitX = x
+        if ctx then ctx.fits[c] = true ctx.fitDirty = true ctx.dirty = true end
+        c:Refit()
+    elseif w and c.label and c.label.Refit then
+        c.label:Refit()
+    end
 end
 
 local function PixelSize(size)
@@ -132,20 +179,91 @@ local function PixelSize(size)
     return Skin.FontSize(Skin.size[size or 'text'])
 end
 
+--- Sets a text control's text without the label's own fitting (the label may have it: AutoFit).
+local function SetRaw(label, s)
+    local raw = label.rawSetText
+    if raw then raw(label, s) else label:SetText(s) end
+end
+
+--- A label that keeps itself inside the room it has: its text is cut with "..." to `maxW()` pixels (nil / small: the room is not known yet, the text stays whole until Refit).
+--- label:SetText(s) keeps the whole text in label.fullText and shows the cut one; label:Refit() cuts again when the room changed (a panel resized, a button narrowed).
+--- Fit() (below) switches this off for a label the panel cuts itself.
+local function AutoFit(t, maxW)
+    t.rawSetText = t.SetText
+    t.maxW = maxW
+    t.fullText = t:GetText()
+    t.autoFit = true
+    local function Room(self)
+        local room = self.maxW()
+        if self.fitCap and (not room or self.fitCap < room) then room = self.fitCap end
+        return room
+    end
+    local function Apply(self)
+        local room = self.autoFit and Room(self)
+        if room and room > Skin.S(8) then
+            self.fitDone = room
+            self.shown = self.fullText
+            Fit(self, self.fullText, room, true)
+        else
+            self.fitDone = nil
+            self.shown = self.fullText
+            self.rawSetText(self, self.fullText)
+        end
+        if self.onText then self.onText(self) end
+    end
+    t.SetText = function(self, s)
+        s = tostring(s or '')
+        if self.autoFit and self.fitDone ~= nil and s == self.fullText and self.shown == s then return end
+        self.fullText = s
+        Apply(self)
+    end
+    function t:Refit()
+        if not self.autoFit then return end
+        local room = Room(self)
+        if room == self.fitDone or (not room and not self.fitDone) then return end
+        Apply(self)
+    end
+end
+
+--- Label(parent, text, x, y, opts)   opts: color, size, gray, maxW (a function returning the room in pixels: the text is cut to it), nofit (no automatic cutting).
+--- A label that is a direct child of a scrolling panel is cut to the panel's width (minus its x and the scrollbar) unless `nofit`.
 function Label(parent, text, x, y, opts)
     opts = opts or {}
     local t = Text(parent)
     t.Depth:Set(function() return parent.Depth() + 10 end)   -- siblings share a depth by default; text sits above backgrounds
     t:SetNewFont(Skin.Font(opts.gray), PixelSize(opts.size))
+    t.fontKey = tostring(Skin.Font(opts.gray)) .. '|' .. tostring(opts.size or 'text')
     t:SetColor(opts.color or Skin.color.text)
     t:SetText(text or '')
     t:DisableHitTest()
-    t.Left:Set(function() return parent.Left() + x end)
     local ctx = parent.scroll
+    local maxW = opts.maxW
+    if not maxW and ctx and not opts.nofit then
+        t.fitX = x
+        maxW = function()
+            local hw = ctx.holder.Width()
+            if hw < Skin.S(40) then return nil end        -- the panel has not been given its size yet
+            return hw - t.fitX - Skin.S(Skin.size.scrollW) - Skin.S(2)
+        end
+    end
+    if maxW then
+        AutoFit(t, maxW)
+        if ctx then
+            ctx.fits[t] = true
+            ctx.fitDirty = true
+        end
+        t:Refit()
+    end
+    if tracking then
+        table.insert(tracking, { label = t, text = text })
+        t.layX, t.layY = x, y
+    end
     if ctx then
-        local top, bot = Extent(ctx, x, y, t.Height(), t)
+        local top, bot, left, right = Extent(ctx, x, y, t.Height(), t, nil)
+        ScrollLeft(t, parent, ctx, x, left, right)
         ScrollTop(t, parent, ctx, y, top, bot)
     else
+        t.Left:Set(function() return parent.Left() + x end)
         t.Top:Set(function() return parent.Top() + y end)
     end
     return t
@@ -172,10 +290,12 @@ function Flow(parent, items, x, y, width, h, gap, dry)
     return cy + h
 end
 
---- Re-places `label` so it is centred in the rectangle (x, y, w, h) of `parent`.
+--- Re-places `label` so it is centred in the rectangle (x, y, w, h) of `parent`. A text wider than the rectangle starts at its left edge (it is never moved out to the left of it;
+--- a button's own label is cut to its width, AutoFit).
 function Center(label, parent, x, y, w, h)
+    if label.Refit then label:Refit() end
     local tw, th = label.Width(), label.Height()
-    local lx, ly = x + math.floor((w - tw) / 2), y + math.floor((h - th) / 2)
+    local lx, ly = x + math.max(0, math.floor((w - tw) / 2)), y + math.max(0, math.floor((h - th) / 2))
     label.Left:Set(function() return parent.Left() + lx end)
     label.Top:Set(function() return parent.Top() + ly end)
 end
@@ -185,7 +305,7 @@ end
 scrollMemory = {}     -- panel id -> scroll offset in pixels, kept across rebuilds (a new UI scale, a pop-out, a re-created panel)
 local scrollLive = {}  -- contexts that exist right now, for the periodic bar update
 
---- Sets the scroll offset (clamped), moves the content and the scrollbar thumb.
+--- Sets the vertical scroll offset (clamped), moves the content and the scrollbar thumb.
 local function ScrollSet(ctx, v)
     v = math.max(0, math.min(ctx.maxOff, v))
     ctx.off = v
@@ -194,12 +314,25 @@ local function ScrollSet(ctx, v)
     ctx:UpdateThumb()
 end
 
+--- Sets the sideways scroll offset (clamped).
+local function ScrollSetX(ctx, v)
+    v = math.max(0, math.min(ctx.maxOffX, v))
+    ctx.offX = v
+    ctx.content.Left:Set(function() return ctx.holder.Left() - v end)
+    ctx:UpdateThumb()
+end
+
 --- Content group of a panel: `holder` is the panel's fixed rectangle; the returned group is what `create` builds its controls in. It is
 --- shifted up by the scroll offset; the mouse wheel over the panel scrolls it and an overlay scrollbar on the right edge shows the position.
 --- `id` keys the remembered scroll position. Returns the content group (`content.scroll` is the context).
+---
+--- A control that does not lie completely inside the panel (Maui does not clip) is moved off screen. When the controls need more width than the panel has (a narrow dock, a big UI
+--- scale) the content also scrolls sideways: a bar along the bottom edge, Shift + wheel (or the wheel when there is nothing to scroll up and down). The layout check
+--- (layoutcheck.lua) counts such a panel as a fault: this is the fallback that keeps every control reachable.
 function ScrollContent(holder, id)
     local c = Skin.color
-    local ctx = { holder = holder, id = id, off = scrollMemory[id] or 0, extent = 0, maxOff = 0, dirty = true, items = {} }
+    local ctx = { holder = holder, id = id, off = scrollMemory[id] or 0, extent = 0, maxOff = 0, dirty = true, items = {},
+                  offX = 0, extentX = 0, maxOffX = 0, itemsX = {}, itemsR = {}, inset = 0, tol = Skin.S(4), fits = {}, fitDirty = true }
     -- The content group is shifted up by the scroll offset, so its rectangle reaches over whatever lies above the panel (the tab strip of its dock): a scrolled panel
     -- swallowed every click on its own tab strip. The group is therefore not hit tested; the wheel over the empty parts of the panel is caught by a clear bitmap that stays
     -- on the panel's own rectangle.
@@ -222,11 +355,17 @@ function ScrollContent(holder, id)
 
     ctx.track = Bitmap(holder)
     ctx.thumb = Bitmap(holder)
+    ctx.htrack = Bitmap(holder)
+    ctx.hthumb = Bitmap(holder)
     ctx.track.Depth:Set(function() return holder.Depth() + 300 end)
     ctx.thumb.Depth:Set(function() return holder.Depth() + 301 end)
+    ctx.htrack.Depth:Set(function() return holder.Depth() + 300 end)
+    ctx.hthumb.Depth:Set(function() return holder.Depth() + 301 end)
     ctx.track:SetSolidColor('50000000')
+    ctx.htrack:SetSolidColor('50000000')
     ctx.thumb:SetSolidColor(c.textDim)
-    for _, b in { ctx.track, ctx.thumb } do
+    ctx.hthumb:SetSolidColor(c.textDim)
+    for _, b in { ctx.track, ctx.thumb, ctx.htrack, ctx.hthumb } do
         b.Left:Set(-20000) b.Top:Set(-20000) b.Width:Set(1) b.Height:Set(1)
         b:Hide()
     end
@@ -237,53 +376,94 @@ function ScrollContent(holder, id)
         ScrollSet(ctx, ctx.off + delta)
     end
 
-    --- Thumb size and position from the current offset.
+    function ctx:ScrollX(delta)
+        ScrollSetX(ctx, ctx.offX + delta)
+    end
+
+    --- Thumb size and position from the current offsets.
     function ctx:UpdateThumb()
         local view = holder.Height()
-        local need = ctx.extent + Skin.S(8)
+        local viewW = holder.Width()
+        local sw = Skin.S(Skin.size.scrollW)
         if ctx.maxOff <= 0 then
             ctx.track:Hide()
             ctx.thumb:Hide()
-            return
+        else
+            local need = ctx.extent + Skin.S(8)
+            local thumbH = math.max(Skin.S(24), math.floor(view * view / need))
+            local ty = math.floor((view - thumbH) * ctx.off / ctx.maxOff)
+            local tx = viewW - sw
+            ctx.thumbH, ctx.range = thumbH, view - thumbH
+            Place(ctx.track, holder, tx, 0, sw, view)
+            Place(ctx.thumb, holder, tx, ty, sw, thumbH)
+            ctx.track:Show()
+            ctx.thumb:Show()
         end
-        local sw = Skin.S(Skin.size.scrollW)
-        local thumbH = math.max(Skin.S(24), math.floor(view * view / need))
-        local ty = math.floor((view - thumbH) * ctx.off / ctx.maxOff)
-        local tx = holder.Width() - sw
-        ctx.thumbH, ctx.range = thumbH, view - thumbH
-        Place(ctx.track, holder, tx, 0, sw, view)
-        Place(ctx.thumb, holder, tx, ty, sw, thumbH)
-        ctx.track:Show()
-        ctx.thumb:Show()
+        if ctx.maxOffX <= 0 then
+            ctx.htrack:Hide()
+            ctx.hthumb:Hide()
+        else
+            local need = ctx.extentX + Skin.S(8)
+            local thumbW = math.max(Skin.S(24), math.floor(viewW * viewW / need))
+            local tx = math.floor((viewW - thumbW) * ctx.offX / ctx.maxOffX)
+            local ty = view - sw
+            ctx.thumbW, ctx.rangeX = thumbW, viewW - thumbW
+            Place(ctx.htrack, holder, 0, ty, viewW, sw)
+            Place(ctx.hthumb, holder, tx, ty, thumbW, sw)
+            ctx.htrack:Show()
+            ctx.hthumb:Show()
+        end
     end
 
-    --- The content height from the controls that are there: the lowest lower edge among those that are not hidden, not destroyed and, for a text, not empty.
+    --- The content size from the controls that are there: the lowest lower edge and the rightmost right edge among those that are not hidden, not destroyed and, for a text, not empty.
     function ctx:Measure()
-        local ext = 0
+        local ext, extX = 0, 0
         for c, bot in ctx.items do
             local ok, hidden = pcall(c.IsHidden, c)
             if not ok then
                 ctx.items[c] = nil
+                ctx.itemsX[c] = nil
+                ctx.itemsR[c] = nil
             elseif not hidden then
                 local empty = false
                 if c.GetText then
                     local okT, text = pcall(c.GetText, c)
                     empty = okT and text == ''
                 end
-                if not empty and bot > ext then ext = bot end
+                if not empty then
+                    if bot > ext then ext = bot end
+                    local right = ctx.itemsR[c]
+                    if not right and c.GetText and ctx.itemsX[c] then right = ctx.itemsX[c] + c.Width() end
+                    if right and right > extX then extX = right end
+                end
             end
         end
         ctx.extent = ext
+        ctx.extentX = extX
     end
 
-    --- Re-reads the content height and the panel height (after a layout, a resize or a rebuild).
+    --- Cuts the texts that fit themselves (Label) to the room they have now.
+    function ctx:Refit()
+        ctx.fitDirty = false
+        for t, _ in ctx.fits do
+            local ok = pcall(t.Refit, t)
+            if not ok then ctx.fits[t] = nil end
+        end
+    end
+
+    --- Re-reads the content size and the panel size (after a layout, a resize or a rebuild).
     function ctx:Update()
         ctx.dirty = false
+        ctx:Refit()
         ctx:Measure()
-        local view = holder.Height()
+        local view, viewW = holder.Height(), holder.Width()
         -- a panel that overshoots by a few pixels (a list that ends at the panel's padding) does not scroll
         ctx.maxOff = 0
         if ctx.extent > view + Skin.S(10) then ctx.maxOff = ctx.extent + Skin.S(8) - view end
+        ctx.maxOffX = 0
+        if viewW > Skin.S(40) and ctx.extentX > viewW + ctx.tol then ctx.maxOffX = ctx.extentX + Skin.S(8) - viewW end
+        ctx.viewW = viewW
+        ScrollSetX(ctx, ctx.offX)
         ScrollSet(ctx, ctx.off)
     end
 
@@ -317,11 +497,47 @@ function ScrollContent(holder, id)
         end
         return false
     end
+    ctx.hthumb.HandleEvent = function(self, event)
+        if event.Type == 'MouseEnter' then
+            self:SetSolidColor(c.accent)
+            return true
+        elseif event.Type == 'MouseExit' then
+            self:SetSolidColor(c.textDim)
+            return true
+        elseif event.Type == 'ButtonPress' then
+            local startX, startOff = event.MouseX, ctx.offX
+            local drag = Dragger()
+            drag.OnMove = function(d, x, y)
+                local per = math.max(1, ctx.rangeX) / math.max(1, ctx.maxOffX)
+                ScrollSetX(ctx, startOff + (x - startX) / per)
+            end
+            drag.OnRelease = function(d, x, y) d:Destroy() end
+            drag.OnCancel = function(d) d:Destroy() end
+            PostDragger(self:GetRootFrame(), event.KeyCode, drag)
+            return true
+        end
+        return false
+    end
+    ctx.htrack.HandleEvent = function(self, event)
+        if event.Type == 'ButtonPress' then
+            local page = holder.Width() - Skin.S(24)
+            if event.MouseX < ctx.hthumb.Left() then ctx:ScrollX(-page) else ctx:ScrollX(page) end
+            return true
+        end
+        return false
+    end
 
     local function Wheel(self, event)
-        if event.Type == 'WheelRotation' and ctx.maxOff > 0 then
-            ctx:Scroll(event.WheelRotation > 0 and -Step() or Step())
-            return true
+        if event.Type == 'WheelRotation' then
+            local shift = event.Modifiers and event.Modifiers.Shift
+            local dir = event.WheelRotation > 0 and -1 or 1
+            if ctx.maxOffX > 0 and (shift or ctx.maxOff <= 0) then
+                ctx:ScrollX(dir * Step())
+                return true
+            elseif ctx.maxOff > 0 then
+                ctx:Scroll(dir * Step())
+                return true
+            end
         end
         return false
     end
@@ -344,7 +560,10 @@ function BeginLayout(group)
     local ctx = group.scroll
     if ctx then
         ctx.extent = 0
+        ctx.extentX = 0
         ctx.items = {}
+        ctx.itemsX = {}
+        ctx.itemsR = {}
     end
 end
 
@@ -371,9 +590,9 @@ function ScrollTick()
         local ok, hidden = pcall(ctx.holder.IsHidden, ctx.holder)
         if ok and not hidden then
             -- a text that was empty and has a text now (a status line, a warning) counts, one that was emptied does not: the height is measured again
-            local before = ctx.extent
+            local before, beforeX = ctx.extent, ctx.extentX
             ctx:Measure()
-            if ctx.dirty or ctx.extent ~= before then pcall(ctx.Update, ctx) end
+            if ctx.dirty or ctx.fitDirty or ctx.extent ~= before or ctx.extentX ~= beforeX or ctx.viewW ~= ctx.holder.Width() then pcall(ctx.Update, ctx) end
         elseif ctx.dirty then
             pcall(ctx.Update, ctx)
         end
@@ -394,7 +613,11 @@ function Button(parent, text, x, y, w, h, onClick, opts)
     b.on = false
     b.hot = false
     b.toggle = opts.toggle
-    b.label = Label(b, text, 0, 0, { color = opts.color or c.text })
+    -- the text is cut with "..." to the button's width (opts.nofit: not, for a caller that wraps or widens the button itself); the tooltip still finds the button by its whole text
+    local room
+    if not opts.nofit then room = function() return b.Width() - Skin.S(8) end end
+    b.label = Label(b, text, 0, 0, { color = opts.color or c.text, maxW = room })
+    b.label.onText = function(self) Center(self, b, 0, 0, b.Width(), b.Height()) end
     Center(b.label, b, 0, 0, w, h)
     b.Refresh = function(self)
         local col = c.button
@@ -411,9 +634,9 @@ function Button(parent, text, x, y, w, h, onClick, opts)
     end
     b.SetText = function(self, s)
         self.label:SetText(s)
-        Center(self.label, self, 0, 0, w, h)
+        Center(self.label, self, 0, 0, self.Width(), self.Height())
     end
-    b.TipText = function(self) return TipFor(self, self.label:GetText(), opts.tip, opts.cmd) end
+    b.TipText = function(self) return TipFor(self, self.label.fullText or self.label:GetText(), opts.tip, opts.cmd) end
     local tipFn = function() return b:TipText() end
     b.HandleEvent = function(self, event)
         if event.Type == 'MouseEnter' then
@@ -786,32 +1009,40 @@ end
 --- Cuts `text` with "..." so that it is at most `maxW` pixels wide as the text control's text (Maui does not clip, so text that is too
 --- long would run into the next panel). The text is ONE line: control characters (a newline, a tab, a carriage return: a Text control draws the lines of a many-line text over each other,
 --- which is what made a long error message with a traceback unreadable) become spaces. When even "..." does not fit the label shows nothing.
-function Fit(label, text, maxW)
+--- A label that fits itself (Label: AutoFit) keeps doing it: `maxW` is then a cap on its room (`keepAuto`: AutoFit itself calls this).
+function Fit(label, text, maxW, keepAuto)
+    if not keepAuto and label.autoFit then
+        -- a label that fits itself: the width the caller gives is a cap on the room it has (the label is cut again when its panel changes size)
+        label.fitCap = maxW
+        label.fitDone = nil
+        label:SetText(text)
+        return
+    end
     text = string.gsub(tostring(text or ''), '%c+', ' ')
-    label:SetText(text)
+    SetRaw(label, text)
     if label.Width() <= maxW or string.len(text) < 2 then return end
-    label:SetText('...')
+    SetRaw(label, '...')
     if label.Width() > maxW then
-        label:SetText('')
+        SetRaw(label, '')
         return
     end
     -- the longest cut that fits (the width grows with the length: a binary search, a handful of measurements instead of one per character); "..." alone when no character fits with it
     local lo, hi = 0, string.len(text) - 1
     while lo < hi do
         local mid = math.floor((lo + hi + 1) / 2)
-        label:SetText(string.sub(text, 1, mid) .. '...')
+        SetRaw(label, string.sub(text, 1, mid) .. '...')
         if label.Width() <= maxW then lo = mid else hi = mid - 1 end
     end
-    label:SetText(string.sub(text, 1, lo) .. '...')
+    SetRaw(label, string.sub(text, 1, lo) .. '...')
 end
 
 local fitCache, fitCount = {}, 0
 
---- Fit() for rows that are bound again and again (a scrolled list): the cut text is remembered per (font height, width, text), so a name seen before costs no measuring, and a label that
+--- Fit() for rows that are bound again and again (a scrolled list): the cut text is remembered per (font, font height, width, text), so a name seen before costs no measuring, and a label that
 --- shows the text already is not touched.
 function FitCached(label, text, maxW)
     text = tostring(text or '')
-    local key = label.Height() .. '|' .. maxW .. '|' .. text
+    local key = tostring(label.fontKey or '') .. '|' .. label.Height() .. '|' .. maxW .. '|' .. text
     local cut = fitCache[key]
     if cut == nil then
         Fit(label, text, maxW)
@@ -821,7 +1052,7 @@ function FitCached(label, text, maxW)
         fitCount = fitCount + 1
         return
     end
-    if label:GetText() ~= cut then label:SetText(cut) end
+    if label:GetText() ~= cut then SetRaw(label, cut) end
 end
 
 --- Word-wrapped text: one label per line, `maxW` pixels wide at most, `lineH` pixels apart, nothing below `maxBottom` when given. Returns the list of labels and the y below
@@ -829,7 +1060,7 @@ end
 function Paragraph(parent, text, x, y, maxW, opts, lineH, maxBottom)
     opts = opts or {}
     lineH = lineH or Skin.S(18)
-    local probe = Label(parent, '', x, y, opts)
+    local probe = Label(parent, '', x, y, { color = opts.color, size = opts.size, gray = opts.gray, nofit = true })
     local lines, line = {}, ''
     for word in string.gfind(text or '', '%S+') do
         local try = (line == '') and word or (line .. ' ' .. word)
@@ -976,8 +1207,9 @@ function Slider(parent, opts)
     function S:Place(x, y, w)
         S.drawnKey = nil
         S.x, S.y, S.w = x, y, w
-        CullBox(y, Skin.S(44))    -- all parts of the slider appear and disappear together at the edge of a scrolled panel
+        CullBox(y, Skin.S(44), x, w)    -- all parts of the slider appear and disappear together at the edge of a scrolled panel
         local bh, gap, fw = Skin.S(22), Skin.S(4), Skin.S(52)
+        S.label.fitCap = w
         Place(S.label, parent, x, y)
         local row = y + Skin.S(20)
         local right = x + w
@@ -986,7 +1218,8 @@ function Slider(parent, opts)
         Place(S.plus, parent, right - fw - gap - bh, row, bh, bh)
         Place(S.minus, parent, right - fw - 2 * gap - 2 * bh, row, bh, bh)
         S.trackLeft = x
-        S.trackW = math.max(Skin.S(30), w - fw - 3 * gap - 2 * bh - Skin.S(8))
+        local rawTrack = w - fw - 3 * gap - 2 * bh - Skin.S(8)
+        S.trackW = math.max(Skin.S(10), rawTrack)
         if opts.compact then
             -- two sliders side by side in a narrow panel: bar and field take the lower line, the small - / + buttons sit at the right end of the
             -- label line (the label is cut to what is left of it)
@@ -994,12 +1227,27 @@ function Slider(parent, opts)
             Place(S.plus, parent, right - sb, y, sb, sb)
             Place(S.minus, parent, right - 2 * sb - Skin.S(2), y, sb, sb)
             Fit(S.label, opts.label, w - 2 * sb - gap - Skin.S(4))
-            S.trackW = math.max(Skin.S(30), w - fw - gap - Skin.S(4))
+            rawTrack = w - fw - gap - Skin.S(4)
+            S.trackW = math.max(Skin.S(10), rawTrack)
         end
+        -- no room for a bar that can be used: the - / + buttons and the value field stay, the bar does not overlap them
+        S.noTrack = rawTrack < Skin.S(24)
         local th = Skin.S(6)
         Place(S.track, parent, S.trackLeft, row + math.floor((bh - th) / 2), S.trackW, th)
+        S:ShowBar()
         S:Refresh()
         CullBox(false)
+    end
+
+    --- Shows or hides the bar, its fill and its thumb: hidden when the slider has no room for them (S.noTrack), shown again when it has (never un-hides what a panel hid itself).
+    function S:ShowBar()
+        if S.noTrack then
+            S.barHidden = true
+            S.track:Hide() S.fill:Hide() S.thumb:Hide()
+        elseif S.barHidden then
+            S.barHidden = false
+            S.track:Show() S.fill:Show() S.thumb:Show()
+        end
     end
 
     function S:Refresh()
@@ -1011,7 +1259,7 @@ function Slider(parent, opts)
         S.drawnKey = key
         local t = ToT(v)
         local bh, th, tw = Skin.S(22), Skin.S(6), Skin.S(10)
-        CullBox(S.y or 0, Skin.S(44))
+        CullBox(S.y or 0, Skin.S(44), S.x or 0, S.w or 0)
         Place(S.fill, parent, S.trackLeft or 0, (S.y or 0) + Skin.S(20) + math.floor((bh - th) / 2), math.max(1, math.floor((S.trackW or 1) * t)), th)
         Place(S.thumb, parent, (S.trackLeft or 0) + math.floor((S.trackW or 1) * t) - math.floor(tw / 2), (S.y or 0) + Skin.S(20) + 1, tw, bh - 2)
         CullBox(false)

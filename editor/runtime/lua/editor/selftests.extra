@@ -61,3 +61,4 @@ selftest_perfbudget
 selftest_missionsim
 selftest_missiondry
 selftest_missionfuzz
+selftest_uilayout

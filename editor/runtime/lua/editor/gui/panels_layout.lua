@@ -685,8 +685,16 @@ Panels.Register{
             for _, b in P.swatches do table.insert(sw, { b, Skin.S(22) }) end
             y = W.Flow(group, sw, pad, y, w - 2 * pad, Skin.S(22), Skin.S(3)) + Skin.S(4)
             local cw = math.floor((w - 4 * pad) / 3)
-            for k, s2 in P.csliders do s2:Place(pad * k + cw * (k - 1), y, cw) end
-            y = y + Skin.S(50)
+            if cw >= Skin.S(112) then
+                for k, s2 in P.csliders do s2:Place(pad * k + cw * (k - 1), y, cw) end
+                y = y + Skin.S(50)
+            else
+                -- too narrow for three side by side (a bar, a value field and two small buttons each): one under the other
+                for _, s2 in P.csliders do
+                    s2:Place(pad, y, w - 2 * pad)
+                    y = y + Skin.S(50)
+                end
+            end
             W.Place(P.imgLabel, group, pad, y)
             y = y + Skin.S(20)
             y = W.Flow(group, { { P.imgBtn, Skin.S(130) } }, pad, y, w - 2 * pad, Skin.S(24), Skin.S(3)) + Skin.S(3)
