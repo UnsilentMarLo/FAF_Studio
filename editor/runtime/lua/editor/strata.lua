@@ -611,7 +611,9 @@ function Dab(cx, cz, brush, weight, slot)
                         local base = byte(beforeBytes, li)
                         local cov = covA[li] or 0
                         if add then
-                            cov = 1 - (1 - cov) * (1 - math.min(0.999, wt * frac))
+                            local c = wt * frac
+                            if c > 0.999 then c = 0.999 end
+                            cov = 1 - (1 - cov) * (1 - c)
                             covA[li] = cov
                         elseif wt * frac > cov then
                             cov = wt * frac
@@ -629,9 +631,11 @@ function Dab(cx, cz, brush, weight, slot)
                             if e < 0 then e = 0 end
                         end
                         if erase then
-                            e = math.min(e, e0 * (1 - cov))
+                            local t = e0 * (1 - cov)
+                            if t < e then e = t end
                         elseif e0 < target then
-                            e = math.max(e, e0 + (target - e0) * cov)
+                            local t = e0 + (target - e0) * cov
+                            if t > e then e = t end
                         end
                         -- Encode
                         local new
