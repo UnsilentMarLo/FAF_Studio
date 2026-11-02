@@ -228,6 +228,20 @@ local HEADER = "--[[                                                            
                "--[[  Scenario                                                                 ]]--\n" ..
                "--[[                                                                           ]]--\n"
 
+--- The steps SaveAsCore takes before it writes the document's Scenario table (the army list follows the start markers, the mission fills in army plans): code that serialises the
+--- document ahead of a save (maps.lua's autosave) calls this first so its text is the one SaveAs would write. Both are idempotent.
+function PrepareSave()
+    if not Doc then return end
+    pcall(function() import('/lua/editor/armies.lua').Sync(Doc) end)
+    pcall(function() import('/lua/editor/mission.lua').PrepareArmies() end)
+end
+
+--- The text of `_save.lua`: the header and the Scenario table (markers, areas, armies, units, platoons). `pace` (optional) is called every few hundred tables and may coroutine.yield():
+--- a caller that runs this in a coroutine serialises a big document in slices over many frames (luaser.lua). SaveAs takes the text as `opts.saveText` when the caller made it ahead.
+function SaveText(pace)
+    return HEADER .. Ser.Chunk({ { 'Scenario', Doc.save } }, pace)
+end
+
 local function Basename(path)
     local base = string.gsub(path, '\\', '/')
     base = string.gsub(base, '/+$', '')
@@ -318,7 +332,7 @@ function SaveAsCore(diskDir, stem, opts)
     end
     local ok = ed_write_file(diskDir .. '/' .. stem .. '_scenario.lua',
                              Ser.ScenarioChunk(info))
-    ok = ed_write_file(diskDir .. '/' .. stem .. '_save.lua', HEADER .. Ser.Chunk({ { 'Scenario', Doc.save } })) and ok
+    ok = ed_write_file(diskDir .. '/' .. stem .. '_save.lua', (opts and opts.saveText) or SaveText()) and ok
     ok = ed_write_file(diskDir .. '/' .. stem .. '_script.lua', script) and ok
     if info.TerrainMesh then
         local copied, why = import('/lua/editor/meshmap.lua').CopyTerrain(diskDir)

@@ -31,7 +31,7 @@ end
 --
 -- `pace` (optional) is called every PACE_EVERY tables: code that serialises a big document in slices passes a function that coroutine.yield()s when its time slice is used up.
 
-local PACE_EVERY = 200
+local PACE_EVERY = 32
 local floor, getn, find, concat, sort, rep = math.floor, table.getn, string.find, table.concat, table.sort, string.rep
 
 local function OtherKeyLess(a, b) return tostring(a) < tostring(b) end
