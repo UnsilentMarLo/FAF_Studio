@@ -8,6 +8,7 @@ Read `README.md` and `docs/REPOSITORY.md` first. These rules are mandatory for w
 - Reading a nil field is silent, writing into nil crashes: create every table you write into. Numbers are 32-bit floats.
 - `import('/lua/...')` with absolute lowercase paths; module globals are module fields. Closures in `for` loops share the loop variable: copy it to a local.
 - Modules are cached per process: restart the test instance after a Lua edit.
+- `type()` of a native function (`ConExecute`, `ed_*`) is `'cfunction'`, not `'function'`: a check `type(f) == 'function'` rejects every native.
 - A hook under `editor/runtime/schook/<vfs path>` is appended to the base file and compiled as one chunk: mirror the full VFS path, wrap in `do ... end`, no top-level `local`,
   call the old function with all arguments. Read the base definition first (a FAForever/fa checkout, `FAF_STUDIO_FAF_REPO`).
 
@@ -23,6 +24,10 @@ Read `README.md` and `docs/REPOSITORY.md` first. These rules are mandatory for w
 - `python scripts/studio.py check` (lint, generated files) after any change; for UI work start a test instance and look at the result with `editor_inst.py shot`.
 - A test instance has its own tag; never stop a process by name, only by the pid an instance wrote. Do not touch other people's instances.
 - Never enable page heap or change the FAF installation; never overwrite `ForgedAlliance.exe`; never commit or upload an exe.
+
+- A change is not done until it ran in an instance and you looked at it (screenshot, perf report, log). "Could not run it" means unverified: say so, do not ship the guess.
+- Run the selftests of what you touched, `studio.py check`, and for layout / frame cost the nightly steps `layout` and `perf` (`python scripts/editor_nightly.py --tag <own tag> --skip <others>`). A performance or layout fix needs a before / after number from them.
+- Git Bash rewrites `/maps/...` arguments: `export MSYS_NO_PATHCONV=1` before `editor_inst.py start --map /maps/...`; a worktree needs `--editor $(pwd -W)/editor/runtime`.
 
 ## Engine
 
