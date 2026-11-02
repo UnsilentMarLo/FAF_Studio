@@ -648,7 +648,16 @@ end
 
 --- strings_db entries of the name and the description.
 function StringsText(spec)
-    local function Esc(s) return (string.gsub(tostring(s or ''), '"', '\\"')) end
+    -- the file is Lua (key="text"): backslash, quote and line breaks must be escaped or one odd name makes the whole strings file unloadable
+    local function Esc(s)
+        s = tostring(s or '')
+        s = string.gsub(s, '\\', '\\\\')
+        s = string.gsub(s, '"', '\\"')
+        s = string.gsub(s, '\n', '\\n')
+        s = string.gsub(s, '\r', '')
+        s = string.gsub(s, '%c', ' ')
+        return s
+    end
     return MARK .. '\n-- <LOC key>text in the blueprint falls back to the text when the key is not in a strings_db.lua; add these lines to /loc/<language>/strings_db.lua to translate\n' ..
         spec.id .. '_name="' .. Esc(spec.name) .. '"\n' .. spec.id .. '_desc="' .. Esc(spec.description) .. '"\n'
 end

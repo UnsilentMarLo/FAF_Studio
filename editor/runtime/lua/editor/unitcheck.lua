@@ -226,6 +226,47 @@ local function ScmInfo(path)
     return c
 end
 
+-- ---- the gate before Write -------------------------------------------------------------------------------------------------------------------------
+
+--- What bpedit.Write asks before it writes a new unit's generated text files: do they compile, does the blueprint have the parts the game reads while it loads blueprints? Looks at what the
+--- wizard WOULD write (no files). -> list of problem texts (empty = write). A unit that fails here would have stopped the game's blueprint loading or the unit script's import, so its files are
+--- not written (the old ones stay).
+function PreWrite(spec, edits)
+    local list = {}
+    local function Add(text) table.insert(list, text) end
+    if type(spec) ~= 'table' or not Wiz.ValidId(spec.id) then
+        Add('the unit id is not valid (lower case letters and digits, a letter first, at least 6 characters)')
+        return list
+    end
+    local ok, text = pcall(Wiz.BlueprintText, spec, edits)
+    if not ok then
+        Add('the blueprint could not be generated: ' .. tostring(text))
+    else
+        local bp, why = LoadBlueprint(text)
+        if not bp then
+            Add('the blueprint does not compile: ' .. tostring(why))
+        else
+            if type(bp.Categories) ~= 'table' or table.getn(bp.Categories) == 0 then Add('the blueprint has no Categories') end
+            if type(bp.Economy) ~= 'table' then Add('the blueprint has no Economy table') end
+        end
+    end
+    ok, text = pcall(Wiz.ScriptText, spec)
+    if not ok then
+        Add('the script could not be generated: ' .. tostring(text))
+    else
+        local fn, err = Compile(text)
+        if not fn then Add('the script does not compile: ' .. tostring(err)) end
+    end
+    ok, text = pcall(Wiz.StringsText, spec)
+    if not ok then
+        Add('the strings could not be generated: ' .. tostring(text))
+    else
+        local fn, err = Compile(text)
+        if not fn then Add('the strings file does not compile: ' .. tostring(err)) end
+    end
+    return list
+end
+
 -- ---- the checks --------------------------------------------------------------------------------------------------------------------------------------
 
 --- Problems of one new unit. `spec` as made by unitwiz.NewSpec, `edits` the unit lab's edits of it. Reads the project's files.
