@@ -3,8 +3,10 @@
 -- The window's close button (the X) reaches the same function: the engine's WSupComFrame::OnCloseWindow calls ShowEscapeDialog(true), i.e. HandleEsc(true), while the
 -- Escape key calls HandleEsc() without it. In the editor that request runs File > Exit (unsaved changes are asked about first); before, both were turned into "no quit" and the X did nothing.
 -- Base signature: HandleEsc(quit_game)
+-- baseline: HandleEsc
 do
     local baseHandleEsc = HandleEsc
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('eschandler', getfenv(1), { 'HandleEsc' }) end)
     function HandleEsc(quit_game)
         if HasCommandLineArg('/editor') then
             if quit_game then

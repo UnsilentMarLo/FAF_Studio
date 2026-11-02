@@ -15,11 +15,17 @@ Not followed: re-exports through another module, names created with rawset / set
 An alias that the importing file also uses as another local (`local c = import(...)` at the top, `local c = {}` in a function) is ambiguous and skipped (--verbose lists them).
 Anything that still is a false positive goes into ALLOW below with the reason.
 Exit code 0 = nothing missing, 1 = missing names (listed with file:line), 2 = setup problem.
+
+Also (scripts/lua_dialect.py, `--no-dialect` skips it): the Lua 5.0 / LuaPlus dialect lint of every file under editor/runtime (`^`, `#`, `%`, `...`, string.match, goto, a module variable set
+to nil, unbalanced blocks, text templates that hold Lua source) and the rules of the hooks (editor/runtime/schook/** and mods/*/hook/**: only `do ... end` at the top level, the path is a game
+file, the old function is called with all arguments). Warnings (`loopclosure`, `hook-args`) are counted and listed with `--warnings`; errors fail the run.
 """
 import argparse
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 IMPORT_LOCAL = re.compile(r"^\s*local\s+([A-Za-z_]\w*)\s*=\s*import\(\s*'(/lua/editor/[^']+\.lua)'\s*\)\s*$")
 IMPORT_INLINE = re.compile(r"import\(\s*'(/lua/editor/[^']+\.lua)'\s*\)\.([A-Za-z_]\w*)")
@@ -137,6 +143,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--root', default=None)
     ap.add_argument('--verbose', action='store_true')
+    ap.add_argument('--no-dialect', action='store_true', help='skip the dialect and hook lint')
+    ap.add_argument('--warnings', action='store_true', help='list the dialect warnings too')
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     root = a.root or os.path.join(os.path.dirname(here), 'editor', 'runtime', 'lua')
@@ -193,7 +201,27 @@ def main():
     for f, ln, target, name in out:
         print('%s:%d  %s has no `%s`' % (f, ln, target, name))
     print('%d uses checked, %d names missing, %d ambiguous aliases skipped, %d allow-listed' % (checked, len(out), skipped, len(ALLOW)))
-    return 1 if out else 0
+    rc = 1 if out else 0
+    if not a.no_dialect:
+        import lua_dialect
+        import hook_baseline
+        game = hook_baseline.Game()
+        have = game.available()
+        errors, warnings, nfiles = lua_dialect.run(os.path.dirname(os.path.normpath(root)), (lambda rel: ('lua/' + rel[4:]).lower() in game.index if rel.lower().startswith('lua/') else rel.lower() in game.index) if have else None)
+        if have:
+            problems, build = hook_baseline.compare(game)
+            for level, text in problems:
+                warnings.append('schook/BASELINE.txt  hook-baseline  %s: %s' % (level, text))
+        for e in errors:
+            print(e)
+        if a.warnings:
+            for w in warnings:
+                print('warning: ' + w)
+        print('dialect: %d files, %d errors, %d warnings%s (hook paths and base functions checked against the installed game: %s)' % (
+            nfiles, len(errors), len(warnings), '' if a.warnings or not warnings else ' (--warnings lists them)', 'yes' if have else 'no game Lua found, structure only'))
+        if errors:
+            rc = 1
+    return rc
 
 
 if __name__ == '__main__':

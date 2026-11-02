@@ -27,7 +27,11 @@ function Show(text, done)
         map = string.sub(text, 1, nl - 1)
         err = string.sub(text, nl + 1)
     end
-    local line = 'The map ' .. map .. ' could not be opened: ' .. err
+    local full = err
+    local cut = string.find(err, 'stack traceback', 1, true)
+    if cut then err = string.sub(err, 1, cut - 1) end                           -- the dialog shows the reason, the Console the whole text
+    err = string.gsub(err, '^%.*[^:]*lua%(%d+%): ', '')
+    local line = 'The map ' .. map .. ' could not be opened: ' .. full
     WARN('EDITOR: ' .. line)
     pcall(function() import('/lua/editor/ui.lua').Say('The map ' .. map .. ' could not be opened (see the Console)') end)
     local ok, why = pcall(function()

@@ -1,6 +1,7 @@
 -- Editor sim callbacks (appended to /lua/simcallbacks.lua through the schook mechanism).
 -- UI -> sim: SimCallback({Func = 'EdResnap', Args = {...}}). Only meaningful in an /editor session; they do
 -- nothing the normal game would not allow a cheating player to do.
+-- baseline: (nothing replaced: the hook only adds entries to the Callbacks table of the base file)
 do
     local edProps = {}   -- key -> prop entity created by the editor
 

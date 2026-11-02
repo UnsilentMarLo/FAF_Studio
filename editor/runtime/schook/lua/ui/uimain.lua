@@ -1,3 +1,4 @@
+-- baseline: StartFrontEndUI
 do
     -- editor: after SessionEndGame() the engine asks for the front end; open the queued map instead
     local baseStartFrontEndUI = StartFrontEndUI

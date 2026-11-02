@@ -1,8 +1,10 @@
 -- The game's top menu (Main Menu, Restart, Exit, Save ... in lua/ui/game/tabs.lua) is not part of a test run in the editor: the editor owns leaving the run
 -- (the Stop button), restarting and quitting. In an editor session (/editor) the bar is created hidden and nothing shows it again.
 -- Base module: Create(parent), ToggleTabDisplay(state), ToggleTab(tabID), Expand(), Contract(), InitialAnimation() (module functions; `controls` is the module's control table).
+-- baseline: Create, ToggleTabDisplay, ToggleTab, Expand, InitialAnimation
 do
     local baseCreate = Create
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('tabs', getfenv(1), { 'Create', 'ToggleTabDisplay', 'ToggleTab', 'Expand', 'InitialAnimation' }) end)
     function Create(parent)
         baseCreate(parent)
         if HasCommandLineArg('/editor') then

@@ -3,6 +3,7 @@
 --   * game (sim) mods are active only when the map maker loaded them in the editor's mod browser
 --   * UI-only mods of the player are never active (they hook the same UI classes the editor builds on)
 -- The selection lives in lua/editor/mods.lua; this hook only redirects the engine's question "which mods".
+-- baseline: GetSelectedMods, AllMods, LoadModInfo
 do
     -- GetSelectedMods() -> uidSet   (base: the mod manager's `active_mods` preference)
     local baseGetSelectedMods = GetSelectedMods

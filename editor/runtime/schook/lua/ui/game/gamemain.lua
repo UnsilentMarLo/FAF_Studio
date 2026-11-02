@@ -1,5 +1,7 @@
+-- baseline: OnFirstUpdate, CreateWldUIProvider
 do
     local baseOnFirstUpdate = OnFirstUpdate
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('gamemain', getfenv(1), { 'OnFirstUpdate', 'CreateWldUIProvider' }) end)
     function OnFirstUpdate()
         -- The game's own first update builds the score UI, the army lines ... from the armies of the map. A map whose armies do not fit it (an army without a faction icon, a
         -- campaign script that creates UI) makes it raise: with the editor's start after it, the session came up as a plain game without the editor (found 2026-10-19 by

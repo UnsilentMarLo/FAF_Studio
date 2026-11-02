@@ -1,11 +1,15 @@
 -- Editor session start (hook on /lua/SinglePlayerLaunch.lua, appended to the base chunk).
 -- `main_x64_la.exe /init init_editor.lua /editor /map <name-or-scenario>` opens the map as a plain single
 -- player world: one human army, every other army a passive civilian, no AI brain, no victory condition (campaign maps: the other armies are AI armies with the campaign brain).
+-- baseline: FixupMapName, VerifyScenarioConfiguration, LaunchSinglePlayerSession, LoadScenario
 do
     local baseStartCommandLineSession = StartCommandLineSession
 
     -- the editor's session start; raises when the map cannot be opened (the caller below catches it)
     local function EditorStartSession(mapName)
+        local hookcheck = import('/lua/editor/hookcheck.lua')
+        hookcheck.Check()
+        hookcheck.Expect('SinglePlayerLaunch', getfenv(1), { 'FixupMapName', 'VerifyScenarioConfiguration' })       -- (warns; LaunchSinglePlayerSession is a local of the base file)
         if not mapName then
             error('editor: a map is required (/map <name>)')
         end

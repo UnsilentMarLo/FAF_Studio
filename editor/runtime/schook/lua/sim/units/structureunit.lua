@@ -1,8 +1,12 @@
 -- While a map is edited its structures have no tarmac (footprint decal): the editor moves a unit by taking it down and putting it up again, and the decal of the old
 -- place stayed behind (it could not be selected or removed), one more with every move. A test run creates the tarmacs (EdSetPlay in schook/lua/simcallbacks.lua).
 -- Base: StructureUnit:CreateTarmac(createAlbedoTarmac, createNormalTarmac, createGlowTarmac, orientation, tarmac, lifeTime)
+-- baseline: CreateTarmac, FlattenSkirt, FlattenSkirtHorizontally, RotateTowardsEnemy
+-- (Checked against the game's StructureUnit.lua, build 3840: nothing else in that file refers to StructureUnit, so a class that is defined later in the base file cannot keep the old parent;
+-- the files that subclass it (TStructureUnit ...) import the module after this hook ran and get the class below.)
 do
     local baseStructureUnit = StructureUnit
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('structureunit', baseStructureUnit, { 'CreateTarmac', 'FlattenSkirt', 'FlattenSkirtHorizontally', 'RotateTowardsEnemy' }) end)
     StructureUnit = ClassUnit(baseStructureUnit) {
         CreateTarmac = function(self, createAlbedoTarmac, createNormalTarmac, createGlowTarmac, orientation, tarmac, lifeTime)
             if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.EditorPlaying then

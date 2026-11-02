@@ -1,7 +1,9 @@
 -- Editor worlds have no commanders: the map's own INITIAL groups are map content and stay, but no ACU is
 -- created for any army and the armies get no AI. Nothing fires while editing: units hold fire and the armies are neutral (CreateResources below, editorsim/peace.lua).
+-- baseline: CreateInitialArmyGroup, CreateResources
 do
     local baseCreateInitialArmyGroup = CreateInitialArmyGroup
+    pcall(function() import('/lua/editor/hookcheck.lua').Expect('scenarioutilities', getfenv(1), { 'CreateInitialArmyGroup', 'CreateResources' }) end)
 
     function CreateInitialArmyGroup(strArmy, createCommander)
         if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then

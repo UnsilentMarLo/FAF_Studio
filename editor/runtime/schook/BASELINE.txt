@@ -1,0 +1,23 @@
+# Fingerprints of the game functions the schook hooks replace or wrap (scripts/hook_baseline.py). Written from the installed game.
+# game 3840
+lua/SinglePlayerLaunch.lua|FixupMapName|624fb576fe651001
+lua/SinglePlayerLaunch.lua|StartCommandLineSession|b0e030b6cdddd224
+lua/SinglePlayerLaunch.lua|VerifyScenarioConfiguration|f9feae2f734c33dd
+lua/mods.lua|AllMods|2da17baa26856349
+lua/mods.lua|GetSelectedMods|9dd710f94be826c4
+lua/mods.lua|LoadModInfo|f9ca7f2de96680da
+lua/sim/scenarioutilities.lua|CreateInitialArmyGroup|eee13792f99aeb78
+lua/sim/scenarioutilities.lua|CreateResources|09d0708eff8a530b
+lua/sim/units/structureunit.lua|CreateTarmac|4a9597b7cad7472e
+lua/sim/units/structureunit.lua|FlattenSkirt|ca8b420b333ea2e4
+lua/sim/units/structureunit.lua|FlattenSkirtHorizontally|a953c1c25cc1f01a
+lua/sim/units/structureunit.lua|RotateTowardsEnemy|fb8be5da3a6656b5
+lua/ui/uimain.lua|StartFrontEndUI|365b7b815f056e38
+lua/ui/dialogs/eschandler.lua|HandleEsc|4999401d11f2074a
+lua/ui/game/gamemain.lua|CreateWldUIProvider|2ed623a06b876ec2
+lua/ui/game/gamemain.lua|OnFirstUpdate|3c93fa36cd431c61
+lua/ui/game/tabs.lua|Create|17bedcecea5403c9
+lua/ui/game/tabs.lua|Expand|1c87f6f3d0ec1e25
+lua/ui/game/tabs.lua|InitialAnimation|2e40b1ee65c66d6b
+lua/ui/game/tabs.lua|ToggleTab|9adebb1dffb9dc37
+lua/ui/game/tabs.lua|ToggleTabDisplay|3d8a27537121686a
