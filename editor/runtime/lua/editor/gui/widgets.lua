@@ -1218,7 +1218,8 @@ function Slider(parent, opts)
         Place(S.plus, parent, right - fw - gap - bh, row, bh, bh)
         Place(S.minus, parent, right - fw - 2 * gap - 2 * bh, row, bh, bh)
         S.trackLeft = x
-        S.trackW = math.max(Skin.S(10), w - fw - 3 * gap - 2 * bh - Skin.S(8))
+        local rawTrack = w - fw - 3 * gap - 2 * bh - Skin.S(8)
+        S.trackW = math.max(Skin.S(10), rawTrack)
         if opts.compact then
             -- two sliders side by side in a narrow panel: bar and field take the lower line, the small - / + buttons sit at the right end of the
             -- label line (the label is cut to what is left of it)
@@ -1226,12 +1227,27 @@ function Slider(parent, opts)
             Place(S.plus, parent, right - sb, y, sb, sb)
             Place(S.minus, parent, right - 2 * sb - Skin.S(2), y, sb, sb)
             Fit(S.label, opts.label, w - 2 * sb - gap - Skin.S(4))
-            S.trackW = math.max(Skin.S(10), w - fw - gap - Skin.S(4))
+            rawTrack = w - fw - gap - Skin.S(4)
+            S.trackW = math.max(Skin.S(10), rawTrack)
         end
+        -- no room for a bar that can be used: the - / + buttons and the value field stay, the bar does not overlap them
+        S.noTrack = rawTrack < Skin.S(24)
         local th = Skin.S(6)
         Place(S.track, parent, S.trackLeft, row + math.floor((bh - th) / 2), S.trackW, th)
+        S:ShowBar()
         S:Refresh()
         CullBox(false)
+    end
+
+    --- Shows or hides the bar, its fill and its thumb: hidden when the slider has no room for them (S.noTrack), shown again when it has (never un-hides what a panel hid itself).
+    function S:ShowBar()
+        if S.noTrack then
+            S.barHidden = true
+            S.track:Hide() S.fill:Hide() S.thumb:Hide()
+        elseif S.barHidden then
+            S.barHidden = false
+            S.track:Show() S.fill:Show() S.thumb:Show()
+        end
     end
 
     function S:Refresh()

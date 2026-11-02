@@ -92,8 +92,8 @@ local function CrashNotice(done)
     d:Label(path, 14, y + 4, { color = c.textDim, size = 'small' })
     y = d:Text('Please send it with a short description of what you were doing. Your work is not lost: if the editor autosaved, the next window offers to restore it.', 14, y + 28, { color = c.text })
     local save = d:Button('Save diagnostics', 0, 0, 160, 28, function() CopyDiagnostics() end)
-    local continue = d:Button('Continue', 0, 0, 110, 28, function() Dialog.Close() end)
-    d:Flow({ { save, 160 }, { continue, 110 } }, y + 14, 28)
+    local keep = d:Button('Continue', 0, 0, 110, 28, function() Dialog.Close() end)
+    d:Flow({ { save, 160 }, { keep, 110 } }, y + 14, 28)
 end
 
 function Notices(done)

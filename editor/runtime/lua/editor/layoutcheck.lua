@@ -90,6 +90,19 @@ local function Scope(o)
     return nil
 end
 
+--- A panel the dock gave less width than the panel declares as its minimum (the window cannot hold the minimum of every panel at this UI scale): its controls scroll sideways, they
+--- are not measured (the dock keeps every stack at its minimum whenever the window allows it).
+local function Degraded(group)
+    local ok, res = pcall(function()
+        local ctx = group.scroll
+        local def = ctx and ctx.id and import('/lua/editor/gui/panels.lua').Get(ctx.id)
+        if not def then return false end
+        local Skin = import('/lua/editor/gui/skin.lua')
+        return ctx.holder.Width() + Skin.S(2) < Skin.S(def.minW or import('/lua/editor/gui/panels.lua').DEFAULT_MIN_W)
+    end)
+    return ok and res
+end
+
 --- { l, t, r, b, parent, kind, area } of a tracked widget, or nil when it is destroyed, hidden or in a hidden tab.
 local function Rect(e)
     local o = Object(e)
@@ -112,7 +125,7 @@ local function Rect(e)
     if t < -5000 or t > 20000 or l < -2000 or l > 20000 then return nil end
     if r - l < 2 then return nil end
     local kind, area, group = Scope(o)
-    return { l = l, t = t, r = r, b = b, parent = parent, kind = kind, area = area, group = group }
+    return { l = l, t = t, r = r, b = b, parent = parent, kind = kind, area = area, group = group, degraded = (kind == 'panel') and Degraded(group) }
 end
 
 --- The id of the panel a widget belongs to (the group a panel builds into carries it, panels.lua Register).
@@ -145,7 +158,7 @@ function Analyze(entries, where)
     local frame = Frame()
     for i, e in entries do
         local rc = Rect(e)
-        if rc then
+        if rc and not rc.degraded then
             rects[i] = rc
             local name = where .. ' > ' .. Name(e)
             local pid = PanelOf(Object(e))

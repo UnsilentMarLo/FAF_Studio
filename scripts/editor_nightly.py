@@ -14,8 +14,10 @@ Steps (each one is pass / fail in the report; the exit code is 0 only when all p
               button and menu item has a tooltip text (tipcheck.lua; texts in tipdata.lua / tooltips.lua)
   workspaces  every workspace is shown at UI 100 % and 150 %; the tool is one the workspace offers; a screenshot of each is analysed
               (not blank, has the dark UI chrome, the viewport shows terrain) and kept in <out>/shots
-  layout      layoutcheck.lua: no button, slider or field runs past the edge of its panel, no two overlap, no button text is wider than its button; every workspace at
-              UI 100 % and 150 % at the instance's window size, and every panel on its own
+  layout      layoutcheck.lua: every control (buttons, sliders, fields, labels, paragraph lines, list rows) stays inside the area the user sees (the panel, the dialog box, the window), no two
+              overlap, no text is wider than its box. Run at 1920x1080 and 1280x720 (the instance is restarted at each size; the engine window cannot be resized while it runs) and UI 100 /
+              150 / 200 %: every workspace, the same after a smaller dock area and with every split pulled to its narrowest / widest, every panel on its own, the dialogs (also with long
+              map names and every empty status line filled with a long error text), the bars, and at 150 / 200 % in 1280x720 every button of every panel pressed (the dialogs they open)
   log         the editor log after all of it: LazyVar warnings, "failed" lines of the GUI, Lua errors, missing textures
   maps        scripts/editor_maps_qa.py: a big and a small real map are opened, edited, undone exactly, saved as and reopened (checksums, counts)
   selfloop    scripts/editor_selftest_loop.py: every self test N times in one process, shuffled (order dependence, shared state)
