@@ -71,7 +71,11 @@ local function Scope(o)
         local okS, ctx = pcall(function() return c.scroll end)
         if okS and ctx then
             local rc = RectOf(ctx.holder)
-            if rc then return 'panel', rc, c end
+            -- the overlay scrollbar takes the right edge of the panel: the controls end before it (the dock tells a panel its width less the bar)
+            if rc then
+                rc.r = rc.r - import('/lua/editor/gui/skin.lua').S(import('/lua/editor/gui/skin.lua').size.scrollW)
+                return 'panel', rc, c
+            end
         end
         local okP, pid = pcall(function() return c.panelId end)
         if okP and pid == 'dialog' then

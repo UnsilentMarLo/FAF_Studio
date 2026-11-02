@@ -119,17 +119,17 @@ function Open(title, width, height, onClose)
         local o = {}
         for k, v in opts do o[k] = v end
         if not o.maxW and not o.nofit then
-            o.maxW = function() return group.Width() - sx - Skin.S(12) end
+            o.maxW = function() return group.Width() - sx - Skin.S(16) end
         end
         return d:Raise(W.Label(content, text, sx, Skin.S(y), o))
     end
     function d:Button(text, x, y, bw, bh, onClick, opts)
         -- the first button that is not Cancel is the default one: Enter in a text field presses it
         if not d.defaultAction and text ~= 'Cancel' and onClick then d.defaultAction = onClick end
-        return d:Raise(W.Button(content, text, Skin.S(x), Skin.S(y), Skin.S(math.min(bw, d:Span(x, 8))), Skin.S(bh), onClick, opts))
+        return d:Raise(W.Button(content, text, Skin.S(x), Skin.S(y), Skin.S(math.min(bw, d:Span(x, 16))), Skin.S(bh), onClick, opts))
     end
     function d:Field(x, y, fw2, fh2, opts)
-        local f = W.TextField(content, Skin.S(x), Skin.S(y), Skin.S(math.min(fw2, d:Span(x, 8))), Skin.S(fh2), opts)
+        local f = W.TextField(content, Skin.S(x), Skin.S(y), Skin.S(math.min(fw2, d:Span(x, 16))), Skin.S(fh2), opts)
         -- Enter presses the default button (unless the caller handles it), Escape closes the dialog
         if not (opts and opts.onEnter) then
             f.OnEnterPressed = function(self, text)
@@ -150,7 +150,7 @@ function Open(title, width, height, onClose)
         x = x or 14
         local list = {}
         for _, it in items do list[table.getn(list) + 1] = { d:Raise(it[1]), Skin.S(it[2]) } end
-        local bottom = W.Flow(content, list, Skin.S(x), Skin.S(y), d.width - Skin.S(x) - Skin.S(14), Skin.S(h), Skin.S(6))
+        local bottom = W.Flow(content, list, Skin.S(x), Skin.S(y), d.width - Skin.S(x) - Skin.S(18), Skin.S(h), Skin.S(6))
         return math.floor(bottom / math.max(0.5, Skin.scale) + 0.5)
     end
     --- Word-wrapped text in the box: d:Text(text, x, y[, opts]) (opts: color, size, lineH logical) -> the logical y below the last line. A hint that was a single long label.
@@ -158,14 +158,14 @@ function Open(title, width, height, onClose)
         opts = opts or {}
         local small = opts.size == 'small'
         local lineH = Skin.S(opts.lineH or (small and 15 or 18))
-        local labels, bottom = W.Paragraph(content, text, Skin.S(x), Skin.S(y), math.max(Skin.S(60), d.width - Skin.S(x) - Skin.S(14)),
+        local labels, bottom = W.Paragraph(content, text, Skin.S(x), Skin.S(y), math.max(Skin.S(60), d.width - Skin.S(x) - Skin.S(18)),
             { color = opts.color or c.textDim, size = opts.size }, lineH)
         for _, l in labels do d:Raise(l) end
         return math.floor(bottom / math.max(0.5, Skin.scale) + 0.5)
     end
     --- The logical width left of the box from x to its right margin (default 14): what a field or a slider that spans the box may be.
     function d:Span(x, margin)
-        return math.max(60, math.floor(d.width / math.max(0.5, Skin.scale) + 0.5) - x - (margin or 14))
+        return math.max(60, math.floor(d.width / math.max(0.5, Skin.scale) + 0.5) - x - (margin or 18))      -- (the default margin keeps clear of the overlay scrollbar)
     end
     --- A designed rectangle (logical x, y, w, h) kept inside the box: -> scaled x, y, w, h. `below`: logical room kept under it (for the buttons at the bottom).
     function d:Room(x, y, rw, rh, below)
