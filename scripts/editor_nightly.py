@@ -730,11 +730,7 @@ def main():
     ap.add_argument('--loop-runs', type=int, default=3, help='shuffled runs of every self test (selfloop step)')
     ap.add_argument('--sim-cycles', type=int, default=6, help='play test cycles of the simstress step')
     ap.add_argument('--maps', type=int, default=3, help='maps of the lifecycle step (half big, half small)')
-    ap.add_argument('--skip', default='', help='comma list of steps to leave out: lint, selftests, selfloop, panels, menus, clicks, tips, workspaces, log, maps, simstress, stress, perf')
-
-
-
-    ap.add_argument('--skip', default='', help='comma list of steps to leave out: lint, selftests, selfloop, panels, menus, clicks, tips, workspaces, log, maps, missionsim, simstress, stress')
+    ap.add_argument('--skip', default='', help='comma list of steps to leave out: lint, selftests, selfloop, panels, menus, clicks, tips, workspaces, log, maps, layout, missionsim, simstress, stress, perf')
     ap.add_argument('--out')
     ap.add_argument('--keep', action='store_true', help='leave the instance running at the end')
     a = ap.parse_args()
