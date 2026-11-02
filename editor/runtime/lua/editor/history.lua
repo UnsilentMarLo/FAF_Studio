@@ -10,9 +10,36 @@ local stack = {}
 local pos = 0
 local LIMIT = 200
 
+--- Entries kept at most (the oldest go first), and the bytes of Lua memory they may hold together: an entry that holds undo data in the Lua heap (a paint stroke: maskdelta.lua) says how
+--- many bytes in `entry.bytes`; the history drops the oldest entries when the sum passes MaxBytes (the newest entry is always kept). Entries with native copies (fields.lua) or the native
+--- height stack cost the Lua heap nothing and count 0. Both limits can be set (tests, a settings panel).
+MaxEntries = LIMIT
+MaxBytes = 64 * 1024 * 1024
+local total = 0         -- the bytes of the entries in the stack (each entry's `held` as it was when it joined)
+
 --- An entry that leaves the history (redo branch cut off, oldest dropped, cleared) frees what it holds: native copies of masks and terrain types (entry.release).
 local function Drop(entry)
-    if entry and entry.release then pcall(entry.release) end
+    if not entry then return end
+    total = total - (entry.held or 0)
+    entry.held = nil
+    if entry.release then pcall(entry.release) end
+end
+
+--- Drops the oldest entries until the count and the bytes are within the limits; the newest entry stays. Returns the number dropped.
+local function Trim()
+    local dropped = 0
+    while table.getn(stack) > 1 and (table.getn(stack) > MaxEntries or total > MaxBytes) do
+        Drop(table.remove(stack, 1))
+        pos = pos - 1
+        dropped = dropped + 1
+    end
+    if pos < 0 then pos = 0 end
+    return dropped
+end
+
+--- Entries and bytes held, the byte limit: for the History panel and the tests.
+function Stats()
+    return table.getn(stack), total, MaxBytes
 end
 
 --- Bumped by every push, undo and redo: whoever wants to know whether the document changed (autosave) compares it.
@@ -30,10 +57,10 @@ function Push(entry)
         Drop(table.remove(stack, i))
     end
     table.insert(stack, entry)
-    if table.getn(stack) > LIMIT then
-        Drop(table.remove(stack, 1))
-    end
+    entry.held = entry.bytes or 0
+    total = total + entry.held
     pos = table.getn(stack)
+    Trim()
     Version = Version + 1
 end
 
@@ -88,11 +115,14 @@ function Merge(count, label)
     local parts = {}
     for i = n - count + 1, n do table.insert(parts, stack[i]) end
     for i = 1, count do table.remove(stack) end
+    local bytes = 0
+    for _, part in parts do bytes = bytes + (part.held or 0) end       -- the parts' bytes are in `total` already: the merged entry stands for them
     table.insert(stack, {
         label = label or parts[1].label,
         undo = function() for i = table.getn(parts), 1, -1 do Apply(parts[i], true) end end,
         redo = function() for i = 1, table.getn(parts) do Apply(parts[i], false) end end,
-        release = function() for _, part in parts do Drop(part) end end,
+        release = function() for _, part in parts do if part.release then pcall(part.release) end end end,
+        held = bytes,
     })
     pos = table.getn(stack)
 end
@@ -105,8 +135,7 @@ end
 --- Forgets the entries that were undone (what a new edit does): code that edits the document without an entry of its own calls this first.
 function DropRedo()
     for i = table.getn(stack), pos + 1, -1 do
-        local entry = table.remove(stack, i)
-        if entry and entry.release then pcall(entry.release) end
+        Drop(table.remove(stack, i))
     end
 end
 
@@ -124,6 +153,7 @@ function Clear()
     for _, entry in stack do Drop(entry) end
     stack = {}
     pos = 0
+    total = 0
 end
 
 -- Hooks of code that edits the document without an entry of its own (the live preview of paths.lua): Before(entry) runs before an entry joins the stack (Push), PreUndo() before an

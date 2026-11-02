@@ -55,3 +55,5 @@ selftest_alphagen
 selftest_safeload
 selftest_bpedit
 selftest_modapi
+selftest_paintundo
+selftest_savejob

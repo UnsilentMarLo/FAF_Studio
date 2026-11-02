@@ -324,6 +324,7 @@ end
 function MarkClean()
     cleanVersion = import('/lua/editor/history.lua').Version
     pcall(function() import('/lua/editor/crash.lua').ClearAutosave() end)
+    AutosaveSaved()
 end
 
 local function Do(dir, stem)
@@ -393,26 +394,146 @@ end
 local AUTOSAVE_DIR = '../mapout/_autosave.v0001'
 local AUTOSAVE_STEM = '_autosave'
 AutosaveSeconds = 300
+AutosaveQuiet = 2          -- seconds without an edit and without a mouse movement before an autosave starts
+AutosaveGrace = 120        -- an autosave this many seconds overdue starts although the user keeps working (never in the middle of a stroke or drag)
+AutosaveSlice = 0.004      -- seconds of serialising per frame
 local lastVersion = 0
 local lastTime = false
 
---- Writes the open map to the autosave folder when it changed since the last autosave and AutosaveSeconds have passed. Called from the shell's tick.
-function AutosaveTick()
-    local History = import('/lua/editor/history.lua')
-    local now = GetSystemTimeSeconds()
-    if not lastTime then lastTime = now return end
-    if now - lastTime < AutosaveSeconds or History.Version == lastVersion then return end
-    lastTime = now
-    lastVersion = History.Version
-    if not Map.Doc then return end
-    local scenario, why = Map.SaveAs(AUTOSAVE_DIR, AUTOSAVE_STEM)
+-- What the autosave waits for. The save itself is one native call (ed_map_save, 150-200 ms on a 1025 map) that cannot be sliced, so it is started when the user has stopped (no edit, no mouse
+-- movement for AutosaveQuiet seconds, no brush stroke or drag), and the part that is Lua, the text of `_save.lua` (0.3 s and more on a mission map with thousands of units), is made ahead in
+-- slices of AutosaveSlice seconds over many frames (a coroutine resumed by a thread). If the document changes while that runs, the text is dropped and made again later.
+local seenVersion, seenAt, seenX, seenY = -1, 0, false, false
+local job = false          -- { co, version, doc, calls, every (pace calls per slice), slices, started }
+
+--- True while a brush stroke, an area drag or a gizmo drag is going on.
+local function Busy()
+    local busy = false
+    pcall(function()
+        local State = import('/lua/editor/ui.lua').State
+        if State.dragPointer or State.strokeTarget or State.areaStart then busy = true end
+        if import('/lua/editor/gizmo.lua').Dragging then busy = true end
+    end)
+    return busy
+end
+
+--- Notes edits and mouse movement (called at every tick): `seenAt` is when the user last did something.
+local function Watch(now, version)
+    if version ~= seenVersion then
+        seenVersion = version
+        seenAt = now
+    end
+    local x, y
+    if rawget(_G, 'GetMouseScreenPos') then
+        local pos = GetMouseScreenPos()
+        if pos then x, y = pos[1] or pos.x, pos[2] or pos.y end
+    end
+    if x ~= seenX or y ~= seenY then
+        seenX, seenY = x, y
+        seenAt = now
+    end
+end
+
+local function Written(scenario, why, version)
     if scenario then
+        lastVersion = version
         LOG('EDITOR maps: autosaved to ' .. AUTOSAVE_DIR)
         -- remembered in the user folder: if the editor is closed or dies before this is saved, the next start offers it (crash.lua)
         pcall(function() import('/lua/editor/crash.lua').NoteAutosave(Map.Doc.info and Map.Doc.info.name) end)
     else
         LOG('EDITOR maps: autosave failed: ' .. tostring(why))
     end
+end
+
+--- The job's text is ready: write the map (the native save and the small files) unless the document changed meanwhile.
+local function FinishJob(text)
+    local j = job
+    job = false
+    local History = import('/lua/editor/history.lua')
+    if not Map.Doc or Map.Doc ~= j.doc then return end
+    if History.Version ~= j.version then
+        LOG('EDITOR maps: autosave text dropped (the map changed while it was made); it is made again when the user stops')
+        return
+    end
+    if Busy() then return end
+    lastTime = GetSystemTimeSeconds()
+    local t0 = GetSystemTimeSeconds()
+    local scenario, why = Map.SaveAs(AUTOSAVE_DIR, AUTOSAVE_STEM, { saveText = text })
+    LOG(string.format('EDITOR maps: autosave: text made in %d slices over %.1f s, written in %.0f ms', j.slices, t0 - j.started, (GetSystemTimeSeconds() - t0) * 1000))
+    Written(scenario, why, j.version)
+end
+
+local function DriveJob()
+    while job do
+        if Busy() then
+            WaitFrames(10)
+        else
+            local t0 = GetSystemTimeSeconds()
+            job.calls = 0
+            local ok, text = coroutine.resume(job.co)
+            -- (the clock reads nil inside a coroutine in this engine: the slice length is counted in pace calls and tuned from the time one resume took)
+            local dt = GetSystemTimeSeconds() - t0
+            if dt <= 0.0001 then
+                job.every = math.min(4096, job.every * 2)
+            else
+                job.every = math.max(1, math.min(4096, math.floor((job.every + job.every * AutosaveSlice / dt) / 2 + 0.5)))
+            end
+            if not ok then
+                LOG('EDITOR maps: autosave text failed: ' .. tostring(text))
+                job = false
+                return
+            end
+            if coroutine.status(job.co) == 'dead' then
+                FinishJob(text)
+                return
+            end
+            job.slices = job.slices + 1
+            WaitFrames(1)
+        end
+    end
+end
+
+local function StartJob(version)
+    Map.PrepareSave()
+    local started = GetSystemTimeSeconds()
+    local function Pace()
+        job.calls = job.calls + 1
+        if job.calls >= job.every then
+            job.calls = 0
+            coroutine.yield()
+        end
+    end
+    job = { co = coroutine.create(function() return Map.SaveText(Pace) end), version = version, doc = Map.Doc, calls = 0, every = 8, slices = 0, started = started }
+    ForkThread(DriveJob)
+end
+
+--- Writes the open map to the autosave folder when it changed since the last autosave and AutosaveSeconds have passed. Called from the shell's tick (four times a second).
+function AutosaveTick()
+    local History = import('/lua/editor/history.lua')
+    local now = GetSystemTimeSeconds()
+    if not lastTime then lastTime = now return end
+    Watch(now, History.Version)
+    if job then return end
+    if now - lastTime < AutosaveSeconds or History.Version == lastVersion then return end
+    if not Map.Doc or Busy() then return end
+    local overdue = now - lastTime - AutosaveSeconds
+    if now - seenAt < AutosaveQuiet and overdue < AutosaveGrace then return end
+    if rawget(_G, 'ForkThread') and rawget(_G, 'coroutine') and Map.SaveText then
+        StartJob(History.Version)
+        return
+    end
+    -- no threads (a test harness): the whole save at once
+    lastTime = now
+    local version = History.Version
+    local scenario, why = Map.SaveAs(AUTOSAVE_DIR, AUTOSAVE_STEM)
+    Written(scenario, why, version)
+end
+
+--- A manual save has written everything: the autosave has nothing to add until the map changes again, and a text being made for it is dropped.
+function AutosaveSaved()
+    job = false
+    lastVersion = import('/lua/editor/history.lua').Version
+    lastTime = GetSystemTimeSeconds()
 end
 
 --- The autosave as a scenario path when there is one.

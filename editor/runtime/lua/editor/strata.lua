@@ -19,7 +19,8 @@
 --   Profile()                              shaders.lua Profile of the map's shader (painted layers, what layer 8 is ...)
 --   PaintCap()                             the highest layer the shader paints with a mask      WhyNotPaintable(i) -> nil | reason: the check of every tool that writes a layer mask
 --
--- Undo entries are plain { label, undo, redo } like the object edits (history.lua keeps one order for everything).
+-- Undo entries are plain { label, undo, redo } like the object edits (history.lua keeps one order for everything); a mask edit adds `bytes` (what its packed tiles hold, maskdelta.lua), which the
+-- history sums to keep its limit.
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn).
 
 Active = 1
@@ -47,6 +48,8 @@ NONE_NORMAL = '/env/common/layers/none_normal.dds'
 
 local PI = 3.14159265
 local Shaders = import('/lua/editor/shaders.lua')
+local MD = import('/lua/editor/maskdelta.lua')
+local TS = MD.TS
 
 --- The legacy terrain technique ('TTerrain') blends the painted layers 1..4 only; layers 5..8 need 'TTerrainXP' (what FAF maps use).
 local function EnsureShader(layer)
@@ -66,7 +69,7 @@ function SetXP(on)
     ed_stratum_shader(on and 'TTerrainXP' or 'TTerrain')
 end
 
-local stroke = false      -- { orig = { [cell] = value }, layer, minX, minZ, maxX, maxZ }
+local stroke = false      -- { tiles = { [tile index] = { x0, z0, tw, th, before (packed bytes), cov, dirty } }, layer, w, h, cell, last, full, any }
 local pending = false     -- the finished stroke's undo entry until ui.lua takes it
 local notice = false      -- a message for the status line (ui.lua shows it)
 
@@ -288,23 +291,32 @@ function Normalize()
 end
 
 -- ---- masks as a whole -------------------------------------------------------------------------------------------------------------------------
+-- Whole-mask edits work tile by tile (maskdelta.lua): one tile of the mask is a Lua table at a time, and the undo entry keeps the packed bytes of the tiles that changed (it used to keep
+-- two tables of w * h cells: 128 MB for one Clear on a 2048 mask).
 
-local function ReadAll(stratum)
+--- Runs `fn(values, n, x0, z0, tw, th)` on every tile of the mask of stratum `stratum`; fn returns the new values of the tile (a table of n) or nil to leave it. Returns the delta of the
+--- tiles that changed (maskdelta.lua), nil without a mask.
+local function EditTiles(stratum, fn)
     local w, h = ed_stratum_info()
     if not w then return nil end
-    local values = ed_stratum_read(stratum, 0, 0, w - 1, h - 1)
-    return values, w, h
-end
-
-local function WriteAll(stratum, values)
-    local w, h = ed_stratum_info()
-    if w then ed_stratum_write(stratum, 0, 0, w - 1, h - 1, values) end
-end
-
-local function Fill(count, value)
-    local t = {}
-    for i = 1, count do t[i] = value end
-    return t
+    local d = MD.New(stratum)
+    MD.Tiles(w, h, function(x0, z0, x1, z1)
+        local before = ed_stratum_read(stratum, x0, z0, x1, z1)
+        if not before then return end
+        local tw, th = x1 - x0 + 1, z1 - z0 + 1
+        local n = tw * th
+        local after = fn(before, n, x0, z0, tw, th)
+        if not after then return end
+        local same = true
+        for k = 1, n do
+            if after[k] ~= before[k] then same = false break end
+        end
+        if same then return end
+        MD.Add(d, x0, z0, tw, th, before, after)
+        ed_stratum_write(stratum, x0, z0, x1, z1, after, true)
+    end)
+    ed_stratum_flush()
+    return d
 end
 
 --- Swaps layer i with its neighbour (dir = +1 up, -1 down): textures, tile sizes and masks. Only the painted layers 1..8 move.
@@ -316,13 +328,19 @@ function Move(i, dir)
     end
     local function Swap()
         local a, b = Snapshot(i), Snapshot(j)
-        local ma = ReadAll(i - 1)
-        local mb = ReadAll(j - 1)
         if a.albedo ~= '' then SetTexture(j, a.albedo, a.normal, a.size, a.nsize) end
         if b.albedo ~= '' then SetTexture(i, b.albedo, b.normal, b.size, b.nsize) end
-        if ma and mb then
-            WriteAll(i - 1, mb)
-            WriteAll(j - 1, ma)
+        local w, h = ed_stratum_info()
+        if w then
+            MD.Tiles(w, h, function(x0, z0, x1, z1)
+                local ma = ed_stratum_read(i - 1, x0, z0, x1, z1)
+                local mb = ed_stratum_read(j - 1, x0, z0, x1, z1)
+                if ma and mb then
+                    ed_stratum_write(i - 1, x0, z0, x1, z1, mb, true)
+                    ed_stratum_write(j - 1, x0, z0, x1, z1, ma, true)
+                end
+            end)
+            ed_stratum_flush()
         end
     end
     Swap()
@@ -330,28 +348,46 @@ function Move(i, dir)
     return { label = 'move ' .. LayerName(i) .. (dir > 0 and ' up' or ' down'), undo = Swap, redo = Swap }
 end
 
-local function MaskEdit(i, label, make)
-    local before, w, h = ReadAll(i - 1)
-    if not before then return nil end
-    local after = make(w * h, before)
-    WriteAll(i - 1, after)
-    return {
-        label = label .. ' ' .. LayerName(i),
-        undo = function() WriteAll(i - 1, before) end,
-        redo = function() WriteAll(i - 1, after) end,
-    }
+--- An edit of the whole mask of layer i; `fn` is EditTiles's. The entry holds the changed tiles only (it is returned even when nothing changed).
+local function MaskEdit(i, label, fn)
+    local d = EditTiles(i - 1, fn)
+    if not d then return nil end
+    return MD.Entry(d, label .. ' ' .. LayerName(i))
+end
+
+local constants = {}        -- one table of 1024 cells per value: Clear / Fill hand the same table to every full tile
+
+--- The tile function of a mask edit that sets every cell to `value`.
+local function Constant(value)
+    return function(before, n)
+        local c = constants[value]
+        if not c then
+            c = {}
+            for k = 1, TS * TS do c[k] = value end
+            constants[value] = c
+        end
+        local differs = false
+        for k = 1, n do
+            if before[k] ~= value then differs = true break end
+        end
+        if not differs then return nil end
+        if n == TS * TS then return c end
+        local t = {}
+        for k = 1, n do t[k] = value end
+        return t
+    end
 end
 
 --- Removes everything painted with layer i (1..8).
 function ClearMask(i)
     if i < 1 or i > 8 then return nil end
-    return MaskEdit(i, 'clear mask of', function(count) return Fill(count, 0) end)
+    return MaskEdit(i, 'clear mask of', Constant(0))
 end
 
 --- Paints layer i (1..8) everywhere.
 function FillMask(i)
     if i < 1 or i > 8 then return nil end
-    return MaskEdit(i, 'fill mask of', function(count) return Fill(count, 255) end)
+    return MaskEdit(i, 'fill mask of', Constant(255))
 end
 
 --- Removes the texture of layer i (1..9) and everything it painted: one undo entry (nil when there is no transparent texture to put in its place). A painted layer without a texture but with a
@@ -361,21 +397,18 @@ function RemoveTexture(i)
     if i < 1 or i > 9 then return nil end
     local snap = Snapshot(i)
     local masked = (i <= 8)
-    local before
-    if masked then before = ReadAll(i - 1) end
     if not Clear(i) then return nil end
-    local w, h = ed_stratum_info()
-    local function Zero() if masked and w then WriteAll(i - 1, Fill(w * h, 0)) end end
-    Zero()
+    local d = masked and EditTiles(i - 1, Constant(0)) or nil       -- the cells it changed, packed (undo writes them back)
     return {
         label = 'remove texture of ' .. LayerName(i),
+        bytes = d and d.bytes or 0,
         undo = function()
             Restore(snap)
-            if before then WriteAll(i - 1, before) end
+            if d then MD.Apply(d, true) end
         end,
         redo = function()
             Clear(i)
-            Zero()
+            if d then MD.Apply(d, false) end
         end,
     }
 end
@@ -412,12 +445,12 @@ function AutoPaint(i, erase)
     local b = Brush
     local target = b.target / 100
     local frac = math.min(1, math.abs(b.strength) / 100)
-    return MaskEdit(i, (erase and 'auto erase of' or 'auto paint of'), function(count, before)
+    return MaskEdit(i, (erase and 'auto erase of' or 'auto paint of'), function(before, n, x0, z0, tw, th)
         local after = {}
-        for k = 1, count do after[k] = before[k] end
-        for k = 1, count do
-            local x = math.mod(k - 1, w)
-            local z = math.floor((k - 1) / w)
+        for k = 1, n do after[k] = before[k] end
+        for k = 1, n do
+            local x = x0 + math.mod(k - 1, tw)
+            local z = z0 + math.floor((k - 1) / tw)
             local slope, height = SlopeAt((x + 0.5) * cell, (z + 0.5) * cell)
             if slope >= b.minSlope and slope <= b.maxSlope and height >= b.minHeight and height <= b.maxHeight then
                 local e = Decode(before[k], full)
@@ -442,10 +475,22 @@ end
 
 local strokeSeed = 0
 
+--- The stroke's record of tile (tx, tz): the bytes the mask has there now (= before the stroke: a tile is made when the first dab reaches it), packed, and an empty coverage table.
+--- nil when the mask cannot be read.
+local function NewTile(st, tx, tz)
+    local x0, z0 = tx * TS, tz * TS
+    local x1, z1 = math.min(x0 + TS - 1, st.w - 1), math.min(z0 + TS - 1, st.h - 1)
+    local vals = ed_stratum_read(st.layer - 1, x0, z0, x1, z1)
+    if not vals then return nil end
+    local tw, th = x1 - x0 + 1, z1 - z0 + 1
+    return { x0 = x0, z0 = z0, tw = tw, th = th, before = MD.Pack(vals, tw * th), cov = {}, dirty = false }
+end
+
 function BeginStroke()
     EnsureShader(Active)
     local w, h, cell = MaskInfo()
-    stroke = { orig = {}, base = {}, cov = {}, layer = Active, w = w, h = h, cell = cell, minX = nil, last = {}, full = (Range() == 'full') }
+    stroke = { tiles = {}, layer = Active, w = w, h = h, cell = cell, last = {}, full = (Range() == 'full'), any = false }
+    if w then stroke.tilesX = math.ceil(w / TS) end
     pending = false
     strokeSeed = strokeSeed + 1
     local albedo = ed_stratum_layer(Active)
@@ -507,7 +552,8 @@ function Dab(cx, cz, brush, weight, slot)
         end
         frac = 1 - math.pow(1 - math.min(op, 0.999), ratio)
     end
-    stroke.last[slot or 1] = { cx, cz }       -- per symmetry image
+    local lastDab = stroke.last[slot or 1]          -- per symmetry image (the table is reused: a dab allocates none of its own)
+    if lastDab then lastDab[1], lastDab[2] = cx, cz else stroke.last[slot or 1] = { cx, cz } end
     local target = b.target / 100
     local useSlope = (b.minSlope > 0) or (b.maxSlope < 90)
     local useHeight = (b.minHeight > 0) or (b.maxHeight < 512)
@@ -515,93 +561,106 @@ function Dab(cx, cz, brush, weight, slot)
     -- The loop below runs once per mask cell of the dab (2500 for a radius of 50 on a 4096 map): the helpers are locals, Decode / Encode are inlined, and the cells outside the
     -- circle skip the weight call (terrain.lua's round / shaped brush weight is 0 at and beyond the radius; the stamp brush's own weight is not assumed to be a circle).
     local sqrt = math.sqrt
-    local baseT, covT, origT = stroke.base, stroke.cov, stroke.orig
     local r2 = r * r * 1.001
     local circle = (brush.mode == 'paint' or brush.mode == 'erase')
     local softMin = cell * 1.5              -- the edge is at least one and a half mask cells wide
     local scatter = b.scatter
     local full = stroke.full            -- the shader reads a mask byte as it is (Range() == 'full') instead of saturate(2m - 1)
-    for z = z0, z1 do
-        local wz = (z + 0.5) * cell
-        local dz = wz - cz
-        local dz2 = dz * dz
-        for x = x0, x1 do
-            local wx = (x + 0.5) * cell
-            local dx = wx - cx
-            local wt = 0
-            if not circle or dx * dx + dz2 < r2 then
-                wt = weight(sqrt(dx * dx + dz2), r, softMin, dx, dz)
+    local byte = string.byte
+    -- The cells are visited tile by tile (the stroke keeps, per tile, the bytes the mask had before the stroke as a packed string, and the coverage of its cells in a table of 1024):
+    -- a cell's value before the stroke is one string.byte, and the undo data of the stroke is those strings, not a table of the whole bounding box.
+    local tiles, tilesX = stroke.tiles, stroke.tilesX
+    local tx0, tx1 = math.floor(x0 / TS), math.floor(x1 / TS)
+    local tz0, tz1 = math.floor(z0 / TS), math.floor(z1 / TS)
+    for tz = tz0, tz1 do
+        for tx = tx0, tx1 do
+            local tile = tiles[tz * tilesX + tx]
+            if not tile then
+                tile = NewTile(stroke, tx, tz)
+                if not tile then return changed end
+                tiles[tz * tilesX + tx] = tile
             end
-            if wt > 0 and scatter > 0 then
-                wt = wt * (1 - scatter / 100 * Hash01(x, z, strokeSeed))
-            end
-            if wt > 0 and (useSlope or useHeight) then
-                local slope, height = Terrain(wx, wz)
-                if (useSlope and (slope < b.minSlope or slope > b.maxSlope)) or (useHeight and (height < b.minHeight or height > b.maxHeight)) then
-                    wt = 0
-                end
-            end
-            if wt > 0 then
-                local i = (z - z0) * rw + (x - x0) + 1
-                local old = values[i]
-                local key = z * w + x
-                local base = baseT[key]
-                if base == nil then
-                    base = old
-                    baseT[key] = base
-                end
-                local cov = covT[key] or 0
-                if add then
-                    cov = 1 - (1 - cov) * (1 - math.min(0.999, wt * frac))
-                    covT[key] = cov
-                elseif wt * frac > cov then
-                    cov = wt * frac
-                    covT[key] = cov
-                end
-                -- Decode: the shader reads a byte m as saturate(2 * m / 255 - 1) (full range shaders: m / 255)
-                local e0, e
-                if full then
-                    e0 = base / 255
-                    e = old / 255
-                else
-                    e0 = 2 * base / 255 - 1
-                    if e0 < 0 then e0 = 0 end
-                    e = 2 * old / 255 - 1
-                    if e < 0 then e = 0 end
-                end
-                if erase then
-                    e = math.min(e, e0 * (1 - cov))
-                elseif e0 < target then
-                    e = math.max(e, e0 + (target - e0) * cov)
-                end
-                -- Encode
-                local new
-                if e <= 0 then
-                    new = 0
-                else
-                    if e > 1 then e = 1 end
-                    if full then
-                        new = math.floor(e * 255 + 0.5)
-                    else
-                        new = math.floor((e + 1) / 2 * 255 + 0.5)
+            local beforeBytes, covA = tile.before, tile.cov
+            local zs, ze = math.max(z0, tile.z0), math.min(z1, tile.z0 + tile.th - 1)
+            local xs, xe = math.max(x0, tile.x0), math.min(x1, tile.x0 + tile.tw - 1)
+            for z = zs, ze do
+                local wz = (z + 0.5) * cell
+                local dz = wz - cz
+                local dz2 = dz * dz
+                local rowV = (z - z0) * rw - x0 + 1             -- values[rowV + x]
+                local rowT = (z - tile.z0) * tile.tw - tile.x0 + 1      -- the cell's place in the tile: rowT + x
+                for x = xs, xe do
+                    local wx = (x + 0.5) * cell
+                    local dx = wx - cx
+                    local wt = 0
+                    if not circle or dx * dx + dz2 < r2 then
+                        wt = weight(sqrt(dx * dx + dz2), r, softMin, dx, dz)
                     end
-                end
-                if new ~= old then
-                    if origT[key] == nil then origT[key] = old end
-                    values[i] = new
-                    changed = changed + 1
-                    if not stroke.minX then
-                        stroke.minX, stroke.minZ, stroke.maxX, stroke.maxZ = x, z, x, z
-                    else
-                        if x < stroke.minX then stroke.minX = x end
-                        if x > stroke.maxX then stroke.maxX = x end
-                        if z < stroke.minZ then stroke.minZ = z end
-                        if z > stroke.maxZ then stroke.maxZ = z end
+                    if wt > 0 and scatter > 0 then
+                        wt = wt * (1 - scatter / 100 * Hash01(x, z, strokeSeed))
+                    end
+                    if wt > 0 and (useSlope or useHeight) then
+                        local slope, height = Terrain(wx, wz)
+                        if (useSlope and (slope < b.minSlope or slope > b.maxSlope)) or (useHeight and (height < b.minHeight or height > b.maxHeight)) then
+                            wt = 0
+                        end
+                    end
+                    if wt > 0 then
+                        local i = rowV + x
+                        local old = values[i]
+                        local li = rowT + x
+                        local base = byte(beforeBytes, li)
+                        local cov = covA[li] or 0
+                        if add then
+                            local c = wt * frac
+                            if c > 0.999 then c = 0.999 end
+                            cov = 1 - (1 - cov) * (1 - c)
+                            covA[li] = cov
+                        elseif wt * frac > cov then
+                            cov = wt * frac
+                            covA[li] = cov
+                        end
+                        -- Decode: the shader reads a byte m as saturate(2 * m / 255 - 1) (full range shaders: m / 255)
+                        local e0, e
+                        if full then
+                            e0 = base / 255
+                            e = old / 255
+                        else
+                            e0 = 2 * base / 255 - 1
+                            if e0 < 0 then e0 = 0 end
+                            e = 2 * old / 255 - 1
+                            if e < 0 then e = 0 end
+                        end
+                        if erase then
+                            local t = e0 * (1 - cov)
+                            if t < e then e = t end
+                        elseif e0 < target then
+                            local t = e0 + (target - e0) * cov
+                            if t > e then e = t end
+                        end
+                        -- Encode
+                        local new
+                        if e <= 0 then
+                            new = 0
+                        else
+                            if e > 1 then e = 1 end
+                            if full then
+                                new = math.floor(e * 255 + 0.5)
+                            else
+                                new = math.floor((e + 1) / 2 * 255 + 0.5)
+                            end
+                        end
+                        if new ~= old then
+                            tile.dirty = true
+                            values[i] = new
+                            changed = changed + 1
+                        end
                     end
                 end
             end
         end
     end
+    if changed > 0 then stroke.any = true end
     if changed > 0 then
         ed_stratum_write(stroke.layer - 1, x0, z0, x1, z1, values, true)      -- deferred: the texture is uploaded once per mouse event (Flush)
     end
@@ -613,30 +672,26 @@ function Flush()
     ed_stratum_flush()
 end
 
---- Ends the stroke and makes its undo entry (nil when nothing changed).
+--- Ends the stroke and makes its undo entry (nil when nothing changed): the tiles the stroke changed, with the bytes before (kept from the first dab) and after (read now), packed.
 function EndStroke()
     ed_stratum_flush()
     local s = stroke
     stroke = false
     pending = false
-    if not s or not s.minX then return end
-    local layer, w = s.layer, s.w
-    local after, x0, z0, x1, z1 = ed_stratum_read(layer - 1, s.minX, s.minZ, s.maxX, s.maxZ)
-    if not after then return end
-    local rw = x1 - x0 + 1
-    local before = {}
-    for z = z0, z1 do
-        for x = x0, x1 do
-            local i = (z - z0) * rw + (x - x0) + 1
-            local o = s.orig[z * w + x]
-            if o == nil then before[i] = after[i] else before[i] = o end
+    if not s or not s.any then return end
+    local d = MD.New(s.layer - 1)
+    for _, tile in s.tiles do
+        if tile.dirty then
+            local n = tile.tw * tile.th
+            local after = ed_stratum_read(s.layer - 1, tile.x0, tile.z0, tile.x0 + tile.tw - 1, tile.z0 + tile.th - 1)
+            if after then
+                local packed = MD.Pack(after, n)
+                if packed ~= tile.before then MD.AddPacked(d, tile.x0, tile.z0, tile.tw, tile.th, tile.before, packed) end
+            end
         end
     end
-    pending = {
-        label = 'paint ' .. LayerName(layer),
-        undo = function() ed_stratum_write(layer - 1, x0, z0, x1, z1, before) end,
-        redo = function() ed_stratum_write(layer - 1, x0, z0, x1, z1, after) end,
-    }
+    if d.n == 0 then return end
+    pending = MD.Entry(d, 'paint ' .. LayerName(s.layer))
 end
 
 --- The undo entry of the stroke that just ended (once).
