@@ -68,10 +68,13 @@ function Run()
     Check('scroll: content height is the lowest edge', ctx.extent == 220)
     Check('scroll: range = content + pad - panel', ctx.maxOff == 220 + pad - 100)
     Check('scroll: control inside is placed', near.Top() == 10)
-    Check('scroll: control below is off screen', far.Top() == -20000)
-    Check('scroll: control across the edge is off screen', edge.Top() == -20000)
+    -- with an engine that clips (Control:SetClipChildren) nothing is parked: a control below or across the edge keeps its place and the engine cuts it; without, whole controls only
+    local clipped = ctx.clip
+    Check('scroll: the holder clips its descendants when the engine can', (holder.GetClipChildren ~= nil and holder:GetClipChildren() or false) == clipped)
+    Check('scroll: control below is off screen / clipped', clipped and far.Top() == 200 or far.Top() == -20000)
+    Check('scroll: control across the edge is off screen / clipped', clipped and edge.Top() == 90 or edge.Top() == -20000)
     ctx:Scroll(40)
-    Check('scroll: offset applied', ctx.off == 40 and near.Top() == -20000 and edge.Top() == 50)
+    Check('scroll: offset applied', ctx.off == 40 and (clipped and near.Top() == -30 or near.Top() == -20000) and edge.Top() == 50)
     ctx:Scroll(100000)
     Check('scroll: offset clamped to the range', ctx.off == ctx.maxOff and far.Top() == 200 - ctx.maxOff)
     Check('scroll: position remembered per panel id', W.scrollMemory['qa-scroll'] == ctx.maxOff)
@@ -93,7 +96,11 @@ function Run()
     local sl = W.Slider(content, { label = 'qa', min = 0, max = 10, step = 1, get = function() return 5 end, set = function() end })
     sl:Place(4, 70, 90)
     ctx:Update()
-    Check('scroll: slider parts leave together', sl.label.Top() == -20000 and sl.field.frame.Top() == -20000 and sl.track.Top() == -20000)
+    if clipped then
+        Check('scroll: slider parts keep their place (the engine clips them)', sl.label.Top() ~= -20000 and sl.field.frame.Top() ~= -20000 and sl.track.Top() ~= -20000)
+    else
+        Check('scroll: slider parts leave together', sl.label.Top() == -20000 and sl.field.frame.Top() == -20000 and sl.track.Top() == -20000)
+    end
     W.ScrollRelease(content)
     holder:Destroy()
     W.scrollMemory['qa-scroll'] = nil

@@ -18,7 +18,8 @@ docs/projects/editor/          design documents, QA reports, packaging / release
    (UI state) and prints the result, `shot <tag> out.png` takes a screenshot. Modules are cached per process: restart the instance after a Lua edit.
 2. Add a panel as `gui/panels_<name>.lua` (self-registering, auto-imported). Every number setting is a `W.Slider` (bar, field, minus / plus), never a bare text field.
    Every button and field needs a tooltip (`tipdata.lua`): the nightly's `tips` step fails otherwise.
-3. Lay buttons out with `W.Flow` (rows that wrap at the panel's width). A button or label whose text is wider than it is cut with "..." (`W.Fit`; `nofit = true` opts out), a label that is a direct
+3. The engine clips what lies below a control with `SetClipChildren(true)` (the scroll holder of every panel and dialog: a half visible control is drawn cut; quads of the primitive batcher are cut on the CPU,
+   triangles / lines / meshes / the world view are not). Lay buttons out with `W.Flow` (rows that wrap at the panel's width). A button or label whose text is wider than it is cut with "..." (`W.Fit`; `nofit = true` opts out), a label that is a direct
    child of a panel is cut to the panel's width, a panel that needs more width than it has scrolls sideways (the fallback, not a design: declare `minW` in `Panels.Register`, the dock keeps the stack
    that wide). Dialogs (`gui/dialog.lua`) are clamped to the window and scroll; use `d:Flow`, `d:Text`, `d:Span`, `d:Room` instead of fixed x positions. The nightly's `layout` step
    (`layoutcheck.lua`: all controls and texts, panels, dialogs, 1920x1080 and 1280x720 at UI 100 / 150 / 200 %, a smaller dock area, the narrowest docks) fails when a widget runs past the area the

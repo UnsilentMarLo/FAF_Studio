@@ -69,8 +69,8 @@ end
 
 --- Scrolling panels. Maui does not clip, so a panel whose content is taller than the panel would draw over the panel below it. The dock
 --- therefore gives every panel a content group (a child of the panel's holder) that is shifted up by the scroll offset, and Place / Label
---- position the panel's direct children with a lazy rule: a control that does not lie completely inside the holder's rectangle is moved off
---- the screen, so only whole controls are ever drawn. The content's height is the lowest edge a Place / Label call has reported; the
+--- position the panel's direct children: the engine clips the holder's descendants to its rectangle (Control:SetClipChildren). An engine without that call (ctx.clip false) gets the
+--- old rule: a control that does not lie completely inside the holder's rectangle is moved off the screen, so only whole controls are ever drawn. The content's height is the lowest edge a Place / Label call has reported; the
 --- overlay scrollbar and the mouse wheel appear when it exceeds the panel (ScrollContent, below).
 ---
 --- A panel that rebuilds its controls (Properties) calls BeginLayout(group) before and EndLayout(group) after, so the height is measured anew.
@@ -115,6 +115,12 @@ end
 
 --- Lazy vertical position of a direct child of a scroll content group: its place, or off the screen when it is not fully inside the panel.
 local function ScrollTop(c, parent, ctx, y, top, bot)
+    if ctx.clip then
+        -- the engine clips the holder's descendants (Control:SetClipChildren): a control half inside the panel is drawn as far as it is inside, nothing is parked
+        c.culledY = false
+        c.Top:Set(function() return parent.Top() + y end)
+        return
+    end
     c.Top:Set(function()
         local t = parent.Top()
         local holder = ctx.holder
@@ -130,6 +136,11 @@ end
 --- Lazy horizontal position of a direct child of a scroll content group: its place, or off the screen when it does not lie inside the panel sideways (the panel then scrolls
 --- sideways, ScrollContent). A few pixels of overshoot (the scrollbar's strip) are tolerated.
 local function ScrollLeft(c, parent, ctx, x, left, right)
+    if ctx.clip then
+        c.culledX = false
+        c.Left:Set(function() return parent.Left() + x end)
+        return
+    end
     c.Left:Set(function()
         local l = parent.Left()
         local holder = ctx.holder
@@ -336,6 +347,8 @@ function ScrollContent(holder, id)
     -- The content group is shifted up by the scroll offset, so its rectangle reaches over whatever lies above the panel (the tab strip of its dock): a scrolled panel
     -- swallowed every click on its own tab strip. The group is therefore not hit tested; the wheel over the empty parts of the panel is caught by a clear bitmap that stays
     -- on the panel's own rectangle.
+    -- the engine clips everything below the holder to its rectangle (Control:SetClipChildren, moho/editor/EdUiClip.h); an engine without it keeps the parking of whole controls
+    ctx.clip = holder.SetClipChildren ~= nil and pcall(function() holder:SetClipChildren(true) end) and true or false
     ctx.catcher = Bitmap(holder)
     ctx.catcher:SetSolidColor('00000000')
     ctx.catcher.Depth:Set(function() return holder.Depth() + 1 end)
