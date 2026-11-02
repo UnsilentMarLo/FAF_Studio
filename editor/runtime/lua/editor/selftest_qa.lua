@@ -316,7 +316,7 @@ function Run()
         M.AddNode(1, 'ready', 'raw')
         M.SetParam(1, 'ready', 1, 'code', 'this is not lua')
         local patched, how = M.PatchScript('function OnPopulate() end\nfunction OnStart(self) end\n')
-        Check('a Raw Lua syntax error is written as a stub that loads', Loads(patched) and how == 'written' and string.find(patched, 'MISSION_ERROR', 1, true) ~= nil)
+        Check('a Raw Lua syntax error only costs that node (it is left out with a WARN, the script loads, the mission is not replaced by a stub)', Loads(patched) and how == 'written' and string.find(patched, 'left out of the script', 1, true) ~= nil and string.find(patched, 'MISSION_ERROR', 1, true) == nil)
         M.Data = saved
     end
 

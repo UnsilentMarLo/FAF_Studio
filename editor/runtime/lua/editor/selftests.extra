@@ -58,3 +58,6 @@ selftest_modapi
 selftest_paintundo
 selftest_savejob
 selftest_perfbudget
+selftest_missionsim
+selftest_missiondry
+selftest_missionfuzz

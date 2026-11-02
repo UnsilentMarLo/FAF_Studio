@@ -10,8 +10,12 @@ local M = import('/lua/editor/mission.lua')
 
 local out, failed, total = {}, 0, 0
 
---   CitadelDir     where the files of the Operation Citadel map are (path prefix up to `Operation_Citadel_`); the test is skipped when the script is not there. Set it before Run().
-CitadelDir = '/tmp/claude-0/-home-user/0950802f-64ee-5af0-964b-74a587770188/scratchpad/citadel/Operation_Citadel.v0001/Operation_Citadel_'
+--   Real campaign scripts of the game (SCCA_Coop_A01 and E01, mounted from the FAF data / the user's maps folder) are read through the VFS: the test is skipped, and says so, only when the
+--   game's maps are not installed.
+CampaignMaps = {
+    { dir = '/maps/scca_coop_a01.v0017/SCCA_Coop_A01', stages = 7, entries = { 'BeginOperation', 'M2_Start', 'M3_Start', 'M4_Start', 'M5_StartDelay', 'M6_Start', 'M7_BeginMission' } },
+    { dir = '/maps/scca_coop_e01.v0023/SCCA_Coop_E01', stages = 7, entries = { 'IntroMission1', 'IntroMission2', 'IntroMission3', 'IntroMission4', 'IntroMission5', 'IntroMission6', 'IntroMission7' } },
+}
 
 local function Check(ok, text)
     total = total + 1
@@ -183,13 +187,15 @@ local function RunModel()
     local text = M.Compile(true)
     Check(loadstring(text) ~= nil, 'the compiled region loads')
     Check(string.find(text, 'Stage[4] = function', 1, true) ~= nil and string.find(text, 'Stage[1] = function', 1, true) == nil, 'only the editor stage is compiled, under its own number')
-    Check(string.find(text, 'EditorStartStage or 4', 1, true) ~= nil, 'the editor run starts at the first editor stage')
+    Check(string.find(M.Compile(true, { test = true }), 'EditorStartStage or 4', 1, true) ~= nil, 'the editor run (test copy) starts at the first editor stage')
     Check(string.find(text, 'IntroMission1', 1, true) == nil and string.find(text, 'Kill it', 1, true) == nil and string.find(text, 'BriefingData', 1, true) == nil, 'nothing of the script or its strings is in the generated text')
     local written, state2 = M.PatchScript(SCRIPT)
     Check(state2 == 'written' and string.sub(written, 1, string.len(SCRIPT)) == SCRIPT, 'the region is appended behind the unchanged script')
     local again, state3 = M.PatchScript(written)
     Check(state3 == 'written' and again == written, 'and patching again changes nothing')
-    Check(table.getn(M.Check()) == 0, 'no findings for the mixed mission')
+    local found = {}
+    for _, f in M.Check() do table.insert(found, f.sev .. ': ' .. f.text) end
+    Check(table.getn(found) == 0, 'no findings for the mixed mission (' .. table.concat(found, ' | ') .. ')')
 
     local side = M.SidecarText()
     local env = {}
@@ -217,26 +223,57 @@ local function RunModel()
     M.Data = saved
 end
 
---- The real Operation Citadel script, when its file is there (the map of the bug report).
-local function RunCitadel()
-    local base = CitadelDir
-    if not rawget(_G, 'ed_read_file') then return 'skipped (no ed_read_file)' end
-    local ok, script = pcall(ed_read_file, base .. 'script.lua')
-    if not ok or not script then return 'skipped (file not found)' end
-    local o = I.Parse(script)
-    Check(table.getn(o.stages) == 2 and o.stages[1].entry == 'IntroMission1' and o.stages[2].entry == 'IntroMission2', 'Citadel: two stages entered by IntroMission1 / IntroMission2')
-    Check(table.getn(o.objectives) == 2 and o.objectives[1].title == 'Destroy the Seraphim support Bases' and o.objectives[2].title == 'Defeat the Seraphim Commanders', 'Citadel: both objectives with their titles')
-    local ai = 0
-    for _, h in o.helpers do
-        if h.kind == 'ai module' then ai = ai + 1 end
+local function ReadVfs(vfs)
+    if not (rawget(_G, 'ed_vfs_to_disk') and rawget(_G, 'ed_read_file')) then return nil end
+    local disk = ed_vfs_to_disk(vfs)
+    return disk and ed_read_file(disk) or nil
+end
+
+local function Count(text, pattern)
+    local n = 0
+    for _ in string.gfind(text, pattern) do n = n + 1 end
+    return n
+end
+
+--- The real campaign scripts: the outline finds the stages the script has (counted independently in the text), the strings file its dialogue tables, the model rules hold for a
+--- script of 1700 lines (imported, never compiled, never saved).
+local function RunCampaign()
+    local ran, skipped = 0, {}
+    for _, c in CampaignMaps do
+        local script = ReadVfs(c.dir .. '_script.lua')
+        if not script then
+            table.insert(skipped, c.dir)
+        else
+            ran = ran + 1
+            local name = string.gsub(c.dir, '^.*/', '')
+            local o = I.Parse(script)
+            Check(table.getn(o.stages) == c.stages, name .. ': ' .. c.stages .. ' stages found (got ' .. table.getn(o.stages) .. ')')
+            for i, entry in c.entries do
+                Check(o.stages[i] and o.stages[i].entry == entry and string.find(script, 'function ' .. entry, 1, true) ~= nil, name .. ': stage ' .. i .. ' is entered by ' .. entry .. ' and that function exists in the script')
+            end
+            Check(o.lineCount == Count(script, '\n') + 1 or o.lineCount == Count(script, '\n'), name .. ': the line count matches the text (' .. tostring(o.lineCount) .. ')')
+            Check(table.getn(o.objectives) > 0 and table.getn(o.triggers) > 0, name .. ': objectives and triggers are listed (' .. table.getn(o.objectives) .. ' / ' .. table.getn(o.triggers) .. ')')
+            local strings = ReadVfs(c.dir .. '_strings.lua')
+            if strings then
+                local list = I.ParseStrings(strings)
+                Check(table.getn(list) > 10, name .. ': the strings file gives its dialogue tables (' .. table.getn(list) .. ')')
+            end
+            -- the model: imported, read-only, never compiled or saved
+            local saved = M.Data
+            M.Data = { mode = 'campaign', stages = {}, bases = {}, dialogues = {} }
+            Check(M.ImportText(script, strings, { type = 'campaign_coop' }), name .. ': the script is imported')
+            local numbered = 0
+            for _, st in M.Data.stages do if st.imported and st.info and st.info.number and st.info.number > 0 then numbered = numbered + 1 end end
+            Check(numbered == c.stages and M.ImportedStageCount() >= c.stages and M.EditorStageCount() == 0, name .. ': the ' .. c.stages .. ' numbered stages are imported, none is an editor stage (imported ' .. M.ImportedStageCount() .. ')')
+            local patched, state = M.PatchScript(script)
+            Check(state == 'none' and patched == script, name .. ': PatchScript leaves the script byte for byte as it is')
+            Check(M.SidecarText() == '' or string.find(M.SidecarText(), 'keepImport', 1, true) ~= nil, name .. ': the sidecar holds none of the imported stages')
+            Check(not M.RemoveStage(1) and not M.SetStage(1, 'name', 'x'), name .. ': an imported stage cannot be edited')
+            M.Data = saved
+        end
     end
-    Check(ai >= 4, 'Citadel: the Seraphim AI module calls are found (' .. ai .. ')')
-    local ok2, strings = pcall(ed_read_file, base .. 'strings.lua')
-    if ok2 and strings then
-        local list = I.ParseStrings(strings)
-        Check(table.getn(list) > 10 and list[1].name == 'BriefingData' and table.getn(list[1].lines) == 6, 'Citadel: BriefingData and the dialogue tables of the strings file')
-    end
-    return 'ran'
+    if ran == 0 then return 'skipped (the campaign maps are not installed: ' .. table.concat(skipped, ', ') .. ')' end
+    return 'ran on ' .. ran .. ' real script(s)'
 end
 
 function Run()
@@ -244,8 +281,8 @@ function Run()
     RunParser()
     RunStrings()
     RunModel()
-    local citadel = RunCitadel()
-    table.insert(out, 'Citadel script: ' .. citadel)
+    local campaign = RunCampaign()
+    table.insert(out, 'Real campaign scripts: ' .. campaign)
     table.insert(out, failed == 0 and ('ALL PASSED (' .. total .. ' checks)') or (failed .. ' FAILED of ' .. total))
     return table.concat(out, '\n')
 end

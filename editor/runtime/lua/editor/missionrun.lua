@@ -13,21 +13,23 @@ local UI = import('/lua/editor/ui.lua')
 
 STATE_FILE = '../mission_state.txt'
 
-State = { tick = 0, stage = 0, playing = false, scale = 1, flags = {}, objectives = {}, vars = {}, fresh = false }
+State = { tick = 0, stage = 0, playing = false, scale = 1, flags = {}, objectives = {}, vars = {}, fresh = false, flagOrder = {}, trace = {}, units = {}, eco = {}, rel = {}, ended = false, success = false }
 local logMark = 0
 
+local M = import('/lua/editor/mission.lua')
+
 local function Say(text)
-    pcall(function() UI.Say(text) end)
+    M.Safe('run panel', UI.Say, text)
 end
 
 local function Sim(func, args)
-    local ok = pcall(function() SimCallback({ Func = func, Args = args or {} }, false) end)
+    local ok = M.Safe('sim callback ' .. tostring(func), SimCallback, { Func = func, Args = args or {} }, false)
     return ok
 end
 
 --- Parses a dump written by EdMissionDump.
 function ParseState(text)
-    local s = { tick = 0, stage = 0, playing = false, scale = 1, flags = {}, objectives = {}, vars = {}, flagOrder = {} }
+    local s = { tick = 0, stage = 0, playing = false, scale = 1, flags = {}, objectives = {}, vars = {}, flagOrder = {}, trace = {}, units = {}, eco = {}, rel = {}, ended = false, success = false }
     for line in string.gfind((text or '') .. '\n', '([^\n]*)\n') do
         local _, _, key, rest = string.find(line, '^(%a+) ?(.*)$')
         if key == 'tick' then s.tick = tonumber(rest) or 0
@@ -43,6 +45,23 @@ function ParseState(text)
         elseif key == 'var' then
             local _, _, name, value = string.find(rest, '^(%S+) (.*)$')
             if name then s.vars[name] = value end
+        elseif key == 'trace' then
+            table.insert(s.trace, rest)
+        elseif key == 'ended' then
+            local _, _, e, ok = string.find(rest, '^(%d) (%d)$')
+            s.ended = (e == '1') s.success = (ok == '1')
+        elseif key == 'units' then
+            local _, _, name, n = string.find(rest, '^(%S+) (%d+)$')
+            if name then s.units[name] = tonumber(n) end
+        elseif key == 'eco' then
+            local _, _, name, mass, energy = string.find(rest, '^(%S+) (-?%d+) (-?%d+)$')
+            if name then s.eco[name] = { mass = tonumber(mass), energy = tonumber(energy) } end
+        elseif key == 'rel' then
+            local _, _, a, b, kind = string.find(rest, '^(%d+) (%d+) (%a+)$')
+            if a then s.rel[a .. '>' .. b] = kind end
+        elseif key == 'playable' then
+            local _, _, x0, y0, x1, y1 = string.find(rest, '^(-?%d+) (-?%d+) (-?%d+) (-?%d+)$')
+            if x0 then s.playable = { tonumber(x0), tonumber(y0), tonumber(x1), tonumber(y1) } end
         end
     end
     table.sort(s.flagOrder)
@@ -80,7 +99,7 @@ end
 
 --- Path of the engine log (the /log argument of the editor instance), or nil.
 function LogPath()
-    local ok, arg = pcall(function() return GetCommandLineArg('/log', 1) end)
+    local ok, arg = M.Safe('log path', GetCommandLineArg, '/log', 1)
     return ok and arg and arg[1] or nil
 end
 
@@ -92,7 +111,7 @@ function MarkLog()
 end
 
 -- engine and editor debug output that is not about the mission
-local NOISE = { 'SIMGATE', 'RECONDRIVE', 'ENABLEINTEL', 'GHOST', 'RECONFUNNEL', 'RECONDETECT', 'GetResource', 'LazyVar', 'Can\'t find texture', 'NUM PROPS', 'Detected a' }
+local NOISE = { 'SIMGATE', 'RECONDRIVE', 'ENABLEINTEL', 'GHOST', 'RECONFUNNEL', 'RECONDETECT', 'GetResource', 'LazyVar', 'Can\'t find texture', 'NUM PROPS', 'Detected a', 'zip directory', 'is not a valid .zip', 'Overwriting user key action' }       -- (the engine tries every file of the map / mod folders as an archive: not about the mission)
 
 local function IsNoise(line)
     if string.find(line, '^warning: %[%u+%]') then return true end       -- [TAG] diagnostics of the engine
@@ -119,6 +138,11 @@ function ParseLog(text)
         end
     end
     return list
+end
+
+--- Puts the mark at byte `offset` of the log (a driver that started the run knows where the log was then; the UI state of a session reload does not keep the mark).
+function SetLogMark(offset)
+    logMark = tonumber(offset) or 0
 end
 
 --- The warnings the play test raised since MarkLog().

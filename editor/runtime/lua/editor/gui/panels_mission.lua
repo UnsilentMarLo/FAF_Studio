@@ -27,7 +27,7 @@ local function ImportedStage(index)
 end
 
 local function Say(text)
-    pcall(function() UI.Say(text) end)
+    M.Safe('status line', UI.Say, text)
 end
 
 local function Dialogs() return import('/lua/editor/gui/dialogs_mission.lua') end
@@ -342,6 +342,6 @@ Panels.Register{
 --- Called by the shell about four times a second: redraws when the mission changed (undo, redo, another panel).
 function Refresh()
     for _, P in { live.stages, live.bases } do
-        if P and P.rev ~= M.Revision then pcall(P.Refresh, P) end
+        if P and P.rev ~= M.Revision then M.Safe('Mission panel refresh', P.Refresh, P) end
     end
 end

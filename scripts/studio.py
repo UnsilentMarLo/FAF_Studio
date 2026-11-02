@@ -403,7 +403,8 @@ def cmd_generate(a):
 def cmd_check(a):
     bad = []
     for name, cmd in (('lint', [sys.executable, os.path.join(HERE, 'editor_lint.py')]),
-                      ('help data', [sys.executable, os.path.join(HERE, 'gen_help.py'), '--check'])):
+                      ('help data', [sys.executable, os.path.join(HERE, 'gen_help.py'), '--check']),
+                      ('mission api', [sys.executable, os.path.join(HERE, 'editor_mission_api.py'), '--check'])):
         r = run(cmd, check=False)
         if r.returncode != 0:
             bad.append(name)

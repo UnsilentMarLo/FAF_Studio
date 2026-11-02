@@ -791,7 +791,7 @@ end
 function MissionChanged()
     local ok, changed = pcall(function()
         local M = import('/lua/editor/mission.lua')
-        return (table.getn(M.Data.stages) > 0 or table.getn(M.Data.bases or {}) > 0) and M.Revision ~= M.LoadedRevision
+        return M.NeedsReload()       -- edited since the load, or loaded from a saved map (whose script has no test hooks)
     end)
     return ok and changed
 end
@@ -801,7 +801,11 @@ function Play(stage)
         return
     end
     Safe.Try('ui:fn802', function() import('/lua/editor/unitview.lua').Close() end)        -- nothing the unit viewer made belongs in a test run
-    local scenario, why = Map.SaveAs('../mapout/_playtest.v0001', '_playtest')
+    local Mission = import('/lua/editor/mission.lua')
+    Mission.TestRun = true       -- (the mission script of this copy gets the test hooks: skip / speed / state / trace; a saved or released map never does)
+    local saved, scenario, why = pcall(Map.SaveAs, '../mapout/_playtest.v0001', '_playtest')
+    Mission.TestRun = false
+    if not saved then scenario, why = nil, scenario end
     if not scenario then
         Say('play: autosave failed: ' .. tostring(why))
         return

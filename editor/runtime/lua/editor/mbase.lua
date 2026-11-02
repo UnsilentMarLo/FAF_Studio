@@ -340,8 +340,12 @@ function Compile()
     table.insert(out, "local BaseManager = import('/lua/ai/opai/basemanager.lua')")
     table.insert(out, '')
     for _, b in bases do
+      -- (a base that cannot be generated does not take the other bases and the stages with it: its start function only warns)
+      local mark = table.getn(out)
+      local ok, err = pcall(function()
         local name = b.name
-        table.insert(out, '-- base ' .. name .. ' (army ' .. tostring(b.army) .. '): started by a Start a base node')
+        if not M.ValidName(name) then error('the base name ' .. tostring(name) .. ' is not usable (letters, digits and _)') end
+        table.insert(out, '-- base ' .. name .. ' (army ' .. M.Comment(b.army) .. '): started by a Start a base node')
         table.insert(out, 'function Base.Start_' .. name .. '()')
         table.insert(out, '    if Base.Manager_' .. name .. ' then return end')
         table.insert(out, '    local brain = GetArmyBrain(' .. Q(b.army) .. ')')
@@ -377,6 +381,15 @@ function Compile()
         end
         table.insert(out, 'end')
         table.insert(out, '')
+      end)
+      if not ok then
+        while table.getn(out) > mark do table.remove(out) end
+        M.Report('base ' .. tostring(b.name), err)
+        if M.ValidName(b.name) then
+            table.insert(out, 'function Base.Start_' .. b.name .. '() WARN(' .. Q('base ' .. b.name .. ' could not be generated: ' .. tostring(err)) .. ') end')
+            table.insert(out, '')
+        end
+      end
     end
     return out
 end

@@ -19,6 +19,7 @@ Steps (each one is pass / fail in the report; the exit code is 0 only when all p
   log         the editor log after all of it: LazyVar warnings, "failed" lines of the GUI, Lua errors, missing textures
   maps        scripts/editor_maps_qa.py: a big and a small real map are opened, edited, undone exactly, saved as and reopened (checksums, counts)
   selfloop    scripts/editor_selftest_loop.py: every self test N times in one process, shuffled (order dependence, shared state)
+  missionsim  scripts/editor_mission_sim.py: generated missions of every node type are RUN in the sim (test run), what the nodes did is compared with what they should do
   simstress   scripts/editor_sim_stress.py: play tests with timers / waits / spawns / sim callbacks, left five ways, process + crash folder checked
   perf        frame cost budgets: a 1024 map with 3000 markers, 40 areas and 150 units (perfstress.lua), the camera zoomed in on it, perf timing on for ~25 s: the Lua ms per frame of
               the ui tick, of the name labels, the slowest frame and the Lua heap growth must stay under the budgets of PERF_BUDGETS (docs/projects/editor/PERFORMANCE.md)
@@ -629,6 +630,16 @@ def step_perf(inst, rep, exe, seconds=28):
     inst.start(exe)                               # the other steps want the usual blank document
 
 
+
+def step_missionsim(inst, rep):
+    """Missions covering every node type are played in the real sim (scripts/editor_mission_sim.py): triggers fire, objectives complete, stages advance, the operation ends."""
+    cmd = [sys.executable, os.path.join(HERE, 'editor_mission_sim.py'), inst.tag]
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+    lines = [l for l in p.stdout.splitlines() if l.strip()]
+    tail = [l for l in lines if 'PASS' in l or 'FAIL' in l or l.startswith('  ') or 'cases passed' in l][-24:]
+    rep.add('missionsim', p.returncode == 0, ('every mission case ran to its end in the sim' if p.returncode == 0 else 'a mission case failed in the sim (exit %d)' % p.returncode), tail)
+
+
 def write_report(rep, outdir, tag, exe, seconds):
     ok = all(s['ok'] for s in rep.steps)
     json.dump({ 'tag': tag, 'exe': exe, 'seconds': round(seconds), 'ok': ok, 'steps': rep.steps }, open(os.path.join(outdir, 'report.json'), 'w'), indent=1)
@@ -652,6 +663,10 @@ def main():
     ap.add_argument('--sim-cycles', type=int, default=6, help='play test cycles of the simstress step')
     ap.add_argument('--maps', type=int, default=3, help='maps of the lifecycle step (half big, half small)')
     ap.add_argument('--skip', default='', help='comma list of steps to leave out: lint, selftests, selfloop, panels, menus, clicks, tips, workspaces, log, maps, simstress, stress, perf')
+
+
+
+    ap.add_argument('--skip', default='', help='comma list of steps to leave out: lint, selftests, selfloop, panels, menus, clicks, tips, workspaces, log, maps, missionsim, simstress, stress')
     ap.add_argument('--out')
     ap.add_argument('--keep', action='store_true', help='leave the instance running at the end')
     a = ap.parse_args()
@@ -681,6 +696,7 @@ def main():
         ('layout', lambda: step_layout(inst, rep)),
         ('log', lambda: step_log(inst, rep)),
         ('maps', lambda: step_maps(inst, rep, a.maps)),
+        ('missionsim', lambda: step_missionsim(inst, rep)),
         ('simstress', lambda: step_simstress(inst, rep, a.sim_cycles)),
         ('stress', lambda: step_stress(inst, rep, a.loads, outdir)),
         ('perf', lambda: step_perf(inst, rep, a.exe)),

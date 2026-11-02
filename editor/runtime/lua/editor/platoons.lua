@@ -710,13 +710,15 @@ function Problems()
             local ai = b.PlatoonAIFunction
             if ai and ai[1] and ai[1] ~= '' then
                 local ok, info = pcall(DiskGetFileInfo, ai[1])
-                if ok and not info then Add('W', label .. ': the AI file ' .. tostring(ai[1]) .. ' does not exist', 'builder', name, army) end
+                if not ok then Add('W', label .. ': the AI file ' .. tostring(ai[1]) .. ' could not be checked (' .. tostring(info) .. ')', 'builder', name, army)
+                elseif not info then Add('W', label .. ': the AI file ' .. tostring(ai[1]) .. ' does not exist', 'builder', name, army) end
             end
             for i, c in b.BuildConditions or {} do
                 if type(c) ~= 'table' or not c[1] or not c[2] or c[2] == '' then Add('E', label .. ': build condition ' .. i .. ' has no function', 'builder', name, army)
                 else
                     local ok, info = pcall(DiskGetFileInfo, c[1])
-                    if ok and not info then Add('W', label .. ': the file ' .. tostring(c[1]) .. ' of build condition ' .. i .. ' does not exist', 'builder', name, army) end
+                    if not ok then Add('W', label .. ': the file ' .. tostring(c[1]) .. ' of build condition ' .. i .. ' could not be checked (' .. tostring(info) .. ')', 'builder', name, army)
+                    elseif not info then Add('W', label .. ': the file ' .. tostring(c[1]) .. ' of build condition ' .. i .. ' does not exist', 'builder', name, army) end
                 end
             end
         end

@@ -105,7 +105,7 @@ function Run()
         M.AddLine(1, 'Plain')
         text = M.Compile(true)
         Ok(string.find(text, "{ text = 'Plain', delay = 5 },", 1, true) ~= nil, 'a line without voice stays plain')
-        Ok(string.find(text, 'Stage[ScenarioInfo.EditorStartStage or 1]()', 1, true) ~= nil, 'the mission starts at the stage a play test asks for')
+        Ok(string.find(M.Compile(true, { test = true }), 'Stage[ScenarioInfo.EditorStartStage or 1]()', 1, true) ~= nil and string.find(text, 'EditorStartStage', 1, true) == nil, 'the test copy of the mission starts at the stage a play test asks for; a saved map starts at stage 1')
         M.Data = saved
     end
 

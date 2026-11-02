@@ -10,12 +10,15 @@
 function Install()
     local SF = import('/lua/ScenarioFramework.lua')
 
-    ScenarioInfo.HumanPlayers = ScenarioInfo.HumanPlayers or {}
+    -- the human slots of a coop mission are the armies Player1 .. PlayerN (the editor's single human, the first army, is one of them only when it is named so)
+    local humans = {}
     for index, brain in ArmyBrains do
         if brain.Name and string.find(brain.Name, '^Player') then
-            ScenarioInfo.HumanPlayers[brain.Name] = index
+            humans[brain.Name] = index
         end
     end
+    if next(humans) then ScenarioInfo.HumanPlayers = humans end
+    ScenarioInfo.HumanPlayers = ScenarioInfo.HumanPlayers or {}
     if rawget(SF, 'SetSharedUnitCap') then return end
 
     --- Divides the unit cap among the living human players.

@@ -117,8 +117,9 @@ function Fixture()
     M.AddNode(1, 'ready', 'spawn')
     M.SetParam(1, 'ready', 1, 'army', 'Enemy') M.SetParam(1, 'ready', 1, 'group', 'WAVE1') M.SetParam(1, 'ready', 1, 'var', 'w')
     M.AddNode(1, 'ready', 'obj_kill') M.SetParam(1, 'ready', 2, 'var', 'w')
-    local ok, tp = M.AddNode(1, 'ready', 'timer')
-    if ok then M.AddNode(1, 'ready', 'text', nil, tp) end
+    local ok, tp = M.AddNode(1, 'ready', 'trg_timer')
+    if not ok then error('clicksweep fixture: the timer node was not added: ' .. tostring(tp)) end
+    M.AddNode(1, 'ready', 'dialogue', nil, tp)
     M.AddNode(2, 'ready', 'end')
     M.AddDialogue('Intro') M.AddLine(1, 'Commander, the enemy is near.')
     B.AddBase('Alpha', 'Enemy')

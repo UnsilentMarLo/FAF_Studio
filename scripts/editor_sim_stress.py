@@ -27,32 +27,38 @@ import editor_nightly as N  # noqa: E402
 BUILD = r"""
 local M = import('/lua/editor/mission.lua')
 local CS = import('/lua/editor/clicksweep.lua')
-pcall(CS.Fixture)
+CS.Fixture()                                    -- (an error here is an error of the run: no pcall)
 M.Data = { mode = 'both', stages = {}, bases = {}, dialogues = {} }
 M.AddStage('One') M.AddStage('Two') M.AddStage('Three')
+local added = 0
+-- a node that cannot be added is an ERROR (it used to be dropped silently: the mission then had no timers at all)
 local function node(stage, id, params, parent)
     local ok, path = M.AddNode(stage, 'ready', id, nil, parent)
-    if ok then for k, v in params do M.SetParam(stage, 'ready', path, k, v) end end
-    return ok and path
+    if not ok then error('AddNode ' .. tostring(id) .. ' failed: ' .. tostring(path)) end
+    for k, v in params do
+        local r, why = M.SetParam(stage, 'ready', path, k, v)
+        if not r then error('SetParam ' .. tostring(id) .. '.' .. tostring(k) .. ' failed: ' .. tostring(why)) end
+    end
+    added = added + 1
+    return path
 end
 M.AddDialogue('Intro') M.AddLine(1, 'Commander, hold the line.')
-node(1, 'text', { text = 'stage one', seconds = 2 })
-local t1 = node(1, 'timer', { seconds = 1 })
-if t1 then node(1, 'text', { text = 'timer 1 fired' }, t1) end
-local t2 = node(1, 'timer', { seconds = 3 })
-if t2 then
-    node(1, 'spawn', { army = 'Enemy', group = 'WAVE1', var = 'w1' }, t2)
-    node(1, 'wait', { seconds = 1 }, t2)
-    node(1, 'text', { text = 'timer 2 fired' }, t2)
-end
+node(1, 'dialogue', { text = 'stage one', seconds = 2 })
+local t1 = node(1, 'trg_timer', { seconds = 1 })
+node(1, 'dialogue', { text = 'timer 1 fired' }, t1)
+local t2 = node(1, 'trg_timer', { seconds = 3 })
+node(1, 'spawn', { army = 'Enemy', group = 'WAVE1', var = 'w1' }, t2)
+node(1, 'wait', { seconds = 1 }, t2)
+node(1, 'dialogue', { text = 'timer 2 fired' }, t2)
 node(1, 'wait', { seconds = 2 })
 node(2, 'wait', { seconds = 1 })
-node(2, 'timer', { seconds = 2 })
-node(3, 'timer', { seconds = 1 })
+node(2, 'trg_timer', { seconds = 2 })
+node(3, 'trg_timer', { seconds = 1 })
 node(3, 'end', {})
 M.Revision = M.Revision + 1
 local n = 0
-for _, s in M.Data.stages do n = n + table.getn(s.ready) end
+for _, s in M.Data.stages do for _, row in M.Flatten(_) do n = n + 1 end end
+if n ~= added then error('the mission has ' .. n .. ' nodes, ' .. added .. ' were added') end
 return 'mission nodes=' .. n .. ' findings=' .. table.getn(M.Check())
 """
 
