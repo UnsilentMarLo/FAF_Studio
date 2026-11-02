@@ -350,10 +350,11 @@ function LobbySlots()
         state[slot] = {}
         for _, k in Slots.Get(slot) do state[slot][k] = true end
         d:Label('Slot ' .. slot, 14, 72 + (slot - 1) * 28, { color = c.text })
-        for i, key in Slots.Keys do
-            local label = function() return (state[slot][key] and '[x] ' or '[  ] ') .. names[key] end
+        for i, k2 in Slots.Keys do
+            local key, mine = k2, state[slot]
+            local label = function() return (mine[key] and '[x] ' or '[  ] ') .. names[key] end
             d:Button(label(), 90 + (i - 1) * 90, 68 + (slot - 1) * 28, 86, 24, function(self)
-                state[slot][key] = not state[slot][key]
+                mine[key] = not mine[key]
                 self:SetText(label())
             end)
         end

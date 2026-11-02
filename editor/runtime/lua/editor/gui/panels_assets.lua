@@ -99,7 +99,8 @@ Panels.Register{
         end
 
         P.facetButtons = {}
-        for i = 1, 4 do
+        for n = 1, 4 do
+            local i = n
             local b = W.Button(group, '', 0, 0, Skin.S(100), Skin.S(22), function(self, event)
                 local f = P.facets and P.facets[i]
                 if not f then return end
@@ -112,7 +113,7 @@ Panels.Register{
                 end
                 Menu.Show(GetFrame(0), self.Left(), self.Bottom(), items)
             end, { tip = 'Choose the value of this filter from a menu; All shows everything.' })
-            P.facetButtons[i] = b
+            P.facetButtons[n] = b
         end
 
         P.favOnly = W.Button(group, 'Starred', 0, 0, Skin.S(64), Skin.S(22), function(self)

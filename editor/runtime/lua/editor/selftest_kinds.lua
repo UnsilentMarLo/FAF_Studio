@@ -227,6 +227,6 @@ function Run()
     for i = 1, 8 do Strata.ClearMask(i) end
     Recipes.Invalidate()
     if gpuWas and rawget(_G, 'ed_gpu_enable') then ed_gpu_enable(true) end
-    check('no field leaks', ed_field_count() == startFields, ed_field_count() - startFields)
+    check('no field leaks', ed_field_count() <= startFields, ed_field_count() - startFields)
     return Done()
 end

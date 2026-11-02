@@ -140,6 +140,9 @@ function Run()
         if sa and sb then
             for _, ext in { '.scmap', '_save.lua', '_script.lua', '_editor.lua' } do
                 local da, db = ed_read_file(a .. '/' .. stem .. ext), ed_read_file(b .. '/' .. stem .. ext)
+                -- (the map's own folder is inside the files that name its textures: /maps/_selftest_a.v0001/env/layers/maptex_...: the same name for both before comparing)
+                if da then da = string.gsub(da, '_selftest_a%.v0001', '_selftest_X.v0001') end
+                if db then db = string.gsub(db, '_selftest_b%.v0001', '_selftest_X.v0001') end
                 check('SaveAs with the text made ahead writes the same ' .. ext .. ' (' .. (da and string.len(da) or 0) .. ' bytes)', da ~= nil and da == db)
             end
             local sa1 = ed_read_file(a .. '/' .. stem .. '_scenario.lua')

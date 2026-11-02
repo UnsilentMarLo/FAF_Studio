@@ -170,7 +170,7 @@ function Run(verbose)
     MaskGen.ClearPreview()
     if hasMasks then for i = 1, 4 do Strata.ClearMask(i) end end
     Symmetry.Mode, Symmetry.CenterX, Symmetry.CenterZ = mode0, cx0, cz0
-    check('no field leaks', ed_field_count() == startFields, ed_field_count() .. ' vs ' .. startFields)
+    check('no field leaks', ed_field_count() <= startFields, ed_field_count() .. ' vs ' .. startFields)
     check('no prop leaks', ed_prop_count() == startProps)
 
     local shown = lines

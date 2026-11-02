@@ -22,10 +22,12 @@ local function Dist(a, b)
     return math.sqrt((a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]) + (a[3] - b[3]) * (a[3] - b[3]))
 end
 
+local clockStart = 100          -- the fake clock never goes back between runs (camera.lua throttles its failure log by time, kept in the module)
+
 function Run()
     out, failed = {}, 0
 
-    local clock = 100
+    local clock = clockStart
     local cam = { focus = { 0, 0, 0 }, heading = 0, pitch = 1, zoom = 30, snaps = 0 }
     local files = {}
     local calls = {}
@@ -153,6 +155,7 @@ function Run()
         clock = clock + 0.016
         cam.focus = { cam.focus[1] + 30, cam.focus[2], cam.focus[3] }
         before = cam.snaps
+        import('/lua/editor/camera.lua').CancelFocus()          -- (an animated move another test left would take its own SnapTo from the fake camera)
         import('/lua/editor/camera.lua').Update({ order = {}, registry = {} })
         Ok(cam.snaps == before + 1, 'camera.lua Update holds the camera on the unit')
         -- the overlay's per-frame call locks too (bones are drawn there)
@@ -249,6 +252,7 @@ function Run()
     if not ok then Ok(false, 'the run stopped with an error: ' .. tostring(err)) end
 
     -- put everything back
+    clockStart = clock + 10
     pcall(View.Close)
     for _, name in FAKES do rawset(_G, name, saved[name]) end
     bps.zzview01 = hadBp

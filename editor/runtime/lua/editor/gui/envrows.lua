@@ -63,14 +63,14 @@ function Build(def)
                 elseif kind == 'note' then
                     row.label = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
                 elseif kind == 'texture' then
-                    local name, sources, opts = r[3], r[4], r[5] or {}
+                    local name, sources, opts, title = r[3], r[4], r[5] or {}, r[2]
                     row.label = W.Label(group, r[2], 0, 0, { color = Skin.color.textDim })
                     row.file = W.Label(group, '', 0, 0, { color = Skin.color.text, size = 'small' })
                     row.b = W.Button(group, 'Change...', 0, 0, Skin.S(80), Skin.S(22), function()
-                        Picker.Open{ title = r[2], sources = sources, none = opts.none, thumbs = opts.thumbs, match = opts.match, current = Env.Text(name),
+                        Picker.Open{ title = title, sources = sources, none = opts.none, thumbs = opts.thumbs, match = opts.match, current = Env.Text(name),
                             done = function(path)
                                 if path == Picker.NONE then path = '' end
-                                Env.SetText(name, path, r[2])
+                                Env.SetText(name, path, title)
                             end }
                     end)
                 elseif kind == 'buttons' then

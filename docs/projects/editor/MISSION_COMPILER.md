@@ -80,7 +80,8 @@ Not run in the sim (compile / dry run only): the effect of `taunt` (sound), `vis
 the base start warns and returns), `pbm_remove` (needs a campaign brain), `transport_drop` (reached, effect on the cargo not asserted), `coop_*` beyond "does not raise" (the coop mod is replaced by
 `coopshim.lua`), anything that needs a second human.
 
-Known editor-session limit: the initial units of an army are created by the editor (`EdSpawnUnit`, no name), so "When a unit is killed" on an INITIAL unit finds nothing in a test run (units of a
-spawned group are found); the sim case uses a spawned group.
+Initial units: the game's own army setup creates the INITIAL group of an army and registers every unit's name in `ScenarioInfo.UnitNames` (the sim case `triggers` kills `UNIT_A1` of ARMY_1 and a
+"When a unit is killed" trigger on it fires); units of a spawned group are registered by the spawn. Not understood yet: an INITIAL group added to the army `Enemy` of the test world is not created
+in the test run at all (the mission's own spawn nodes create that army's units), see the open items.
 
 Screenshots of the sim test's `objectives` case: [edited in the Mission workspace](img/mission_sim_edit.png), [after the test run: the Run panel](img/mission_sim_run.png).

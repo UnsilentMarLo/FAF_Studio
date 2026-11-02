@@ -15,7 +15,7 @@ local at, doc, count, sumX, sumZ = -100, false, 0, 0, 0
 MAX_AGE = 0.4
 
 function Sums(now)
-    if doc == Map.Doc and now - at < MAX_AGE then return count, sumX, sumZ end
+    if doc == Map.Doc and now >= at and now - at < MAX_AGE then return count, sumX, sumZ end          -- (a clock that went back is not fresh)
     doc, at = Map.Doc, now
     count, sumX, sumZ = 0, 0, 0
     if not doc then return 0, 0, 0 end

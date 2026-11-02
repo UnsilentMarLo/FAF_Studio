@@ -13,6 +13,11 @@ import zlib
 
 user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
 
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)      # without it the client rectangle is reported scaled down on a scaled display (125 %: 1024 x 576 of a 1280 x 720 window) and the capture loses the right and bottom edge
+except (AttributeError, OSError):
+    user32.SetProcessDPIAware()
+
 
 def windows_of(pid):
     found = []

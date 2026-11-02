@@ -102,18 +102,17 @@ Panels.Register{
             local fy = below + Skin.S(4)
             W.Place(P.field.frame, group, pad, fy, math.max(Skin.S(60), w - 2 * pad), Skin.S(22))
             P.field.Width:Set(math.max(Skin.S(60), w - 2 * pad) - 2)
-            local bottom = h - pad - Skin.S(24)
             local listTop = fy + Skin.S(28)
-            -- the list takes what is left; it never reaches into the button row (a small panel shows fewer rows)
-            local avail = bottom - listTop - Skin.S(6)
-            if avail >= Skin.S(Skin.size.rowH) then
-                P.list:SetRect(pad, listTop, w - 2 * pad, avail)
-            else
-                P.list:SetRect(pad, -20000, w - 2 * pad, Skin.S(Skin.size.rowH))
-            end
+            local lh = math.max(Skin.S(14), P.status.Height())
+            h = math.max(h, listTop + Skin.S(Skin.size.rowH) * 3 + Skin.S(6) + lh + Skin.S(4) + Skin.S(24) + pad)          -- too little room: the panel scrolls
+            local bottom = h - pad - Skin.S(24)
+            local statusY = bottom - lh - Skin.S(4)          -- the count sits above the buttons, as wide as the panel
+            -- the list takes what is left; it never reaches into the status line (a small panel shows fewer rows)
+            local avail = statusY - listTop - Skin.S(6)
+            P.list:SetRect(pad, listTop, w - 2 * pad, avail)
             W.Place(P.apply, group, pad, bottom, Skin.S(110), Skin.S(24))
             W.Place(P.revert, group, pad + Skin.S(118), bottom, Skin.S(70), Skin.S(24))
-            W.Place(P.status, group, pad + Skin.S(200), bottom + Skin.S(5))
+            W.Place(P.status, group, pad, statusY)
             Rebuild()
             P:Refresh()
         end

@@ -190,7 +190,8 @@ function Bench()
         { 'erode_wind', { a = a, iterations = 40 } },
         { 'erode_glacier', { a = a, iterations = 100, ela = 30 } },
     }
-    for _, e in list do
+    for _, item in list do
+        local e = item
         T(e[1], function()
             local f = Fields.Op(e[1], e[2])
             Fields.Free(f)

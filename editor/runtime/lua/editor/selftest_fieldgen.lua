@@ -66,7 +66,8 @@ function Pure()
     local gpuWas = rawget(_G, 'ed_gpu_info') and ed_gpu_info(false).enabled
     if rawget(_G, 'ed_gpu_enable') then ed_gpu_enable(false) end
     -- presets: every relief has exactly the asked size, no offset, is repeatable and depends on the seed
-    for _, def in Gen.Presets do
+    for _, preset in Gen.Presets do
+        local def = preset
         local p = Copy(Gen.Settings)
         p.preset = def.id
         p.scale, p.amplitude, p.gullies, p.warp, p.detail = def.scale, def.amplitude, def.gullies, def.warp, def.detail
@@ -248,7 +249,8 @@ function Run()
     check('every undo entry was used', Fields.Run(function(S) return Fields.Checksum(S:Height()) end) == before)
 
     local startFields = ed_field_count and ed_field_count() or 0
-    if ed_field_count then check('no field leaks', startFields == startCount, tostring(startCount) .. ' -> ' .. tostring(startFields)) end
+    if ed_field_count then check('no field leaks', startFields <= startCount,          -- (fewer is fine: a field an earlier test left is released by the collector meanwhile)
+         tostring(startCount) .. ' -> ' .. tostring(startFields)) end
     local rest = string.gsub(pure, '^[^\n]*\n?', '')
     local count = table.getn(R.failures)
     for _ in string.gfind(pure, '\n  FAIL ') do count = count + 1 end

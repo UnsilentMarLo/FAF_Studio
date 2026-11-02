@@ -229,5 +229,5 @@ function Run(check)
 
     GRun.Release()
     Graph.New('t7done')
-    check('no field leaks in the node tests', ed_field_count() == startFields, ed_field_count() - startFields)
+    check('no field leaks in the node tests', ed_field_count() <= startFields, ed_field_count() - startFields)
 end

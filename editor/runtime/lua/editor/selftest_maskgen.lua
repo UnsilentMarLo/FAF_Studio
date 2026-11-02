@@ -382,7 +382,8 @@ function Run(verbose)
     Terrain.ClearHistory()
     History.Clear()
     if ed_stratum_info() then for i = 1, 8 do Strata.ClearMask(i) end end
-    check('no field leaks', ed_field_count() == startFields, ed_field_count() .. ' vs ' .. startFields)
+    check('no field leaks', ed_field_count() <= startFields,          -- (fewer is fine: a field an earlier test left is released by the collector meanwhile)
+         ed_field_count() .. ' vs ' .. startFields)
     check('no prop leaks', ed_prop_count() == startProps)
 
     local shown = lines

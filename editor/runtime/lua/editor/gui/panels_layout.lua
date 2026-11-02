@@ -482,8 +482,8 @@ Panels.Register{
             P.kindTip = Add(W.Label(group, '', 0, 0, { color = c.textDim, size = 'small' }))
             if L then
                 for _, info in Layout.Kinds[L.kind].params do
-                    local key = info.key
-                    local s = W.Slider(group, { label = info.label, min = info.min, max = info.max, step = info.step, fmt = info.fmt, get = function() return doc.layers[doc.sel] and doc.layers[doc.sel].p[key] or info.default end,
+                    local key, default = info.key, info.default
+                    local s = W.Slider(group, { label = info.label, min = info.min, max = info.max, step = info.step, fmt = info.fmt, get = function() return doc.layers[doc.sel] and doc.layers[doc.sel].p[key] or default end,
                                                 set = function(v) local l = doc.layers[doc.sel] if l then l.p[key] = v Layout.Changed() end end, tip = KEYTIP[key] })
                     table.insert(P.sliders, s)
                 end
@@ -614,10 +614,10 @@ Panels.Register{
             end, { tip = 'Turn the layout into the heights of the map (and the water level when a water layer is drawn): one undo step. The ground you have now is replaced.' })
             P.templates = {}
             for _, t in Layout.Templates do
-                local id = t.id
+                local id, name = t.id, t.label
                 table.insert(P.templates, Btn(t.label, 84, function()
                     Layout.ApplyTemplate(id)
-                    Say('template ' .. t.label .. ' drawn (the symmetry is ' .. tostring(Symmetry.Mode) .. '; one undo step)')
+                    Say('template ' .. name .. ' drawn (the symmetry is ' .. tostring(Symmetry.Mode) .. '; one undo step)')
                     local cv = live.canvas
                     if cv then cv:Refresh() end
                 end, { tip = 'Start from a drawing: ' .. t.tip .. ' This replaces what is drawn now (undo brings it back).' }))

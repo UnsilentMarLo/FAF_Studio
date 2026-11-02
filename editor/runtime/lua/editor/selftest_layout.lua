@@ -508,6 +508,6 @@ function Run()
     Layout.DefaultRes = resWas
     if docWas then Layout.Load(docWas) else Layout.New({}) end
     if gpuWas and rawget(_G, 'ed_gpu_enable') then ed_gpu_enable(true) end
-    check('no field leaks', ed_field_count() == startFields, ed_field_count() - startFields)
+    check('no field leaks', ed_field_count() <= startFields, ed_field_count() - startFields)
     return Done()
 end

@@ -1902,7 +1902,8 @@ function ReadSidecarText(text)
     local f, err = loadstring(chunk)
     if not f then return nil, { 'the mission data of the sidecar has a syntax error and was not read: ' .. OneLine(err) } end
     local env = {}
-    for _, name in { 'VECTOR3', 'VECTOR2', 'RECTANGLE' } do
+    for _, ctor in { 'VECTOR3', 'VECTOR2', 'RECTANGLE' } do
+        local name = ctor
         env[name] = function(a, b, c, d) return { a, b, c, d, type = name } end
     end
     setfenv(f, env)

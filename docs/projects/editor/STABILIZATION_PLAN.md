@@ -41,3 +41,21 @@ Native adoption of D's new calls in `markervis.lua`, `validate.lua`, `units.lua`
 4. Commit small on the group's branch; report what was verified and what was not.
 
 Integration (after the groups): `editor_merge.py try ... --test`, `studio.py check --full`, a second perf measurement against the numbers of the audit (idle: ~7 ms/s Lua, 51-58 fps on the 20x20 map).
+
+## Second round (2026-11-02): what the first round left open
+
+Fixed, each one run in an instance:
+
+* 22 loop-closure warnings of `editor_lint.py`: 16 were real bugs (every Snap command snapped by 8, every Align command named the last mode, the mission sidecar's `VECTOR3` / `VECTOR2` /
+  `RECTANGLE` all got the type `RECTANGLE`, the lobby slot buttons and the difficulty sliders all edited the last row, filter chips lifted the last filter ...). Lint: 0 warnings.
+* `selftest_t7` (the engine op `height_from_gradient` had no node: it has one now), `selftest_unitview2` (fake clock behind the module's real clocks), `selftest_resize` (the blending check read
+  the whole field), `selftest_texscale` (assumed the 8 layer layout, the default shader has four), `selftest_fieldgen` / `selftest_maskgen` (a leak check that failed when a field was freed
+  meanwhile; the same relaxation in the other 11 leak checks), `selftest_savejob` (the two saved maps name their own folder inside the .scmap), `selftest_perfbudget` (`markersig` cache believed a clock that had gone back). The shuffled loop runs 3 x all selftests without a failure.
+* The 69 layout problems of the mission and mod panels (Stages, Bases, Platoons, Run, Strings, Mods): too little height made them stack their controls, now they grow and the dock scrolls;
+  list rows no longer let the right text run into the left one; the Plan field and the Mode button wrap in a narrow panel. `layoutcheck.Known` is empty: the nightly fails on any panel.
+* `tips`: the four buttons of the New unit dialog. `editor/textlab/shot.py` is DPI aware (on a scaled display the screenshots lost the right and bottom 20 %).
+* The mission INITIAL unit claim was wrong: the game's own army setup creates the INITIAL group and registers the unit names (`triggers` sim case kills `UNIT_A1` and its trigger fires).
+
+Still open: an INITIAL group added to the army `Enemy` of the test world is not created in the test run (unexplained); a control that is only partly inside a panel is hidden (Maui has no
+clipping); ~361 bare `pcall`s (BARE_PCALLS.md); `markervis` / `validate` / `units` still walk in Lua (native batch calls exist); map open takes 13-24 s; the hybrid laptop freeze;
+the engine submodule commits are not pushed.

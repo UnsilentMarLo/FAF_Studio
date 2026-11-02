@@ -55,7 +55,8 @@ local function Ops(out, w, h)
             { 'glacier 100 it', 'erode_glacier', { a = a, iterations = 100, ela = 30 } },
             { 'settle 20 it', 'settle', { a = a, iterations = 20 } },
         }
-        for _, e in list do
+        for _, item in list do
+            local e = item
             local ms = Ms(function()
                 local main, extra = ed_field_op_multi(e[2], e[3])
                 if not main then error(e[1] .. ': ' .. tostring(extra)) end
@@ -79,7 +80,8 @@ local function Erosion(out, w, h)
             { 'droplets 1 per cell', 'erode_droplet', { density = 1 } },
             { 'stream power 10 it', 'erode_stream', { iterations = 10 } },
         }
-        for _, e in list do
+        for _, item in list do
+            local e = item
             local p = { a = hgt }
             for k, v in e[3] do p[k] = v end
             local ms = Ms(function()

@@ -211,6 +211,7 @@ function Execute(text, opts)
     local ScenarioInfo = { Options = { Difficulty = 2, EditorMode = opts.editor and true or false }, VarTable = {}, UnitNames = {}, HumanPlayers = {}, EditorPlaying = true }
     for index, name in NAMES do ScenarioInfo.UnitNames[index] = {} end
     ScenarioInfo.UnitNames[2].SIM_U9 = NewUnit(2)
+    ScenarioInfo.UnitNames[1].UNIT_A1 = NewUnit(1)          -- an INITIAL unit of ARMY_1 (the game's army setup registers it)
 
     local env = {
         ScenarioInfo = ScenarioInfo, ArmyBrains = ArmyBrains, categories = categories,

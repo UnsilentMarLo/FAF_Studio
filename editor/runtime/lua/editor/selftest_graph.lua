@@ -800,7 +800,7 @@ function Run(verbose)
     History.Clear()
     MaskGen.ClearPreview()
     if hasMasks then for i = 1, 8 do Strata.ClearMask(i) end end
-    check('no field leaks', ed_field_count() == startFields, ed_field_count() .. ' vs ' .. startFields)
+    check('no field leaks', ed_field_count() <= startFields, ed_field_count() .. ' vs ' .. startFields)
     check('no prop leaks', ed_prop_count() == startProps)
 
     local shown = lines

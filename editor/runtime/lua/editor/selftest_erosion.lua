@@ -258,7 +258,7 @@ function Run()
     Terrain.ClearHistory()
     ed_field_threads(threads0)
     local endCount = ed_field_count()
-    check('no field leaks', endCount == startCount, tostring(startCount) .. ' -> ' .. tostring(endCount))
+    check('no field leaks', endCount <= startCount, tostring(startCount) .. ' -> ' .. tostring(endCount))
 
     local head = 'PASS'
     if table.getn(failures) > 0 then head = 'FAIL (' .. table.getn(failures) .. ')' end
@@ -283,7 +283,8 @@ function Bench(which, threads)
         local n = S:Op('ridged', { width = w, height = h, seed = 3, scale = w * 0.4, octaves = 5 })
         local hgt = S:Op('affine', { a = n, mul = 55, add = 8 })
         table.insert(out, 'threads ' .. ed_field_threads() .. ', ' .. w .. ' x ' .. h .. ':')
-        for i, c in BENCH do
+        for i, case in BENCH do
+            local c = case
             if not which or which == i then
                 local p = {}
                 for k, v in c[3] do p[k] = v end

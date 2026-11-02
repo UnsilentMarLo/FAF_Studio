@@ -445,20 +445,23 @@ function Open(spec)
         for _, b in chipList do b:Destroy() end
         chipList = {}
         local items = {}
-        for f, v in S.filters do table.insert(items, { text = tostring(v), lift = function() S.filters[f] = nil end }) end
+        for f, v in S.filters do
+            local facet = f
+            table.insert(items, { text = tostring(v), lift = function() S.filters[facet] = nil end })
+        end
         if S.folder then table.insert(items, { text = tostring(S.folder), lift = function() S.folder = false end }) end
         if S.onlyFav then table.insert(items, { text = 'Starred', lift = function() S.onlyFav = false end }) end
         if S.recent then table.insert(items, { text = 'Recent', lift = function() S.recent = false end }) end
         local x = sideW + 8
         local limit = totalW - 14 - 120
         for _, it in items do
-            local text = it.text
+            local text, lift = it.text, it.lift
             if string.len(text) > 28 then text = '...' .. string.sub(text, string.len(text) - 24) end
             local probe = W.Label(d.group, text .. '  x', 0, 0, {})
             local bw = math.floor(probe.Width() / sc) + 14
             probe:Destroy()
             if x + bw > limit then break end
-            local b = d:Button(text .. '  x', x, 58, bw, 20, function() it.lift() Rebuild() end, { tip = 'Lift this filter.' })
+            local b = d:Button(text .. '  x', x, 58, bw, 20, function() lift() Rebuild() end, { tip = 'Lift this filter.' })
             table.insert(chipList, b)
             x = x + bw + 4
         end

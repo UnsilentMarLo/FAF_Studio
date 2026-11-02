@@ -83,6 +83,7 @@ function Run()
         table.insert(lines, '  skip texture set checks: no map open')
     else
         local saved, theme0, shader0 = {}, TexSets.Theme, ed_stratum_shader()
+        if shader0 ~= 'TTerrainXP' then ed_stratum_shader('TTerrainXP') end          -- the 8 layer layout (grass 1, rock 2) the checks below expect; the default TTerrain has four layers and another order (restored at the end)
         for i = 0, 9 do saved[i] = Strata.Snapshot(i) end
         local ok, err = pcall(function()
             local grass = TexSets.TextureFor('grass', 'temperate')

@@ -158,13 +158,7 @@ local function Px(n) return math.floor(n + 0.5) end
 --- Panels with problems that belong to the files of another group of the 2026-11 stabilization (docs/projects/editor/STABILIZATION_PLAN.md): the layout group does not edit
 --- them. Their problems are measured and kept apart (TakeKnown), the nightly reports them as "known" next to the result instead of failing on them. Empty this table when the owners
 --- have fixed their panels (the nightly then fails on them like on any other).
-Known = {
-    stages = 'group E, gui/panels_mission.lua',
-    bases = 'group E, gui/panels_mission.lua',
-    platoons = 'group E, gui/panels_platoons.lua',
-    run = 'group E, gui/panels_missionrun.lua',
-    mods = 'group F, gui/panels_mods.lua',
-}
+Known = {}
 local knownLines = {}
 
 --- The problems found in the panels of Known since the last call -> list of "where > text (owner)"; clears the list.

@@ -218,7 +218,8 @@ function Form(o)
             local each = math.floor((inner - 12) / 3)
             local names = { 'easy', 'normal', 'hard' }
             d:Label(p.label, 14, y - 4, { color = c.textDim, size = 'small' })
-            for i = 1, 3 do
+            for n = 1, 3 do
+                local i = n
                 AddSlider(d, { label = names[i], min = p.min or 0, max = p.max or 100, step = (p.max or 100) <= 100 and 1 or 5, fmt = '%d', compact = true,
                     get = function() local v = o.get(key) return tonumber(type(v) == 'table' and v[i]) or (p.default and p.default[i]) or 0 end,
                     set = function(val)
@@ -226,7 +227,7 @@ function Form(o)
                         if type(v) ~= 'table' then v = Copy(p.default) or { 0, 0, 0 } end
                         v[i] = val
                         o.set(key, v, true)
-                    end }, 14 + (i - 1) * (each + 6), y + 14, each)
+                    end }, 14 + (n - 1) * (each + 6), y + 14, each)
             end
         elseif p.kind == 'bool' then
             d:Label(p.label, 14, y + 4, { color = c.text, maxW = labelRoom })

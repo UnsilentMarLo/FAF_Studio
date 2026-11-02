@@ -53,8 +53,7 @@ function World()
     local enemy = save.Armies.Enemy.Units.Units
     -- a real run starts from exactly these initial units (leftovers of other tests in the open map would change the unit counts); a selftest only adds its own
     if Reset then enemy.INITIAL.Units = {} end
-    -- (a unit of a spawned group: its name is registered in ScenarioInfo.UnitNames by the spawn. The initial units of an EDITOR session are created by the editor itself
-    -- (EdSpawnUnit, no name), so a "unit is killed" trigger on one of those finds nothing in a test run)
+    -- (a unit of a spawned group: its name is registered in ScenarioInfo.UnitNames by the spawn; so is the name of an INITIAL unit the game's army setup creates: UNIT_A1)
     enemy.SIM_ONE = Group({ SIM_U9 = Unit('uel0106', 200, 200) })
     enemy.SIM_WAVE1 = Group(Units('uel0106', 3, 150, 150))
     for d = 1, 3 do enemy['SIM_WAVE1_D' .. d] = Group(Units('uel0106', 1, 150, 150)) end
@@ -247,6 +246,9 @@ local function Triggers()
     local u, ua = Node(s1, 'ready', 'trg_unit_killed', { army = 'Enemy', unit = 'SIM_U9' })
     Body(ua)
     Node(s1, 'ready', 'set_flag', { flag = 'UK', value = true }, u)
+    local ui, uia = Node(s1, 'ready', 'trg_unit_killed', { army = 'ARMY_1', unit = 'UNIT_A1' })          -- an INITIAL unit: the game's own army setup registers its name in ScenarioInfo.UnitNames
+    Body(uia)
+    Node(s1, 'ready', 'set_flag', { flag = 'UKI', value = true }, ui)
     local ar, aa = Node(s1, 'ready', 'trg_area', { area = 'SIM_AREA', army = 'ARMY_1', category = 'categories.ALLUNITS', compare = '>=', value = 1, once = true })
     Body(aa)
     Node(s1, 'ready', 'set_flag', { flag = 'TA', value = true }, ar)
@@ -255,7 +257,7 @@ local function Triggers()
     Node(s1, 'ready', 'set_flag', { flag = 'TA2', value = true }, ar2)
     local k1, ka = Node(s1, 'ready', 'trg_timer', { seconds = 3 })
     Body(ka)
-    Node(s1, 'ready', 'raw', { code = "ScenarioInfo.UnitNames[GetArmyBrain('Enemy'):GetArmyIndex()]['SIM_U9']:Kill()" }, k1)
+    Node(s1, 'ready', 'raw', { code = "ScenarioInfo.UnitNames[GetArmyBrain('Enemy'):GetArmyIndex()]['SIM_U9']:Kill() ScenarioInfo.UnitNames[GetArmyBrain('ARMY_1'):GetArmyIndex()]['UNIT_A1']:Kill()" }, k1)
     local k2, kb = Node(s1, 'ready', 'trg_timer', { seconds = 4 })
     Body(kb)
     Node(s1, 'ready', 'kill_group', { var = 'w1' }, k2)
@@ -270,7 +272,7 @@ local function Triggers()
     local s2 = Stage('Triggers two')
     Node(s2, 'ready', 'wait', { seconds = 4 })
     Node(s2, 'ready', 'end', { result = 'win' })
-    B.flags.T1 = true B.flags.GD = true B.flags.GD2 = true B.flags.UK = true B.flags.TA = true B.flags.TA2 = true B.flags.LATE2 = true
+    B.flags.T1 = true B.flags.GD = true B.flags.GD2 = true B.flags.UK = true B.flags.UKI = true B.flags.TA = true B.flags.TA2 = true B.flags.LATE2 = true
     B.noflags.LATE = true
     B.ended = true B.success = true
     B.stage = 2

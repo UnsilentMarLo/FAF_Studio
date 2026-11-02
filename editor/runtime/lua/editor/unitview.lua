@@ -260,6 +260,7 @@ end
 function Close()
     Remove(true)
     StageOff()
+    lastLockAt, aimUntil = -1, 0          -- the clocks belong to the viewer that is gone (a later one, or a test with its own clock, starts clean)
     if origCamera then
         local cam = GetCamera('WorldCamera')
         Safe.Try('unitview:fn264', function() cam:RestoreSettings(origCamera) end)

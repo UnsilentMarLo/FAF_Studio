@@ -726,7 +726,7 @@ function Run()
     Terrain.ClearHistory()
     ed_field_threads(threads0)
     local endCount = ed_field_count()
-    check('no field leaks', endCount == startCount, tostring(startCount) .. ' -> ' .. tostring(endCount))
+    check('no field leaks', endCount <= startCount, tostring(startCount) .. ' -> ' .. tostring(endCount))
 
     local head = 'PASS'
     if table.getn(failures) > 0 then head = 'FAIL (' .. table.getn(failures) .. ')' end

@@ -156,8 +156,15 @@ local function Fields()
             local v = ed_field_get(F.tt, math.floor(tx / ncell), math.floor(tz / ncell))
             Check(v == TT.v, name .. ': the terrain-type block moved as a code (' .. tostring(v) .. ')')
             -- nothing between codes
-            local mn, mxv = ed_field_stats(F.tt)
-            Check(mxv == TT.v or mxv == ed_field_stats(F.tt), name .. ': codes are not blended')
+            -- (the cells around the block: whole codes only. The field as a whole can hold the codes other tests painted, so its largest value says nothing)
+            local fractional = 0
+            for dz = -8, 8 do
+                for dx = -8, 8 do
+                    local okc, c = pcall(ed_field_get, F.tt, math.floor(tx / ncell) + dx, math.floor(tz / ncell) + dz)
+                    if okc and c and c ~= math.floor(c) then fractional = fractional + 1 end
+                end
+            end
+            Check(fractional == 0, name .. ': codes are not blended (' .. fractional .. ' fractional cells around the block)')
         end
         R.Free(F)
     end

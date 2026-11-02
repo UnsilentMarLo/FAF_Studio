@@ -323,6 +323,12 @@ Def('warp', { label = 'Warp', cat = 'shape', kw = 'warp distort displace turbule
         return One(E:Op('warp', { a = ins.a, dx = dx, dz = dz, strength = v.strength }))
     end })
 
+Def('height_from_gradient', { label = 'Height from slopes', cat = 'shape', kw = 'height gradient slope integrate poisson normal map relief',
+    desc = 'Builds the height that has the slopes you wire in (x slope in dx, z slope in dz): the Poisson solve, e.g. a normal map turned back into a relief. Turn Periodic on for a tiling texture.',
+    inputs = { In('dx', 'height'), In('dz', 'height') },
+    params = { B('periodic', 'Periodic (tiling)', false) },
+    eval = function(E, v, ins) return One(E:Op('height_from_gradient', { dx = ins.dx, dz = ins.dz, periodic = v.periodic and 1 or 0 })) end })
+
 -- ---- combine ----------------------------------------------------------------------------------------------------------------------------------------
 
 local function Binary(id, label, kw, desc)
@@ -983,7 +989,7 @@ for _, op in { 'abs', 'add', 'affine', 'aspect', 'basin_depth', 'billow', 'blend
                'flow', 'gamma', 'gradient', 'height_band', 'invert', 'levels', 'max', 'min', 'mirror', 'mul', 'normalize', 'offset', 'path_along', 'path_dist', 'path_mask', 'path_shape', 'path_u',
                'perlin', 'quantize', 'radial', 'remap', 'resample', 'ridged', 'rotate', 'scale', 'shore', 'simplex', 'slope', 'slope_area', 'smoothstep', 'sub', 'terrace', 'thermal',
                'threshold', 'voronoi', 'warp', 'water_above', 'water_below', 'water_depth', 'white',
-               'pad_flatten', 'symmetrize', 'slope_limit', 'reach', 'regions', 'rect_mask', 'points_mask', 'img_resample', 'img_orient' } do
+               'height_from_gradient', 'pad_flatten', 'symmetrize', 'slope_limit', 'reach', 'regions', 'rect_mask', 'points_mask', 'img_resample', 'img_orient' } do
     Covers[op] = true
 end
 -- internal helpers of the graph itself (reached through other nodes or not meant for a palette entry)

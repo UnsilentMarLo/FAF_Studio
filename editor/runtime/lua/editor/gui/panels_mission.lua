@@ -34,10 +34,12 @@ local function Dialogs() return import('/lua/editor/gui/dialogs_mission.lua') en
 
 local function Row(row, label, extra, selected, color)
     local c = Skin.color
-    W.Fit(row.text, label, math.max(Skin.S(30), row.bg.Width() - Skin.S(90)))
-    row.text:SetColor(selected and c.accent or (color or c.text))
+    local room = row.bg.Width()
     row.extra:SetText(extra or '')
     row.extra:SetColor(c.textDim)
+    if row.extra.Width() > room / 2 then W.Fit(row.extra, extra or '', math.floor(room / 2)) end          -- the right text never takes more than half the row
+    W.Fit(row.text, label, math.max(Skin.S(30), room - row.extra.Width() - Skin.S(20)))          -- the left one gets what the right one leaves
+    row.text:SetColor(selected and c.accent or (color or c.text))
     local ty = math.floor((row.bg.Height() - row.text.Height()) / 2)
     row.text.Left:Set(function() return row.bg.Left() + Skin.S(6) end)
     row.text.Top:Set(function() return row.bg.Top() + ty end)
@@ -268,7 +270,12 @@ Panels.Register{
             local nameW = math.max(Skin.S(60), math.min(Skin.S(200), w - 2 * pad - modeW - Skin.S(8)))
             W.Place(P.name.frame, group, pad, y, nameW, Skin.S(22))
             P.name.Width:Set(nameW - 2)
-            W.Place(P.mode, group, pad + nameW + Skin.S(8), y, modeW, Skin.S(22))
+            if pad + nameW + Skin.S(8) + modeW <= w - pad then
+                W.Place(P.mode, group, pad + nameW + Skin.S(8), y, modeW, Skin.S(22))
+            else
+                y = y + Skin.S(26)          -- too narrow for both on one row: the mode button takes its own row
+                W.Place(P.mode, group, pad, y, math.min(modeW, w - 2 * pad), Skin.S(22))
+            end
             y = y + Skin.S(26)
             P.failsafe:Place(pad, y, w - 2 * pad)
             y = y + Skin.S(50)
@@ -276,8 +283,10 @@ Panels.Register{
             y = r2 + Skin.S(4)
             local r3 = W.Flow(group, { { P.nDel, Skin.S(60) }, { P.nUp, Skin.S(34) }, { P.nDown, Skin.S(44) }, { P.nIn, Skin.S(30) }, { P.nOut, Skin.S(34) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4))
             local top = r3 + Skin.S(4)
-            P.nodeList:SetRect(pad, top, w - 2 * pad, math.max(Skin.S(44), h - top - pad - Skin.S(20)))
-            W.Place(P.status, group, pad, h - pad - Skin.S(14))
+            local lh = math.max(Skin.S(14), P.status.Height())
+            h = math.max(h, top + Skin.S(44) + pad + lh + Skin.S(6))          -- too little room: the panel scrolls (the dock's content group), the list never runs into the status line
+            P.nodeList:SetRect(pad, top, w - 2 * pad, h - top - pad - lh - Skin.S(6))
+            W.Place(P.status, group, pad, h - pad - lh)
             P:Refresh()
         end
         return P
@@ -331,8 +340,10 @@ Panels.Register{
             local pad = Skin.S(8)
             local r4 = W.Flow(group, { { P.define, Skin.S(130) }, { P.new, Skin.S(90) }, { P.edit, Skin.S(52) }, { P.del, Skin.S(60) } }, pad, pad, w - 2 * pad, Skin.S(22), Skin.S(4))
             local top = r4 + Skin.S(4)
-            P.list:SetRect(pad, top, w - 2 * pad, math.max(Skin.S(44), h - top - pad - Skin.S(20)))
-            W.Place(P.status, group, pad, h - pad - Skin.S(14))
+            local lh = math.max(Skin.S(14), P.status.Height())
+            h = math.max(h, top + Skin.S(44) + pad + lh + Skin.S(6))          -- too little room: the panel scrolls (the dock's content group), the list never runs into the status line
+            P.list:SetRect(pad, top, w - 2 * pad, h - top - pad - lh - Skin.S(6))
+            W.Place(P.status, group, pad, h - pad - lh)
             P:Refresh()
         end
         return P

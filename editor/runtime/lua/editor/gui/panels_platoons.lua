@@ -25,10 +25,12 @@ local function Dialogs() return import('/lua/editor/gui/dialogs_mission.lua') en
 
 local function Row(row, label, extra, color)
     local c = Skin.color
-    W.Fit(row.text, label, math.max(Skin.S(30), row.bg.Width() - Skin.S(110)))
-    row.text:SetColor(color or c.text)
+    local room = row.bg.Width()
     row.extra:SetText(extra or '')
     row.extra:SetColor(c.textDim)
+    if row.extra.Width() > room / 2 then W.Fit(row.extra, extra or '', math.floor(room / 2)) end          -- the right text never takes more than half the row
+    W.Fit(row.text, label, math.max(Skin.S(30), room - row.extra.Width() - Skin.S(20)))          -- the left one gets what the right one leaves
+    row.text:SetColor(color or c.text)
     local ty = math.floor((row.bg.Height() - row.text.Height()) / 2)
     row.text.Left:Set(function() return row.bg.Left() + Skin.S(6) end)
     row.text.Top:Set(function() return row.bg.Top() + ty end)
@@ -390,7 +392,13 @@ Panels.Register{
             end
             local bottom = 0
             if P.mode == 'platoons' then bottom = Skin.S(26 * 3 + 48 + 4) elseif P.mode == 'orders' then bottom = Skin.S(26 + 28 + 4) end
-            local free = h - y - pad - Skin.S(36) - Skin.S(4) - lines * Skin.S(26) - ((P.mode == 'builders') and Skin.S(26) or Skin.S(28)) - bottom - extraRows * Skin.S(26)
+            local planFx = pad + Skin.S(124) + P.planLabel.Width() + Skin.S(6)
+            local planOwnRow = P.mode == 'platoons' and planFx + Skin.S(60) > w - pad          -- too narrow beside the Assign button: the plan takes its own row
+            if planOwnRow then bottom = bottom + Skin.S(28) end
+            local lh = math.max(Skin.S(16), P.status.Height())          -- the two status lines are as tall as their text, not as the 16 px they were given
+            local free = h - y - pad - (2 * lh + Skin.S(4)) - Skin.S(4) - lines * Skin.S(26) - ((P.mode == 'builders') and Skin.S(26) or Skin.S(28)) - bottom - extraRows * Skin.S(26)
+            local need = (P.mode == 'builders') and Skin.S(44) or Skin.S(44 + 30)
+            if free < need then h = h + (need - free) free = need end          -- too little room: the panel scrolls instead of piling its controls up
             local listH = (P.mode == 'builders') and math.max(Skin.S(44), free) or math.max(Skin.S(44), math.floor(free * 0.4))
             local rowsH = math.max(Skin.S(30), free - listH)
             P.list:SetRect(pad, y, w - 2 * pad, listH)
@@ -409,9 +417,14 @@ Panels.Register{
             else
                 W.Place(P.bAssign, group, pad, y, Skin.S(116), Skin.S(22))
                 if P.mode == 'platoons' then
-                    W.Place(P.planLabel, group, pad + Skin.S(124), y + Skin.S(4))
-                    local pw = math.max(Skin.S(60), w - 2 * pad - Skin.S(154))
-                    W.Place(P.plan.frame, group, pad + Skin.S(154), y, pw, Skin.S(22))
+                    local lx, fx, py = pad + Skin.S(124), planFx, y
+                    if planOwnRow then
+                        y = y + Skin.S(28)
+                        lx, fx, py = pad, pad + P.planLabel.Width() + Skin.S(6), y
+                    end
+                    W.Place(P.planLabel, group, lx, py + Skin.S(4))
+                    local pw = math.max(Skin.S(60), w - pad - fx)
+                    W.Place(P.plan.frame, group, fx, py, pw, Skin.S(22))
                     P.plan.Width:Set(pw - 2)
                 end
                 y = y + Skin.S(28)
@@ -433,8 +446,8 @@ Panels.Register{
                     W.Place(P.chainBtn, group, pad + Skin.S(88) + bw, y, bw, Skin.S(22))
                 end
             end
-            W.Place(P.used, group, pad, h - pad - Skin.S(32))
-            W.Place(P.status, group, pad, h - pad - Skin.S(16))
+            W.Place(P.used, group, pad, h - pad - 2 * lh - Skin.S(2))
+            W.Place(P.status, group, pad, h - pad - lh)
             P:Refresh(true)
         end
         return P

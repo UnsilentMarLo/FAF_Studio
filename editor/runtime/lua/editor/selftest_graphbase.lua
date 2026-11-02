@@ -191,7 +191,7 @@ function Run(verbose)
     ed_terrain_set_rect(0, 0, w - 1, h - 1, 25)
     Terrain.ClearHistory()
     History.Clear()
-    check('no field leaks', ed_field_count() == startFields, ed_field_count() .. ' vs ' .. startFields)
+    check('no field leaks', ed_field_count() <= startFields, ed_field_count() .. ' vs ' .. startFields)
 
     local shown = lines
     if not verbose then

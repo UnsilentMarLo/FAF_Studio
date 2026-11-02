@@ -674,7 +674,7 @@ function Run(verbose)
     Terrain.ClearHistory()
     History.Clear()
     if hasMasks then for i = 1, 8 do Strata.ClearMask(i) end end
-    check('no field leaks', ed_field_count() == startFields, ed_field_count() .. ' vs ' .. startFields)
+    check('no field leaks', ed_field_count() <= startFields, ed_field_count() .. ' vs ' .. startFields)
 
     local shown = lines
     if not verbose then       -- only what failed (the command channel cuts long answers); Run(true) lists every check

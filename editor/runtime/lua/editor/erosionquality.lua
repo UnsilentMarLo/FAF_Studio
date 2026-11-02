@@ -122,7 +122,8 @@ end
 --- The statistics of height maps exported as 16 bit PNG (heights in 1/128 units, see Fields.Image): the reference terrain to compare the presets with. `paths`: list of file paths.
 function References(paths)
     local lines = {}
-    for _, path in paths do
+    for _, file in paths do
+        local path = file
         local ok, err = pcall(function()
             Fields.Run(function(S)
                 local f = S:Image(path, { as = 'height' })

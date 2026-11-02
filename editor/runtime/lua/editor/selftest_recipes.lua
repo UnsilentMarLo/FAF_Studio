@@ -482,7 +482,7 @@ function Run(verbose)
         History.Clear()
         for i = 1, 8 do Strata.ClearMask(i) end
         Recipes.Invalidate()
-        check('no field leaks', ed_field_count() == startFields, ed_field_count() .. ' vs ' .. startFields)
+        check('no field leaks', ed_field_count() <= startFields, ed_field_count() .. ' vs ' .. startFields)
     else
         table.insert(lines, '  skip the map checks (no terrain with paint masks)')
     end

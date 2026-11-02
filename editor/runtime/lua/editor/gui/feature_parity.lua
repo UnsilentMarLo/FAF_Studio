@@ -29,13 +29,14 @@ local ALIGN = {
     { 'top', 'Align top (north)' }, { 'centerz', 'Align centre vertically' }, { 'bottom', 'Align bottom (south)' },
 }
 for _, a in ALIGN do
-    local mode = a[1]
-    Commands.Register{ id = 'edit.align.' .. mode, title = 'Edit: ' .. a[2], run = function() Do(a[2], function() return Arrange.Align(mode) end) end }
+    local mode, label = a[1], a[2]
+    Commands.Register{ id = 'edit.align.' .. mode, title = 'Edit: ' .. label, run = function() Do(label, function() return Arrange.Align(mode) end) end }
 end
 Commands.Register{ id = 'edit.distribute.x', title = 'Edit: distribute horizontally', run = function() Do('Distribute', function() return Arrange.Distribute('x') end) end }
 Commands.Register{ id = 'edit.distribute.z', title = 'Edit: distribute vertically', run = function() Do('Distribute', function() return Arrange.Distribute('z') end) end }
 Commands.Register{ id = 'edit.circle', title = 'Edit: arrange in a circle', run = function() Do('Circle', function() return Arrange.Circle() end) end }
-for _, step in { 1, 2, 4, 8 } do
+for _, size in { 1, 2, 4, 8 } do
+    local step = size
     Commands.Register{ id = 'edit.snap.' .. step, title = 'Edit: snap selection to a ' .. step .. ' unit grid', run = function() Do('Snap', function() return Arrange.Snap(step) end) end }
 end
 

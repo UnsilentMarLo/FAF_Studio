@@ -253,7 +253,7 @@ function Run()
     pcall(function() import('/lua/editor/maskgen.lua').ClearPreview() end)
     pcall(function() import('/lua/editor/graphrun.lua').DropBuildCache() end)
     for i = 1, 8 do Strata.ClearMask(i) end
-    check('no field leaks', ed_field_count() == startFields, ed_field_count() - startFields)
+    check('no field leaks', ed_field_count() <= startFields, ed_field_count() - startFields)
     if table.getn(failures) > 0 then return 'FAIL (' .. table.getn(failures) .. ': ' .. Join(failures, ', ') .. ')\n' .. Join(lines, '\n') end
     return 'PASS (' .. table.getn(lines) .. ' checks)\n' .. Join(lines, '\n')
 end
