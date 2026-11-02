@@ -105,6 +105,7 @@ function Start()
         else
             ui.Create()
         end
+        import('/lua/editor/mods.lua').EndEditorTrial()            -- the editor modules and their mods loaded: see mods.lua (editor mod trial)
     end
 
     local arg = GetCommandLineArg('/edcmd', 1)

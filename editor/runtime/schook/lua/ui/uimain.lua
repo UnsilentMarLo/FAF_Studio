@@ -38,8 +38,10 @@ do
         end
         -- editor started without /map: the front end would show the game's menu. The editor opens its blank map instead; the start screen (gui/feature_start.lua)
         -- then offers what to do. After that, an empty queue means the session was ended for some other reason: the front end as before.
-        if HasCommandLineArg('/editor') and not HasCommandLineArg('/map') and ed_read_file('editor_boot.txt') == '0' then
-            LOG('EDITOR: no map given, opening the blank map with the start screen')
+        -- (ed_launch_error is native, in engine builds that catch a failed launch themselves instead of a modal box that stopped the main loop; keep = true leaves the text for the start screen)
+        local launchFailed = rawget(_G, 'ed_launch_error') and ed_launch_error(true) ~= nil
+        if HasCommandLineArg('/editor') and (not HasCommandLineArg('/map') or launchFailed) and ed_read_file('editor_boot.txt') == '0' then
+            LOG('EDITOR: no map given or the map could not be opened, opening the blank map with the start screen')
             EditorTeardown()
             __modules = {}
             if EditorOpen('editor_blank') then return end

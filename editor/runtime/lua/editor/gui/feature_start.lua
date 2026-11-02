@@ -31,6 +31,12 @@ function OnStart()
     -- a map that could not be opened (schook SinglePlayerLaunch.lua opened the blank map instead): say so, then the start screen
     local Launch = import('/lua/editor/gui/feature_launcherror.lua')
     local failedLaunch = Launch.Take()
+    -- a failure the engine caught itself (native ed_launch_error, only in builds that have it) before a Lua hook could
+    local nativeError = rawget(_G, 'ed_launch_error') and ed_launch_error() or nil
+    if nativeError and not failedLaunch then
+        local given = GetCommandLineArg('/map', 1)
+        failedLaunch = tostring(given and given[1] or 'the requested map') .. '\n' .. tostring(nativeError)
+    end
     if failedLaunch then
         Launch.Show(failedLaunch, function() StartScreen().Open{ afterNoMap = true } end)
         return

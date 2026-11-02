@@ -268,7 +268,11 @@ end
 
 function EndTrial()
     ed_write_file(TRIAL_FILE, '')
-    ed_write_file(EMOD_TRIAL, '')           -- the editor is up: the editor mods that were loaded did no harm
+end
+
+--- The editor's UI is built (control.Start, after the shell started): the editor mods that were loaded did no harm, the editor mod trial is over.
+function EndEditorTrial()
+    ed_write_file(EMOD_TRIAL, '')
 end
 
 --- At the first map open of a process: undo a mod load that never came up. Returns true when it did.
