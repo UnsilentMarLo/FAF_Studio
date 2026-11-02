@@ -1242,7 +1242,8 @@ local function StageLines(i, stage, test, strict)
     if objectives then
         local callback
         if nextCall then
-            callback = 'function() ' .. nextCall .. ' end'
+            -- one tick later: the result callbacks of the objectives (the "when an objective is decided" triggers) run in the same tick and still find this stage current
+            callback = 'function() ForkThread(function() WaitTicks(1) ' .. nextCall .. ' end) end'
         elseif HasEnd(stage) then
             callback = 'function() end'
         else

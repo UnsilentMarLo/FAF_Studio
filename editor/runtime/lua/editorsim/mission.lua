@@ -5,6 +5,12 @@
 --- editor session does not have (it raised in string.gsub), so a test run records the result instead: ScenarioInfo.EditorMissionResult, shown by the run panel and the dump.
 function Attach()
     local SF = import('/lua/ScenarioFramework.lua')
+    -- a game launched from the lobby / campaign launcher fills this (cinematics.lua loops over it); an editor session is single player with the first army as the human
+    if not ScenarioInfo.HumanPlayers then
+        ScenarioInfo.HumanPlayers = {}
+        local first = ArmyBrains[1]
+        if first then ScenarioInfo.HumanPlayers[first.Name] = 1 end
+    end
     if rawget(SF, 'EdOriginalEndOperation') then return end
     SF.EdOriginalEndOperation = SF.EndOperation
     SF.EndOperation = function(success, allPrimary, allSecondary, allBonus)
