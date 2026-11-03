@@ -94,7 +94,7 @@ launcher and every log are in `evidence\` of the handoff folder (not committed).
 | 5 | default, pop-out open; main window resize / maximize / restore | size resets (46 ms) | no freeze |
 | 5b | same run | `SC_VerticalSync 0` (reset, MSAA 0, interval IMMEDIATE) | **FREEZE** |
 | 6 | pop-out open **and minimized** | `SC_VerticalSync 0` | **FREEZE** |
-| 7 | pop-out opened, then **closed** (`shell.CloseWindow`) | `SC_VerticalSync 0` | no freeze (reset 23 ms) |
+| 7 | pop-out opened, then **closed** (`shell.CloseWindow`) | `SC_VerticalSync 0` | no freeze (reset 23 ms) on the packaged exe, **but 4 of 4 froze in a repeat on my own build (run 11): not a safe state** |
 | 8 | pop-out open; maximize, restore, minimize, restore, 3 resizes (2 of them reset the device) | window changes | no freeze, no "device lost", longest frame 179 ms |
 
 ### What the freezes are
@@ -120,12 +120,13 @@ Freeze needs **both** of:
 1. a **pop-out window is alive** (even minimized; EdPopout.cpp has created an additional swap chain for it before), and
 2. a **Reset that does not change the back buffer size** (AA mode change, V-Sync interval change).
 
-Not sufficient: a pop-out alone (60 s, 5 min), any number of Resets without a pop-out (16 AA resets), a Reset that changes the size with a pop-out open (maximize, restore, resize),
-a pop-out that was opened and closed again before the Reset. Closing the pop-out window removes the problem; releasing its swap chain (the DeviceListener does that on the exit event of
-every Reset) does not, and hiding or minimizing the window does not. That fits the history: the AA and V-Sync buttons are in the **Settings pop-out**, so every click
-that reset the device happened with a pop-out open (the startup reset only froze when a saved workspace had pop-outs; not checked).
-Hypothesis 4 (frame limiter) and the NVIDIA AA list as such are not needed for it (the V-Sync case has MSAA 0 throughout). Sample sizes are small (one run per row for the
-non-freezing cases with a pop-out), the freezing cases are 4 of 4.
+Not sufficient: a pop-out alone (60 s, 5 min), any number of Resets without a pop-out (16 AA resets, 2 V-Sync resets on a fresh instance), a Reset that changes the size with a pop-out
+open (maximize, restore, resize). **Correction to the first version of this section:** closing the pop-out again before the Reset does not help (run 7 was a single lucky sample; the
+repeat froze 4 of 4), neither does minimizing it, releasing its swap chain earlier (the DeviceListener does that on every Reset; a variant that released the chains and waited 250 ms
+before the Reset froze too), giving the chain a window of its own that is destroyed with the chain, presenting into the frame window instead of the view, or waiting for the GPU
+(event query) before the Reset. So the trigger is: **a pop-out has existed on this device (its additional swap chain has been created and presented), then a same-size Reset.**
+That fits the history: the AA and V-Sync buttons are in the Settings pop-out, so every click that reset the device came after a pop-out had been opened. Sample sizes are small
+(one run per row for the non-freezing cases with a pop-out); the freezing cases are 4 of 4 in runs 3-6 and every try since.
 
 ### Is it reachable in 0.6.1 by a user?
 
@@ -133,13 +134,18 @@ Not by the Settings panel: on an NVIDIA machine the panel offers only AA Off / F
 Reset that changes nothing is skipped. It is reachable by the Console panel (`SC_VerticalSync 0`, `SC_AntiAliasingSamples <n>` with `FAFSTUDIO_NVIDIA_AA=1`) with a pop-out open,
 and by any future code path that makes a same-size Reset. Window moves, resize, maximize, minimize and restore with a pop-out open were stable (run 8).
 
-### Proposed mitigation (not implemented, needs an engine build: this laptop has no VS C++ tools, clang-cl, DirectX SDK or xmake yet)
+### Mitigation (engine, branch `laptop-debug` of faf-re; experiment switch `FAFSTUDIO_POPOUT_FIX`, built here with VS Build Tools 2022, clang-cl 23.1.4, DirectX SDK June 2010)
 
-In `ED_ApplyPendingDeviceContext` (CD3DDevice.cpp): when an NVIDIA D3D9 adapter is installed (`ED_NoteNvidiaAdapterInstalled`) and a pop-out exists, refuse a Reset that keeps the back
-buffer size and say so in the log / console; or close the pop-outs before such a Reset and reopen them after it (a pop-out that was closed first is safe, run 7). The second is
-more work and has to be tested; the first is a few lines and equals what the Settings panel already does in Lua. Either needs the recipe above as its before / after test.
-The cause itself (an NVIDIA / Optimus driver deadlock after a same-size Reset while the window of an additional swap chain exists) is in the driver; I found no workaround on the
-swap chain side without a build to try variants (for example drawing the pop-out into a render target and blitting it, instead of an additional swap chain).
+Variants tried against the V-Sync recipe (pop-out open, `SC_VerticalSync 0`), own build, each one start:
+3 GPU event query before the Reset: froze. 5 chain with its own child window: froze. 8 chain presents into the frame window: froze. 9 chains released, Reset delayed 250 ms: froze.
+**10 two-step Reset: when a pop-out has existed, a same-size Reset is done as two: first with the back buffer 16 pixels wider, then at the real size** (`ED_ApplyPendingDeviceContext`,
+CD3DDevice.cpp). Result: V-Sync recipe 3 of 3 alive (pop-out open twice, pop-out opened and closed once; the same case froze 4 of 4 without it); AA recipe (`FAFSTUDIO_NVIDIA_AA=1`)
+9 mode changes = 18 Resets with the pop-out open, 0 freezes. The reason is a guess: a Reset that changes the size does not deadlock the driver, a same-size one after an additional
+swap chain has existed does.
+Not verified: the picture after such a Reset. In that stretch of the session every screenshot of the editor window was black (also of the untouched packaged exe, before any Reset)
+and Present took 40-70 ms; Present went back to 1 ms (60 fps) by itself later, so it looks like a display state of the laptop (the lid was closed during the session) and not the Reset,
+but it has to be redone with the panel on and the lid open before this is called fixed. Also not verified: the Reset at the larger size flickers nothing visible; the desktop (AMD) is
+untouched because the two-step only runs after a pop-out has existed (decide whether to limit it to NVIDIA adapters: `ED_NvidiaAdapterInstalled`).
 
 ### Other findings
 
@@ -160,5 +166,6 @@ swap chain side without a build to try variants (for example drawing the pop-out
 
 ### Not done on this laptop (so unverified)
 
-The layout checker and the nightly steps (they need a staged engine and therefore a build), camera-distance symptoms (grid flips, icon fade) beyond the LOD number above, Maui clipping
-checks by screenshot of every panel, FXAA by eye, open-map time, the Priority 3 items. Only the packaged exe was run; no engine code was changed.
+The layout checker and the nightly steps (an engine is staged now, they were not run), camera-distance symptoms (grid flips, icon fade) beyond the LOD number above, Maui clipping
+checks by screenshot of every panel, FXAA by eye, open-map time, the Priority 3 items, the picture after a Reset (see above). The packaged exe was run for runs 1-9; the engine built
+here (clone `GitHub\FAF_Studio`, `engineaf-re` on branch `laptop-debug`) was used for the freeze repeat and the variants.
