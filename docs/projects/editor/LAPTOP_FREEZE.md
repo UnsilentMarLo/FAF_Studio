@@ -70,3 +70,111 @@ post process FXAA / SMAA pass in the editor's own render path would give every a
 the NVIDIA special case) unnecessary.
 
 **Done 2026-10-27 (branch `fxaa`): FXAA** is a state of the Anti-aliasing setting (`ed_fxaa`), one full-screen pass on every adapter, UI unfiltered, no device Reset to switch it. See FXAA.md. It still has to be tried on this laptop.
+
+
+## Findings from the laptop (2026-11-03, packaged 0.6.1 build, revision da6ce9e)
+
+Machine: Windows 11 26200, Intel Arc iGPU (32.0.101.6881) + RTX 4060 Laptop (32.0.15.6626), one active display (3200 x 2000 panel), window 3200 x 1876, UI 150 %.
+**D3D9 enumerates exactly one adapter: the RTX 4060** (`EDITOR D3D9 adapter 0 (head 0)`). The Intel adapter is not a D3D9 adapter here, so hypothesis 1 ("create the device on the
+Intel adapter") cannot be tested through `SC_PrimaryAdapter` (that console command is a resolution command anyway); it would need the Windows graphics preference of the exe.
+
+Method: the packaged exe was started with `/windowed 3200 1876 /map editor_blank /edcmd <file>` (the exe adds `/init` itself; no engine build needed), Lua chunks were run through the
+command channel, and a frozen process was walked with `dbghelp` + `symbols\main_ed_x64.pdb` (`StackWalk64` from a small ctypes script; no debugger installed). The script, the
+launcher and every log are in `evidence\` of the handoff folder (not committed).
+
+### Runs
+
+| run | state | trigger | result |
+|---|---|---|---|
+| 1 | default start, 6 min idle | none (startup AA request skipped: "leaves the device parameters as they are") | alive, responsive |
+| 2 | default, no pop-out | start | alive; start screen and panels drawn correctly at 3200 x 1876 |
+| 3a | `FAFSTUDIO_NVIDIA_AA=1`, **no pop-out** | 16 AA resets (2x, 4x, 8x, off, repeated, 20-27 ms each) | **no freeze**, longest frame about 200 ms |
+| 3b | same, **Settings pop-out open** | AA 4x | **FREEZE** (`faf_crash_20261103_102642`) |
+| 4 | same, pop-out open 60 s first (no reset: fine, 48-60 fps) | AA 4x | **FREEZE** |
+| 5 | default, pop-out open; main window resize / maximize / restore | size resets (46 ms) | no freeze |
+| 5b | same run | `SC_VerticalSync 0` (reset, MSAA 0, interval IMMEDIATE) | **FREEZE** |
+| 6 | pop-out open **and minimized** | `SC_VerticalSync 0` | **FREEZE** |
+| 7 | pop-out opened, then **closed** (`shell.CloseWindow`) | `SC_VerticalSync 0` | no freeze (reset 23 ms) on the packaged exe, **but 4 of 4 froze in a repeat on my own build (run 11): not a safe state** |
+| 8 | pop-out open; maximize, restore, minimize, restore, 3 resizes (2 of them reset the device) | window changes | no freeze, no "device lost", longest frame 179 ms |
+
+### What the freezes are
+
+All four freezes have the same stacks (`evidence\run*_freeze.stacks_symbolized.txt`):
+
+* **Main thread**, in the paint of the main window after the Reset had returned (`IDirect3DDevice9::Reset returned after 9-22 ms`, resources recreated, viewport relaid out):
+  `ntdll!NtWaitForSingleObject <- nvd3dumx+0x1534cd <- nvd3dumx+0x158039 <- d3d9+0x11086 <- d3d9+0x10648 <- d3d9+0x10335 <- TextureD3D9::Lock (D3D9Interfaces.cpp:5704) <-
+  CD3DDynamicTextureSheet::Lock (:162, D3DLOCK_DISCARD) <- CD3DTextureBatcher::GetCompositeTexture (:376) <- CD3DPrimBatcher::Flush <- CMauiBitmap::DoRender <- CUIManager::DrawHead <-
+  WRenViewport::Render <- CD3DDevice::Paint <- WD3DViewport::OnPaint <- wxWindow::HandlePaint <- WIN_AppExecute`.
+  It is **not inside Reset**. It is the first discard-lock of the UI atlas texture that `GetCompositeTexture` recreates after the Reset ("the sheet was released by OnDeviceExit").
+* **One NVIDIA driver thread** waits on a GPU synchronization object from the CPU: `win32u!NtGdiDdDDIWaitForSynchronizationObjectFromCpu <- d3d9+0x6a74f <-
+  nvd3dumx!QueryOglResource+0x37473 <- nvd3dumx+0x5691f ...` (tid 1952 in run 3b). It never returns, so the lock never gets its buffer. A driver deadlock on a sync object, not a GPU hang
+  (Windows TDR did not fire; the window stays "Not responding" for ever).
+* **Everything else is idle**: the prefetcher thread waits on its condition variable (`ResourceManager::PrefetchThread`), the sim threads wait, the Intel driver threads
+  (`igd9trinity64`) wait on condition variables, 23 more `nvd3dumx` worker threads wait at the same spot. Nobody else holds the device lock. **Hypothesis 2 (prefetcher plus
+  MULTITHREADED) is refuted for this freeze.** Hypothesis 3b (GPU compute's D3D11 device): no thread of it is in a D3D wait, and compute was On in all runs, so it is not involved.
+* The on-screen picture is the last presented frame (run 6 shows the splash "Loading map..." frame): this is the "frozen for good" the owner sees.
+
+### Condition (reproduced 4 times out of 4, scripted)
+
+Freeze needs **both** of:
+1. a **pop-out window is alive** (even minimized; EdPopout.cpp has created an additional swap chain for it before), and
+2. a **Reset that does not change the back buffer size** (AA mode change, V-Sync interval change).
+
+Not sufficient: a pop-out alone (60 s, 5 min), any number of Resets without a pop-out (16 AA resets, 2 V-Sync resets on a fresh instance), a Reset that changes the size with a pop-out
+open (maximize, restore, resize). **Correction to the first version of this section:** closing the pop-out again before the Reset does not help (run 7 was a single lucky sample; the
+repeat froze 4 of 4), neither does minimizing it, releasing its swap chain earlier (the DeviceListener does that on every Reset; a variant that released the chains and waited 250 ms
+before the Reset froze too), giving the chain a window of its own that is destroyed with the chain, presenting into the frame window instead of the view, or waiting for the GPU
+(event query) before the Reset. So the trigger is: **a pop-out has existed on this device (its additional swap chain has been created and presented), then a same-size Reset.**
+That fits the history: the AA and V-Sync buttons are in the Settings pop-out, so every click that reset the device came after a pop-out had been opened. Sample sizes are small
+(one run per row for the non-freezing cases with a pop-out); the freezing cases are 4 of 4 in runs 3-6 and every try since.
+
+### Is it reachable in 0.6.1 by a user?
+
+Not by the Settings panel: on an NVIDIA machine the panel offers only AA Off / FXAA and V-Sync On (`graphics.lua`, `VSyncStates`, `Get`), a saved other value is sanitized, and a
+Reset that changes nothing is skipped. It is reachable by the Console panel (`SC_VerticalSync 0`, `SC_AntiAliasingSamples <n>` with `FAFSTUDIO_NVIDIA_AA=1`) with a pop-out open,
+and by any future code path that makes a same-size Reset. Window moves, resize, maximize, minimize and restore with a pop-out open were stable (run 8).
+
+### Fix (engine, `faf-re` branch `laptop-debug`): two-step Reset
+
+Built on this laptop with VS Build Tools 2022, clang-cl 23.1.4 and the June 2010 DirectX SDK (`studio.py engine --no-bump build`, about 10 minutes; the `build/editor-x64` cache that came
+with the clone was from another machine's paths and was moved aside to `editor-x64.from-Marlo-machine`).
+
+`ED_ApplyPendingDeviceContext` (CD3DDevice.cpp): when an NVIDIA D3D9 adapter is installed (`ED_NvidiaAdapterInstalled`) and a pop-out has existed in this process
+(`edpopout::EverHadPopout`), a queued device change is applied as two Resets: first with a back buffer 16 pixels wider, then at the real size. A Reset that changes the size does not
+deadlock the driver; a same-size one does. Nothing changes without an NVIDIA adapter or without a pop-out (the log line `EDITOR device: two-step Reset` marks it).
+
+Variants tried first (switch `FAFSTUDIO_POPOUT_FIX`, removed again), each against pop-out open + `SC_VerticalSync 0`: GPU event query before the Reset: froze; the chain with a window of its
+own: froze; present into the frame window: froze; chains released and the Reset delayed 250 ms: froze; two-step: alive.
+
+Verification of the final build (no switch), lid open, panel on, `ed_perf_loop` after every change and `editor_inst.py shot` for the picture:
+* V-Sync off then on, three runs with the pop-out open and two with it opened and closed again: 12 Resets, 0 freezes, 60 fps, Present 1-9 ms (the pop-out adds some).
+* AA recipe (`FAFSTUDIO_NVIDIA_AA=1`), pop-out open: 4x, off, 8x, off, 2x, off = 12 Resets, 0 freezes, 60 fps.
+* Without a pop-out: no two-step logged, Present 0.7-1.2 ms, the picture after both Resets is byte-identical to the one before (same file hash).
+* The window pictures after the Resets show the whole UI (the pop-out too); the same build without the fix froze 4 of 4 times with this recipe.
+Earlier in the session screenshots were black and Present took 40-70 ms for a while; that was the laptop's display state (lid closed) and gone after it was opened. Everything above was
+measured after that.
+Not verified: other Reset paths (`SC_PrimaryAdapter`, a restore from a lost device) are not covered by the two-step (they change the size or are rare); the desktop (AMD) was not run, but its
+code path is unchanged; the nightly steps `layout` and `perf` were not run.
+
+### Other findings
+
+* **Lua bug, not hardware specific, fixed** (`gui/widgets.lua`, `AutoFit` / `Refit`): opening the Settings pop-out logged `EDITOR panel:settings.OnResize: failed: skin.lua(52): stack overflow`
+  on every run. `Apply` stores `fitDone = nil` for a room of `Skin.S(8)` or less, `Refit` compared the raw room with it, so a button label in a host that has no width yet (a pop-out whose
+  frame is 0 wide when the tree is set) re-applied itself through `onText -> Center -> Refit` for ever. Fix: `Refit` normalizes the room the same way. Before: one overflow line per
+  Settings open (runs 3-8). After (run 9, scratch copy of the package with the fixed file): none, and the panel is laid out correctly (`evidence\run9_fixed_settings_screen.png`).
+  Not verified: the other panels that open as pop-outs; the nightly `layout` step (no staged engine here).
+* **Level of detail**: after start the camera's LOD scale is 0.70 (Display report, and the Oct 26 `diagnostics.txt` of this laptop says 0.700 too) although the saved "Model detail" is
+  High. `SC_CameraScaleLOD 2 / 1 / 0` gives exactly 0.90 / 1.00 / 1.20 afterwards. So the saved setting is not in effect after start on this laptop (applied before the camera exists, or
+  overwritten); a scale of 0.70 makes models drop to their low LOD earlier, a candidate for "units fade early". Cause not found; check whether the desktop shows 0.70 too.
+* **Frame rate**: the engine reports a 165 Hz monitor and a cap that follows it (173), but the loop runs at 60 fps (frame 16.7 ms, vsync on, state active). Which of the two is right for the
+  panel was not checked.
+* **GPU compute** works on the RTX 4060 (D3D11 feature level 11_0, all four self tests pass in 53 ms). It is not the freeze trigger.
+* Idle frame cost on `editor_blank` at 3200 x 1876: 55-60 fps, frame 16.7-18 ms with limiter wait 13 ms, render CPU 1.3 ms, Present 1.5 ms (adapter: RTX 4060). A Reset costs a 150-200 ms frame.
+* `python scripts/studio.py check`: lint and dialect pass (0 errors); `mission api` fails with "the table is out of date with the game's Lua (lua.nx2)", identically on the clean tree
+  (the installed FAF game's Lua differs from the table), so it is not caused by this branch.
+
+### Not done on this laptop (so unverified)
+
+The layout checker and the nightly steps (an engine is staged now, they were not run), camera-distance symptoms (grid flips, icon fade) beyond the LOD number above, Maui clipping
+checks by screenshot of every panel, FXAA by eye, open-map time, the Priority 3 items, the picture after a Reset (see above). The packaged exe was run for runs 1-9; the engine built
+here (clone `GitHub\FAF_Studio`, `engineaf-re` on branch `laptop-debug`) was used for the freeze repeat and the variants.

@@ -231,7 +231,10 @@ local function AutoFit(t, maxW)
     function t:Refit()
         if not self.autoFit then return end
         local room = Room(self)
-        if room == self.fitDone or (not room and not self.fitDone) then return end
+        -- Apply treats a room of Skin.S(8) or less like no room (fitDone = nil): compare the same way, else a label in a zero-width host (a pop-out whose frame has no size
+        -- yet) never settles: Apply -> onText -> Center -> Refit -> Apply ... until the Lua stack overflows
+        if not (room and room > Skin.S(8)) then room = nil end
+        if room == self.fitDone then return end
         Apply(self)
     end
 end
