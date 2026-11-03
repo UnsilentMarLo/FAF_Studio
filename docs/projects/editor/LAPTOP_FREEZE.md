@@ -134,18 +134,27 @@ Not by the Settings panel: on an NVIDIA machine the panel offers only AA Off / F
 Reset that changes nothing is skipped. It is reachable by the Console panel (`SC_VerticalSync 0`, `SC_AntiAliasingSamples <n>` with `FAFSTUDIO_NVIDIA_AA=1`) with a pop-out open,
 and by any future code path that makes a same-size Reset. Window moves, resize, maximize, minimize and restore with a pop-out open were stable (run 8).
 
-### Mitigation (engine, branch `laptop-debug` of faf-re; experiment switch `FAFSTUDIO_POPOUT_FIX`, built here with VS Build Tools 2022, clang-cl 23.1.4, DirectX SDK June 2010)
+### Fix (engine, `faf-re` branch `laptop-debug`): two-step Reset
 
-Variants tried against the V-Sync recipe (pop-out open, `SC_VerticalSync 0`), own build, each one start:
-3 GPU event query before the Reset: froze. 5 chain with its own child window: froze. 8 chain presents into the frame window: froze. 9 chains released, Reset delayed 250 ms: froze.
-**10 two-step Reset: when a pop-out has existed, a same-size Reset is done as two: first with the back buffer 16 pixels wider, then at the real size** (`ED_ApplyPendingDeviceContext`,
-CD3DDevice.cpp). Result: V-Sync recipe 3 of 3 alive (pop-out open twice, pop-out opened and closed once; the same case froze 4 of 4 without it); AA recipe (`FAFSTUDIO_NVIDIA_AA=1`)
-9 mode changes = 18 Resets with the pop-out open, 0 freezes. The reason is a guess: a Reset that changes the size does not deadlock the driver, a same-size one after an additional
-swap chain has existed does.
-Not verified: the picture after such a Reset. In that stretch of the session every screenshot of the editor window was black (also of the untouched packaged exe, before any Reset)
-and Present took 40-70 ms; Present went back to 1 ms (60 fps) by itself later, so it looks like a display state of the laptop (the lid was closed during the session) and not the Reset,
-but it has to be redone with the panel on and the lid open before this is called fixed. Also not verified: the Reset at the larger size flickers nothing visible; the desktop (AMD) is
-untouched because the two-step only runs after a pop-out has existed (decide whether to limit it to NVIDIA adapters: `ED_NvidiaAdapterInstalled`).
+Built on this laptop with VS Build Tools 2022, clang-cl 23.1.4 and the June 2010 DirectX SDK (`studio.py engine --no-bump build`, about 10 minutes; the `build/editor-x64` cache that came
+with the clone was from another machine's paths and was moved aside to `editor-x64.from-Marlo-machine`).
+
+`ED_ApplyPendingDeviceContext` (CD3DDevice.cpp): when an NVIDIA D3D9 adapter is installed (`ED_NvidiaAdapterInstalled`) and a pop-out has existed in this process
+(`edpopout::EverHadPopout`), a queued device change is applied as two Resets: first with a back buffer 16 pixels wider, then at the real size. A Reset that changes the size does not
+deadlock the driver; a same-size one does. Nothing changes without an NVIDIA adapter or without a pop-out (the log line `EDITOR device: two-step Reset` marks it).
+
+Variants tried first (switch `FAFSTUDIO_POPOUT_FIX`, removed again), each against pop-out open + `SC_VerticalSync 0`: GPU event query before the Reset: froze; the chain with a window of its
+own: froze; present into the frame window: froze; chains released and the Reset delayed 250 ms: froze; two-step: alive.
+
+Verification of the final build (no switch), lid open, panel on, `ed_perf_loop` after every change and `editor_inst.py shot` for the picture:
+* V-Sync off then on, three runs with the pop-out open and two with it opened and closed again: 12 Resets, 0 freezes, 60 fps, Present 1-9 ms (the pop-out adds some).
+* AA recipe (`FAFSTUDIO_NVIDIA_AA=1`), pop-out open: 4x, off, 8x, off, 2x, off = 12 Resets, 0 freezes, 60 fps.
+* Without a pop-out: no two-step logged, Present 0.7-1.2 ms, the picture after both Resets is byte-identical to the one before (same file hash).
+* The window pictures after the Resets show the whole UI (the pop-out too); the same build without the fix froze 4 of 4 times with this recipe.
+Earlier in the session screenshots were black and Present took 40-70 ms for a while; that was the laptop's display state (lid closed) and gone after it was opened. Everything above was
+measured after that.
+Not verified: other Reset paths (`SC_PrimaryAdapter`, a restore from a lost device) are not covered by the two-step (they change the size or are rare); the desktop (AMD) was not run, but its
+code path is unchanged; the nightly steps `layout` and `perf` were not run.
 
 ### Other findings
 
