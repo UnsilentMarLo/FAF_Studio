@@ -1,3 +1,6 @@
+> **2026-11-05:** the renderer is Direct3D 11 (D3D11_ONLY.md): SM 4 shaders, constant buffers, textures through `d3dx11_43.dll`, the pipeline state is saved and restored around every draw. The text below describes the
+> Direct3D 9 original (state blocks, `D3DPOOL_MANAGED`, `IDirect3DDevice9`) where it says so.
+
 # Mesh terrain in the editor viewport (M5a/M5b, 2026-10-19)
 
 Status: built on branch `ed/meshview` (Lua) and in the nested engine repository `engine_decomp/faf-re-upstream`, branch `editor` (commit `c3c547b` and the commits after it). Needs the new engine exe (see "Build and deploy"). Research and plan: `docs/projects/editor_research/MESH_MAP_EDITOR_NEEDS.md` section 4 (P1-P16), reference renderer `automation/terrainmesh/meshterrain.cpp`.
@@ -10,7 +13,7 @@ Measured on this machine (editor window 1280 x 729): `sc2_mp_201` (450,248 verti
 
 ## Design
 
-* **Where it lives.** New files in `moho/editor/`: `EdMeshData` (CPU side: manifest, SCM, lookup grid, height / ray queries), `EdMeshDraw` (Direct3D 9: shaders, buffers, textures, the draw), `EdMeshLua` (natives `ed_mesh_*`), `EdMeshTerrain.h` (the interface). Hooks in `HighFidelityTerrain.cpp` (the only existing engine file touched):
+* **Where it lives.** New files in `moho/editor/`: `EdMeshData` (CPU side: manifest, SCM, lookup grid, height / ray queries), `EdMeshDraw` (Direct3D 11 since 2026-11-05, was Direct3D 9: shaders, buffers, textures, the draw), `EdMeshLua` (natives `ed_mesh_*`), `EdMeshTerrain.h` (the interface). Hooks in `HighFidelityTerrain.cpp` (the only existing engine file touched):
   * `DrawNormals`: after `LoadShaderVars`, the mesh is drawn instead of `DrawTriangles()` (height field surface); in *Both* mode the height field first, then the mesh pulled slightly towards the camera (depth bias), so the field shows only where it lies above the mesh;
   * `DrawTerrainDepth`: the mesh is the shadow caster (alpha tested like the patch);
   * `DrawTerrainSkirt`: no height field skirt around a mesh;

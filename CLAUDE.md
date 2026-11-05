@@ -20,6 +20,11 @@ Read `README.md` and `docs/REPOSITORY.md` first. These rules are mandatory for w
 - Choosing from a long list (units, textures, more than ~20 names) goes through `gui/browser.lua` (categories, search, preview: `docs/projects/editor/BROWSER.md`), never a flat scroll list.
 - The game's own HUD (top menu, Escape quit dialog, unit life bars) is off in the editor and in test runs; the editor owns leaving, restarting and quitting.
 
+## Renderer
+
+- The editor runs on **Direct3D 11 only** (`docs/projects/editor/D3D11_ONLY.md`): no `IDirect3D*9`, no d3dx9, no device Reset code, no per-vendor workaround. Natives that draw or query use `moho/editor/EdD3D11Device.h`
+  (`D3D11RawDevice`, `D3D11RawContext`) and put back every pipeline state they change; what can go through the gal device (`CD3DDevice`, render targets, the prim batcher) does.
+
 ## Testing
 
 - `python scripts/studio.py check` (lint, generated files) after any change; for UI work start a test instance and look at the result with `editor_inst.py shot`.

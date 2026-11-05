@@ -18,46 +18,17 @@ local UserData = import('/lua/editor/userdata.lua')
 
 local function Con(name) return function(v) ConExecute(name .. ' ' .. tostring(v)) end end
 
---- The anti-aliasing options are the engine's packed modes: (sample type << 5) | quality level (GetAntiAliasingOptions; the FAF client stores 256 for 8x). The text names the
---- sample count; a mode with a quality level (the NVIDIA coverage modes) says so.
-local function AALabel(n)
-    local samples, quality = math.floor(n / 32), math.mod(n, 32)
-    if quality == 0 then return tostring(samples) .. 'x' end
-    return string.format('%dx (coverage %d)', samples, quality)
-end
-
---- Vertical sync is on or off with a reset of the graphics device while the editor runs; with an NVIDIA adapter installed (hybrid laptops) such a reset never came back, so the
---- setting stays On there.
-local function VSyncStates()
-    local ok, info = pcall(function() return rawget(_G, 'ed_engine_info') and ed_engine_info() or nil end)
-    if ok and type(info) == 'table' and info.nvidia then return { { 'On', 1 } } end
-    return { { 'Off', 0 }, { 'On', 1 } }
-end
-
---- The 'FXAA' state is not an engine mode: it is the post-process anti-aliasing pass (console variable ed_fxaa, EdFxaa.cpp), which works on every adapter and needs no multisampled
---- swap chain. It is stored as -1, which the packed engine modes (0 and (type << 5) | quality) never are.
+--- The editor runs on Direct3D 11, whose flip-model swap chain has no multisampling: anti-aliasing is the post-process pass FXAA (console variable ed_fxaa, EdFxaa.cpp), which needs no
+--- multisampled back buffer and changes nothing in the device. It is stored as -1; 0 is Off. An older editor saved the engine's packed swap chain modes (Direct3D 9): they read as Off.
 FXAA = -1
 
 local function AAStates()
-    local list = { { 'Off', 0 }, { 'FXAA', FXAA } }
-    local ok, options = pcall(function() return GetAntiAliasingOptions() end)
-    if ok and options then
-        for _, n in options do
-            if n > 0 then table.insert(list, { AALabel(n), n }) end
-        end
-    end
-    return list
+    return { { 'Off', 0 }, { 'FXAA', FXAA } }
 end
 
---- Applies the anti-aliasing choice: FXAA is the post-process pass with the swap chain's anti-aliasing off; every other state switches the pass off and is the engine mode.
+--- Applies the anti-aliasing choice: FXAA switches the pass on, Off switches it off.
 local function ApplyAA(value)
-    if value == FXAA then
-        ConExecute('ed_fxaa 1')
-        ConExecute('SC_AntiAliasingSamples 0')
-    else
-        ConExecute('ed_fxaa 0')
-        ConExecute('SC_AntiAliasingSamples ' .. tostring(value))
-    end
+    ConExecute('ed_fxaa ' .. (value == FXAA and '1' or '0'))
 end
 
 Defs = {
@@ -70,10 +41,10 @@ Defs = {
     { key = 'texture_level', tip = 'The size of the textures the editor loads. High shows the full resolution.', label = 'Texture detail', states = { { 'Low', 2 }, { 'Medium', 1 }, { 'High', 0 } }, apply = Con('ren_MipSkipLevels') },
     { key = 'level_of_detail', tip = 'How long models keep their detailed meshes as the camera moves away.', label = 'Model detail', states = { { 'Low', 0 }, { 'Medium', 1 }, { 'High', 2 } }, apply = Con('SC_CameraScaleLOD') },
     { key = 'bloom_render', tip = 'A soft glow around bright areas.', label = 'Bloom', states = { { 'Off', 0 }, { 'On', 1 } }, apply = Con('ren_bloom') },
-    { key = 'antialiasing', tip = 'Smooths jagged edges. FXAA is a filter over the finished picture: it works on every graphics card, costs a fraction of a millisecond and leaves text and panels sharp. The other entries draw each pixel several times (not offered on every card); they apply at once and the window may flicker for a moment.', label = 'Anti-aliasing', states = AAStates, apply = ApplyAA, device = true },
+    { key = 'antialiasing', tip = 'Smooths jagged edges. FXAA is a filter over the finished picture: it works on every graphics card, costs a fraction of a millisecond and leaves text and panels sharp.', label = 'Anti-aliasing', states = AAStates, apply = ApplyAA, device = true },
     { key = 'gpu_compute', tip = 'Runs heavy terrain operations (blur, and later erosion and noise) on the graphics card with Direct3D 11 compute shaders, where a GPU version exists. On any problem the editor uses the processor instead. Off: always the processor.', label = 'GPU compute', states = { { 'Off', 0 }, { 'On', 1 } },
       apply = function(v) local f = rawget(_G, 'ed_gpu_enable') if f then f(v == 1) end end },
-    { key = 'vsync', tip = 'Wait for the monitor before showing a frame: no tearing, and the card draws at most one frame per refresh. Off, the editor draws as many frames as the card can make (hundreds per second: a heavy load for a still scene).', label = 'Vertical sync', states = VSyncStates, apply = Con('SC_VerticalSync'), device = true },
+    { key = 'vsync', tip = 'Wait for the monitor before showing a frame: no tearing, and the card draws at most one frame per refresh. Off, the editor draws as many frames as the card can make (hundreds per second: a heavy load for a still scene).', label = 'Vertical sync', states = { { 'Off', 0 }, { 'On', 1 } }, apply = Con('SC_VerticalSync'), device = true },
 }
 
 Presets = {
@@ -110,15 +81,7 @@ end
 
 function Get(key)
     local value = UserData.Get('gfx_' .. key, Default(key))
-    -- A saved anti-aliasing mode the adapter does not offer (an older editor saved the sample count, 8, where the engine wants the packed mode, 256; another adapter) is "Off":
-    -- asking the graphics device for it made its reset fail (and hang on a hybrid laptop GPU).
-    if key == 'vsync' and value ~= 1 then
-        local offered = false
-        for _, st in VSyncStates() do
-            if st[2] == value then offered = true end
-        end
-        if not offered then return 1 end
-    end
+    -- A saved anti-aliasing mode that is not Off or FXAA (the packed swap chain modes an older, Direct3D 9 editor saved) is "Off".
     if key == 'antialiasing' and value ~= 0 then
         local offered = false
         for _, st in AAStates() do

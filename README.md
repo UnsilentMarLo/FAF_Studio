@@ -17,7 +17,7 @@ The editor needs the FAForever client installed (its game data, `init_faf.lua`, 
 git clone --recurse-submodules <this repository> FAF_Studio       # the engine (engine/faf-re) is a submodule: our fork of the reconstructed engine
 cd FAF_Studio
 python scripts/studio.py doctor                # what is installed, what is missing
-python scripts/studio.py build                 # THE command after every pull: moves the engine to the pinned commit, builds it (CMake + clang-cl, DirectX SDK June 2010 for d3dx9),
+python scripts/studio.py build                 # THE command after every pull: moves the engine to the pinned commit, builds it (CMake + clang-cl, DirectX SDK June 2010 for d3dx11 and d3dx9),
                                                # builds edtext.dll (xmake), stages into engine/run and brands FAFStudio.exe; prints what was updated and what could not be
 python scripts/studio.py generate              # git-ignored generated assets (icons, cursors, layer textures, blank maps)
 python scripts/editor_inst.py new dev          # a test instance

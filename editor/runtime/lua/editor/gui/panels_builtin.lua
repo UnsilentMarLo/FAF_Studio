@@ -52,7 +52,7 @@ function AttachWorldView(holder)
     -- of that is off while editing.
     view:GetsGlobalCameraCommands(false)
     -- The holder of a hidden viewport tab is parked far off screen (dock.lua HideHolder). The world view must not follow it there: a view whose viewport lies
-    -- outside the back buffer makes every D3D call of the frame fail ('DeviceD3D9.cpp Invalid call' thousands of times) and the whole editor stays black for good
+    -- outside the back buffer makes every device call of the frame fail (thousands of errors in the log) and the whole editor stays black for good
     -- (found 2026-10-19: the Console tab next to the viewport in the Generate workspace). While the holder is parked the view keeps its last position.
     local last = { 0, 0, 100, 100 }
     local function Follow(i, v)

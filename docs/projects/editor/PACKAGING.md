@@ -52,7 +52,7 @@ see 5.
 ### What may be shipped
 
 - Game data: **no**. The exe links the user's own FAForever folders; `init_faf.lua`, `SupComDataPath.lua` and `fa_path.lua` are copied from the user's install, not from us.
-- Run time requirements outside the package: Windows 10 / 11 64 bit, the Microsoft DirectX End-User Runtime libraries the exe imports (`d3dx9_43`, `d3dx10`, `x3daudio1_7`; Forged Alliance installs them), the
+- Run time requirements outside the package: Windows 10 / 11 64 bit, the Microsoft DirectX End-User Runtime libraries the exe imports (`d3dx9_43`, `d3dx10`, `x3daudio1_7`; Forged Alliance installs them) and loads at run time (`d3dx11_43`: textures and screenshots of the Direct3D 11 renderer, the same installer; `d3dcompiler_47`: shaders, part of Windows 10), a graphics card with Direct3D 11 (feature level 11_0), the
   Visual C++ runtime (`vcruntime140`, `msvcp140`, installed by the FAForever client).
 - FFmpeg is compiled into the exe (LGPL since the CMake engine; there are no ffmpeg DLLs any more): when the package is given away, its license texts and source offer have to travel with it (not added yet, listed under open items).
 - `FAFStudio.exe` is built from the engine reconstruction in `engine_decomp/`; whether and where to distribute it is a decision for the owner, which is why the script writes only to the ignored `dist/`.

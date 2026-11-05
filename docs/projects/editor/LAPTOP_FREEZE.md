@@ -1,3 +1,7 @@
+> **2026-11-05: obsolete for the editor.** Direct3D 9 is gone from FAF Studio (D3D11_ONLY.md): the freeze needed a same-size `IDirect3DDevice9::Reset` after a pop-out had existed, and
+> the editor no longer has a Direct3D 9 device, a Reset path or an NVIDIA workaround. The two-step Reset below was removed with it. The findings stay as the record of the cause; whether the Direct3D 11 build
+> is fine on the hybrid laptop is to be tried there.
+
 # Hybrid laptop freeze (NVIDIA RTX 4060 Laptop + Intel): handoff
 
 Status 2026-10-26. The editor freezes for good on the user's laptop (Windows 11, Intel iGPU + RTX 4060 Laptop GPU, Optimus; screen 3200 x 2000, 150 percent scaling,

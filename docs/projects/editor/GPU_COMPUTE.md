@@ -1,6 +1,9 @@
+> **2026-11-05:** the game's renderer is Direct3D 11 now (D3D11_ONLY.md). The adapter match asks the game's device for its DXGI adapter (`EdGpuLua.cpp`, `FindGameAdapter`); where this text says "the D3D9 device"
+> read "the game's device". The compute device is still a separate Direct3D 11 device.
+
 # GPU compute for the field engine
 
-Foundation (agent GP1, 2026-10): a Direct3D 11 compute backend next to the game's Direct3D 9 renderer, so the field engine's heavy ops (erosion, generators, filters) can run on the graphics card. Later work (GP2: erosion kernels, GP3: generator kernels) adds kernels on top of this foundation and should be able to work from this document without reading the backend code.
+Foundation (agent GP1, 2026-10): a Direct3D 11 compute backend next to the game's Direct3D 11 renderer, so the field engine's heavy ops (erosion, generators, filters) can run on the graphics card. Later work (GP2: erosion kernels, GP3: generator kernels) adds kernels on top of this foundation and should be able to work from this document without reading the backend code.
 
 > **Nothing here has been run on a GPU.** The author had Linux and g++ only (the same holds for GP2, GP3 and GP4: every later section says what the CPU emulator tests cover and what nobody could verify). What was checked: the kernels compile as C++ and match the CPU ops in a test (CPU emulator, 213 checks in the foundation test; the op tests of GP2 to GP4 have thousands more); the Direct3D 11 code passes `g++ -fsyntax-only` against hand written stub headers (copied from memory, so a typo in a real signature is possible: the first MSVC build is the real compile check); the HLSL text has never been given to the shader compiler. The sections "Verify on your machine" and "Known risks" say what to do first.
 

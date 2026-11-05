@@ -553,7 +553,7 @@ LOG_BAD = [
     (r'stack traceback', 'Lua traceback'),
     (r'Unable to load texture', 'missing texture'),
     (r'access to nonexistent global', 'global typo'),
-    (r'DeviceD3D9\.cpp', 'D3D device error (the editor goes black)'),
+    (r'DeviceD3D(?:9|11)\.cpp', 'D3D device error (the editor goes black)'),
 ]
 
 

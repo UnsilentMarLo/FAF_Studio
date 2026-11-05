@@ -1,3 +1,6 @@
+> **2026-11-05:** the editor runs on Direct3D 11 only (D3D11_ONLY.md). The Direct3D 9 parts below (the `DeviceD3D9::Present` spin and its `ed_present_wait` hook, `D3DCREATE_MULTITHREADED`, the device Reset
+> costs and their watchdog) describe the old renderer and were removed with it; the numbers are history.
+
 # Editor performance
 
 Sections by area: Lua CPU (agent LC); other sections are added by the engine and GPU audits.

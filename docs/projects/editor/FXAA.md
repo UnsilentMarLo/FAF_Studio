@@ -1,3 +1,6 @@
+> **2026-11-05:** the editor runs on Direct3D 11 only (D3D11_ONLY.md). FXAA is the only anti-aliasing; the "swap chain anti-aliasing is on" gate and the NVIDIA special case are gone. The timing below was
+> measured on Direct3D 9; on Direct3D 11 (RX 7900 XTX, 1280 x 721) `ed_fxaa_time` reports 0.020 ms per frame.
+
 # FXAA: post-process anti-aliasing for the world view
 
 Status 2026-10-27 (branch `fxaa`). Works on the AMD desktop (RX 7900 XTX); **not yet run on the NVIDIA hybrid laptop**, which is the reason it exists (see LAPTOP_FREEZE.md:
@@ -17,7 +20,7 @@ Console variables (`EdFxaa.h`):
 | `ed_fxaa_edge` | 0.166 | edges with less contrast than this fraction of the local maximum are left alone; 0.125 / 0.063 find more edges but soften fine texture |
 | `ed_fxaa_edge_min` | 0.0833 | edges with less absolute luma contrast are left alone: raise it to keep fine texture detail |
 | `ed_fxaa_passes` | 1 | draws the pass N times per frame (1 to 40), for measuring only |
-| `ed_fxaa_time` | 0 | 1: GPU time of the copy and the pass from D3D9 timestamp queries, logged every 120 frames (`EDITOR fxaa: GPU ...`) |
+| `ed_fxaa_time` | 0 | 1: GPU time of the copy and the pass from Direct3D 11 timestamp queries, logged every 120 frames (`EDITOR fxaa: GPU ...`) |
 
 ## How the frame is composed (and where FXAA sits)
 
@@ -53,7 +56,7 @@ Pitfalls found (all in the engine's D3DX compiler, which is older than `fxc` of 
 
 Taps are clamped to the world view rectangle (texel centres), so nothing of the panels around the view bleeds into the edge pixels.
 
-## Measured (2026-10-27, RX 7900 XTX, 1920 x 1080, map scmp_009, Ultra graphics, D3D9 timestamp queries, `ed_fxaa_time`)
+## Measured (2026-10-27, RX 7900 XTX, 1920 x 1080, map scmp_009, Ultra graphics, Direct3D 9 timestamp queries (the build of that day), `ed_fxaa_time`)
 
 | | GPU ms per frame |
 |---|---|
