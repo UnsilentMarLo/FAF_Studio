@@ -109,14 +109,18 @@ Panels.Register{
             bgColor = Skin.color.panel,
         })
         P.army = W.Button(group, '', 0, 0, Skin.S(150), Skin.S(24), function()
-            local names = Units.Armies()
-            local next = names[1]
-            for i, n in names do
-                if n == Units.ArmyName then next = names[i + 1] or names[1] end
+            -- a menu of the armies of the map under the button (the current one is ticked)
+            local items = {}
+            for _, n in Units.Armies() do
+                local name = n
+                table.insert(items, { title = name, checked = (name == Units.ArmyName), run = function()
+                    Units.ArmyName = name
+                    P:Refresh()
+                end })
             end
-            Units.ArmyName = next or Units.ArmyName
-            P:Refresh()
-        end, { tip = 'The army the Unit tool places for. Click to step to the next army of the map.' })
+            if table.getn(items) == 0 then pcall(function() UI.Say('the map has no armies yet (add a start position first)') end) return end
+            Menu.Show(GetFrame(0), P.army.Left(), P.army.Bottom(), items)
+        end, { tip = 'The army the Unit tool places for. Click to choose from the armies of the map.' })
         P.group = W.Button(group, '', 0, 0, Skin.S(150), Skin.S(24), function()
             import('/lua/editor/gui/dialogs_mission.lua').PickGroup(Units.ArmyName, function(name) Units.Group = name P:Refresh() end)
         end, { tip = 'The unit group the Unit tool puts units into: INITIAL units are there when the map starts, other groups are for the mission script.' })
@@ -133,7 +137,7 @@ Panels.Register{
                 P.fb[i]:SetText(P.f[def[1]] and tostring(P.f[def[1]]) or def[2])
                 P.fb[i]:SetOn(P.f[def[1]] ~= nil)
             end
-            P.army:SetText('Army: ' .. tostring(Units.ArmyName))
+            P.army:SetText('Army: ' .. tostring(Units.ArmyName) .. '  v')
             P.group:SetText('Group: ' .. tostring(Units.Group))
             W.Fit(P.name, 'Placing: ' .. tostring(Units.Active or 'none selected') .. '  (' .. table.getn(P.shown) .. ' units listed)', (P.w or 300) - Skin.S(16))
         end

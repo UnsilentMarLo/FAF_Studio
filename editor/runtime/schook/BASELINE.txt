@@ -12,6 +12,7 @@ lua/sim/units/structureunit.lua|CreateTarmac|4a9597b7cad7472e
 lua/sim/units/structureunit.lua|FlattenSkirt|ca8b420b333ea2e4
 lua/sim/units/structureunit.lua|FlattenSkirtHorizontally|a953c1c25cc1f01a
 lua/sim/units/structureunit.lua|RotateTowardsEnemy|fb8be5da3a6656b5
+lua/sim/units/cybran/cconstructioneggunit.lua|OnStopBeingBuilt|90977e18b07a2dfa
 lua/ui/uimain.lua|StartFrontEndUI|365b7b815f056e38
 lua/ui/dialogs/eschandler.lua|HandleEsc|4999401d11f2074a
 lua/ui/game/gamemain.lua|CreateWldUIProvider|2ed623a06b876ec2

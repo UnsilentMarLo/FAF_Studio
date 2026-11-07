@@ -35,6 +35,12 @@ do
                     if u.EdFrozen and not u.Dead then
                         u.EdFrozen = nil
                         pcall(function() u:SetImmobile(false) end)       -- best effort
+                        -- what the unit does when it is finished (a crab egg hatches) was held back while editing (schook/lua/sim/units/cybran/cconstructioneggunit.lua)
+                        if u.EdDeferred then
+                            local deferred = u.EdDeferred
+                            u.EdDeferred = nil
+                            pcall(deferred)       -- best effort
+                        end
                         -- structures get the footprint decal the editor withheld (schook/lua/sim/units/StructureUnit.lua)
                         if u.CreateTarmac and EntityCategoryContains(categories.STRUCTURE, u) then
                             pcall(function() u:CreateTarmac(true, true, true) end)       -- best effort
@@ -293,15 +299,21 @@ do
     end
 
     --- Destroys the unit of blueprint `bp` standing at (x, z) (the editor's own entity of a unit it removed or moved).
+    --- GetUnitsInRect returns every unit whose footprint touches the rectangle, so the first one of the blueprint is not always the one at (x, z): next to a unit of the same
+    --- blueprint (two power generators side by side) it was the neighbour that was destroyed, and a group move or turn (take down and put up, one unit after the other) piled the units
+    --- on top of each other. The unit whose position is nearest to (x, z) is the one.
     Callbacks.EdRemoveUnitAt = function(data)
         local units = GetUnitsInRect(Rect(data.x - 1.5, data.z - 1.5, data.x + 1.5, data.z + 1.5))
         if units then
+            local best, bestD = nil, nil
             for _, u in units do
                 if not u.Dead and u:GetBlueprint().BlueprintId == data.bp then
-                    u:Destroy()
-                    return
+                    local p = u:GetPosition()
+                    local d = (p[1] - data.x) * (p[1] - data.x) + (p[3] - data.z) * (p[3] - data.z)
+                    if not bestD or d < bestD then best, bestD = u, d end
                 end
             end
+            if best then best:Destroy() end
         end
     end
 

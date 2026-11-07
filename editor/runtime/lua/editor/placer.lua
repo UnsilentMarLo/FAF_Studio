@@ -28,6 +28,7 @@ local anyShown = false      -- something of the placement preview is on screen
 local ended = false         -- Shutdown ran: the session is ending, no ghost is made any more
 local decalIds = {}         -- overlay decal ids in use
 local footIds = {}          -- overlay ids of the footprint quads in use
+local nearKey = false      -- what the outlines on screen were made for (the units and the area): the same again draws nothing (each outline reads the terrain along its sides)
 local MAX_GHOSTS = 80
 local FOOT_MAX = 60         -- footprints are drawn for the first ones only
 local frame = 0
@@ -195,7 +196,15 @@ local function WorldAtScreen(x, y)
     return nil
 end
 
+local testCursor = false   -- { x, z }: a pointer position a self test sets instead of the real pointer (SetTestCursor)
+
+--- For self tests: the preview follows this world point instead of the mouse; false gives the mouse back.
+function SetTestCursor(x, z)
+    testCursor = x and { x, z } or false
+end
+
 local function Cursor(info)
+    if testCursor then return Snap(info, testCursor[1], testCursor[2]) end
     if dragging and dragPos then return Snap(info, dragPos[1], dragPos[2]) end
     -- The point under the pointer is worked out from the pointer's screen position on every frame, like a click does (ui.lua OnWorldPress): GetMouseWorldPos is only
     -- refreshed by a mouse move, so while the wheel zoomed the camera toward the pointer the preview stayed at the old world point and slid away from the mouse.
@@ -320,6 +329,7 @@ function Clear()
     decalIds = {}
     for id in footIds do ed_overlay_remove(id) end
     footIds = {}
+    nearKey = false
     anyShown = false
 end
 
@@ -335,6 +345,51 @@ local function Ghost(i, info, valid)
         ghostKeys[i] = key
     end
     return ghosts[i]
+end
+
+--- The footprint (outline) and skirt (fainter outline) of the units already on the map near the preview, in a cool grey-blue, so a new unit can be laid against them. Only for the
+--- Unit tool; `positions` are the points being previewed (a line of units: all of them). At most NEAR_MAX units within NEAR_RADIUS world units of a preview point.
+local NEAR_RADIUS = 24
+local NEAR_MAX = 90
+
+
+local function ShowNeighbours(info, positions)
+    local used = {}
+    if info.unit then
+        local x0, z0, x1, z1
+        for _, pos in positions do
+            if not x0 then x0, z0, x1, z1 = pos[1], pos[2], pos[1], pos[2] end
+            x0, z0, x1, z1 = math.min(x0, pos[1]), math.min(z0, pos[2]), math.max(x1, pos[1]), math.max(z1, pos[2])
+        end
+        if x0 then
+            x0, z0, x1, z1 = x0 - NEAR_RADIUS, z0 - NEAR_RADIUS, x1 + NEAR_RADIUS, z1 + NEAR_RADIUS
+            local key = string.format('%s|%.1f|%.1f|%.1f|%.1f', Units().Stamp(), x0, z0, x1, z1)
+            if key == nearKey then return end
+            nearKey = key
+            local n = 0
+            for _, u in Units().CachedAll() do
+                if n >= NEAR_MAX then break end
+                if u.x >= x0 and u.x <= x1 and u.z >= z0 and u.z <= z1 then
+                    local bp = Blueprint(u.bp)
+                    if bp then
+                        n = n + 1
+                        local foot, skirt = Fit().Rects(bp, u.x, u.z, u.heading)
+                        local idO, idS = 'pn:o:' .. n, 'pn:s:' .. n
+                        ed_overlay_set(idO, RectLine(foot), 'D0A0C8FF', 0.12, 2, 3, true, true)
+                        used[idO] = true
+                        footIds[idO] = true
+                        if skirt and (math.abs(skirt[1] - foot[1]) > 0.01 or math.abs(skirt[2] - foot[2]) > 0.01 or math.abs(skirt[3] - foot[3]) > 0.01 or math.abs(skirt[4] - foot[4]) > 0.01) then
+                            ed_overlay_set(idS, RectLine(skirt), '78A0C8FF', 0.08, 1, 1.5, true, true)
+                            used[idS] = true
+                            footIds[idS] = true
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if not info.unit then nearKey = false end
+    SweepFootprints('pn:', used)
 end
 
 local function Draw(info, positions)
@@ -398,6 +453,7 @@ local function Draw(info, positions)
     end
     decalIds = decalUsed
     SweepFootprints('pl:', footUsed)
+    pcall(ShowNeighbours, info, positions)       -- best effort: the units already there
     anyShown = true
     Report('place', info.id, red, used, why, redX, redZ)
 end
@@ -533,7 +589,7 @@ function Update(ui, view)
         Finish(kind, info, nil)
         return
     end
-    if not view.CursorOverWorld then
+    if not view.CursorOverWorld and not testCursor then
         if not dragging and table.getn(corners) == 0 then Clear() return end
     end
     local cx, cz = Cursor(info)
