@@ -28,7 +28,6 @@ local anyShown = false      -- something of the placement preview is on screen
 local ended = false         -- Shutdown ran: the session is ending, no ghost is made any more
 local decalIds = {}         -- overlay decal ids in use
 local footIds = {}          -- overlay ids of the footprint quads in use
-local nearKey = false      -- what the outlines on screen were made for (the units and the area): the same again draws nothing (each outline reads the terrain along its sides)
 local MAX_GHOSTS = 80
 local FOOT_MAX = 60         -- footprints are drawn for the first ones only
 local frame = 0
@@ -329,7 +328,6 @@ function Clear()
     decalIds = {}
     for id in footIds do ed_overlay_remove(id) end
     footIds = {}
-    nearKey = false
     anyShown = false
 end
 
@@ -347,49 +345,82 @@ local function Ghost(i, info, valid)
     return ghosts[i]
 end
 
---- The footprint (outline) and skirt (fainter outline) of the units already on the map near the preview, in a cool grey-blue, so a new unit can be laid against them. Only for the
---- Unit tool; `positions` are the points being previewed (a line of units: all of them). At most NEAR_MAX units within NEAR_RADIUS world units of a preview point.
-local NEAR_RADIUS = 24
-local NEAR_MAX = 90
+-- ---- the units already on the map ---------------------------------------------------------------------------------------------------------
+-- While the Unit tool is active EVERY unit of the map shows its footprint (outline) and skirt (fainter outline) in a cool grey-blue, so a new unit can be laid against any of
+-- them. The overlay keeps what it is given, so this is a retained layer: it is made once, and a change of the map (Units().Stamp()) only redoes the units that moved, are new or are
+-- gone. The outlines are made a few milliseconds per frame (each one reads the terrain along its sides), so a map with thousands of units fills in over a second or two without a hitch.
+local NEAR_BUDGET = 0.004       -- seconds of outline making per frame
+local near = { stamp = false, have = {}, todo = {}, ntodo = 0 }
 
+local function NearRemove(key)
+    local e = near.have[key]
+    if e then
+        ed_overlay_remove('pn:o:' .. key)
+        if e.skirt then ed_overlay_remove('pn:s:' .. key) end
+        near.have[key] = nil
+    end
+end
 
-local function ShowNeighbours(info, positions)
-    local used = {}
-    if info.unit then
-        local x0, z0, x1, z1
-        for _, pos in positions do
-            if not x0 then x0, z0, x1, z1 = pos[1], pos[2], pos[1], pos[2] end
-            x0, z0, x1, z1 = math.min(x0, pos[1]), math.min(z0, pos[2]), math.max(x1, pos[1]), math.max(z1, pos[2])
+local function NearSet(key, u)
+    local bp = Blueprint(u.bp)
+    if not bp then return end
+    local old = near.have[key]
+    local foot, skirt = Fit().Rects(bp, u.x, u.z, u.heading)
+    ed_overlay_set('pn:o:' .. key, RectLine(foot), 'D0A0C8FF', 0.12, 2, 3, true, true)
+    local hasSkirt = false
+    if skirt and (math.abs(skirt[1] - foot[1]) > 0.01 or math.abs(skirt[2] - foot[2]) > 0.01 or math.abs(skirt[3] - foot[3]) > 0.01 or math.abs(skirt[4] - foot[4]) > 0.01) then
+        ed_overlay_set('pn:s:' .. key, RectLine(skirt), '78A0C8FF', 0.08, 1, 1.5, true, true)
+        hasSkirt = true
+    elseif old and old.skirt then
+        ed_overlay_remove('pn:s:' .. key)
+    end
+    near.have[key] = { bp = u.bp, x = u.x, z = u.z, h = u.heading, skirt = hasSkirt }
+end
+
+--- Every frame: `active` (the Unit tool in edit mode) keeps the layer up to date, anything else removes it.
+local function NearUpdate(active)
+    if not active then
+        if near.stamp ~= false or near.ntodo > 0 then
+            for key in near.have do NearRemove(key) end
+            near.stamp, near.todo, near.ntodo = false, {}, 0
         end
-        if x0 then
-            x0, z0, x1, z1 = x0 - NEAR_RADIUS, z0 - NEAR_RADIUS, x1 + NEAR_RADIUS, z1 + NEAR_RADIUS
-            local key = string.format('%s|%.1f|%.1f|%.1f|%.1f', Units().Stamp(), x0, z0, x1, z1)
-            if key == nearKey then return end
-            nearKey = key
-            local n = 0
-            for _, u in Units().CachedAll() do
-                if n >= NEAR_MAX then break end
-                if u.x >= x0 and u.x <= x1 and u.z >= z0 and u.z <= z1 then
-                    local bp = Blueprint(u.bp)
-                    if bp then
-                        n = n + 1
-                        local foot, skirt = Fit().Rects(bp, u.x, u.z, u.heading)
-                        local idO, idS = 'pn:o:' .. n, 'pn:s:' .. n
-                        ed_overlay_set(idO, RectLine(foot), 'D0A0C8FF', 0.12, 2, 3, true, true)
-                        used[idO] = true
-                        footIds[idO] = true
-                        if skirt and (math.abs(skirt[1] - foot[1]) > 0.01 or math.abs(skirt[2] - foot[2]) > 0.01 or math.abs(skirt[3] - foot[3]) > 0.01 or math.abs(skirt[4] - foot[4]) > 0.01) then
-                            ed_overlay_set(idS, RectLine(skirt), '78A0C8FF', 0.08, 1, 1.5, true, true)
-                            used[idS] = true
-                            footIds[idS] = true
-                        end
-                    end
-                end
+        return
+    end
+    local stamp = Units().Stamp()
+    if stamp ~= near.stamp then
+        near.stamp = stamp
+        local seen = {}
+        near.todo, near.ntodo = {}, 0
+        for _, u in Units().CachedAll() do
+            local key = u.army .. '|' .. tostring(u.group) .. '|' .. u.name
+            seen[key] = true
+            local e = near.have[key]
+            if not e or e.bp ~= u.bp or e.x ~= u.x or e.z ~= u.z or e.h ~= u.heading then
+                near.ntodo = near.ntodo + 1
+                near.todo[near.ntodo] = { key, u }
             end
         end
+        for key in near.have do
+            if not seen[key] then NearRemove(key) end
+        end
     end
-    if not info.unit then nearKey = false end
-    SweepFootprints('pn:', used)
+    if near.ntodo > 0 then
+        local t0 = GetSystemTimeSeconds()
+        while near.ntodo > 0 do
+            local item = near.todo[near.ntodo]
+            near.todo[near.ntodo] = nil
+            near.ntodo = near.ntodo - 1
+            NearSet(item[1], item[2])
+            if GetSystemTimeSeconds() - t0 > NEAR_BUDGET then break end
+        end
+    end
+end
+
+--- For a self test: how many units still wait for their outline, and how many have one.
+function NearState()
+    local n = 0
+    for _ in near.have do n = n + 1 end
+    return n, near.ntodo
 end
 
 local function Draw(info, positions)
@@ -453,7 +484,6 @@ local function Draw(info, positions)
     end
     decalIds = decalUsed
     SweepFootprints('pl:', footUsed)
-    pcall(ShowNeighbours, info, positions)       -- best effort: the units already there
     anyShown = true
     Report('place', info.id, red, used, why, redX, redZ)
 end
@@ -579,10 +609,12 @@ function Update(ui, view)
         Clear()
     end
     if not kind or ui.State.mode ~= 'edit' then
+        pcall(NearUpdate, false)
         if kind == nil and anyShown then Clear() end
         return
     end
     local info = Info(kind)
+    pcall(NearUpdate, info and info.unit and info.bp and true or false)     -- best effort: the layer of the units already there
     if not info then Clear() return end
     -- a Shift line ends when Shift is let go
     if not dragging and table.getn(corners) > 0 and not (IsKeyDown and IsKeyDown('Shift')) then
