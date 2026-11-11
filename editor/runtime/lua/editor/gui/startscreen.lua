@@ -130,6 +130,11 @@ function Open(opts)
     Btn('New map...', function() Maps_().NewMap() end)
     Btn('Open map...', function() Maps_().OpenMap() end)
     Btn('Open from my maps folder...', function() Maps_().OpenMap({ userOnly = true }) end)
+    if rawget(_G, 'ed_vault_start') then
+        Btn('FAF vault: search and download...', function()
+            import('/lua/editor/gui/panels_vault.lua').Open()
+        end)
+    end
     Btn('Release a map...', function() Maps_().OpenMap({ title = 'Release which map?', afterOpen = 'file.release' }) end)
     Btn('Mod project...', ModProject)
     local autosave = Maps.AutosavePath()

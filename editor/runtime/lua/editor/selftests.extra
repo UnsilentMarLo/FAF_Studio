@@ -67,3 +67,4 @@ selftest_nativebatch
 selftest_placer
 selftest_playsetup
 selftest_import
+selftest_vault
