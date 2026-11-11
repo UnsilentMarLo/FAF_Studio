@@ -1230,9 +1230,9 @@ Command = {
     ["view.slope"] = "Show or hide the slope colours.",
     ["workspace.load"] = "Load a saved panel layout.",
     ["workspace.save"] = "Save the current panel layout under a name.",
-}
     ["adaptive.panel"] = "Open the Adaptive map panel: which resources spawn with which army, the lobby option groups, and what becomes of the selected unit.",
     ["adaptive.window"] = "Open the Lobby options window of an adaptive map: each lobby option with its choices and what each puts on the map.",
+}
 
 Menu = {
     ["texture layer"] = "Import or export one texture layer as a FAFME layer file (.scmsl): choose the layer.",
