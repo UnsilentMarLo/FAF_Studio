@@ -390,6 +390,13 @@ function FillMask(i)
     return MaskEdit(i, 'fill mask of', Constant(255))
 end
 
+--- Rewrites the mask of layer i (1..8) tile by tile: `fn(before, n, x0, z0, tw, th)` returns the new values (a table of n, 0..255) of the tile, or nil to leave it. Returns an undo entry
+--- (maskdelta.lua), nil when nothing changed. The material editor's Mask output (material.lua) paints with it.
+function EditMask(i, label, fn)
+    if i < 1 or i > 8 then return nil end
+    return MaskEdit(i, label, fn)
+end
+
 --- Removes the texture of layer i (1..9) and everything it painted: one undo entry (nil when there is no transparent texture to put in its place). A painted layer without a texture but with a
 --- mask would lerp its transparent colour over the layers below by the mask alone (the shader weighs albedo and normal by the mask, not by the texture), so the mask goes with the texture;
 --- undo brings both back. The Upper layer (9) has no mask and keeps its own alpha.
