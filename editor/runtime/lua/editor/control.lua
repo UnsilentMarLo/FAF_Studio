@@ -97,6 +97,7 @@ function Start()
     -- every session starts a new map document (heights, command stack, dirty state)
     ed_doc_attach()
     Safe.Try('control:map.CaptureFile', function() import('/lua/editor/map.lua').CaptureFile() end)       -- the file's records, for the exact save (before anything is edited)
+    Safe.Try('control:water.Start', function() import('/lua/editor/water.lua').Start() end)              -- the map's water bodies (ScenarioInfo.WaterBodies) go on the open map
     if not HasCommandLineArg('/noeditorui') then
         local ui = import('/lua/editor/ui.lua')
         if not HasCommandLineArg('/oldui') then

@@ -48,6 +48,7 @@ Tool = {
     army = 'Places the next start position (ARMY_1, ARMY_2 ...). A ghost of the marker with its name follows the pointer; with symmetry on the mirror images show too.',
     area = 'Drag a rectangle on the ground: areas are used by missions and scripts.',
     ruler = 'Drag to measure a distance over the terrain. Shift continues the line.',
+    waterbody = 'Places the seed or the outline points of the water body chosen in the Water bodies panel: click for the seed or a new point, drag a point to move it.',
     camera = 'No tool: the mouse only moves the camera.',
     crater = 'Example tool of the editor_example mod (a sample of how mods add tools).',
 }
@@ -84,6 +85,8 @@ Panel = {
     ambient = 'Ambient light and fog.',
     water = 'Water surface settings of the map.',
     waterlook = 'Look of the water: colours, reflection, sun highlights and waves.',
+    waterbodies = 'Lakes and pools at their own water levels, and dry ground below the sea: level, shading, seed, outline and bounds of each, and what the game fills.',
+    waves = 'Shore wave generators of the sea: make them along the shore, remove them, import and export .scmwaves files.',
     meshmap = 'Settings of a mesh terrain map (terrain/terrain.lua).',
     meshimport = 'Imports a 3D model (OBJ) as terrain patches.',
     unitlab = 'Mod project and the stats of one unit; writes merge blueprints.',

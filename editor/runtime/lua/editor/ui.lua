@@ -88,6 +88,9 @@ Tools = {
     { id = 'area_select', label = 'Select area', kind = 'select', pick = 'area' },
     { id = 'chain',   label = 'Draw chain', kind = 'custom', workspaces = { Objects = true, Mission = true },
       OnPress = function(wx, wz, event) return import('/lua/editor/chains.lua').DrawPress(wx, wz, event) end },
+    -- the seed and outline of a water body (water.lua, the Water bodies panel)
+    { id = 'waterbody', label = 'Water body', kind = 'custom', workspaces = { Environment = true },
+      OnPress = function(wx, wz, event) return import('/lua/editor/water.lua').Press(wx, wz, event) end },
     { id = 'decalpath', label = 'Decal path', kind = 'custom', workspaces = { Objects = true },
       OnPress = function(wx, wz, event) return import('/lua/editor/decalpath.lua').Press(wx, wz, event) end },
 }

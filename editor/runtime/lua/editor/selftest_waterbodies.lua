@@ -287,6 +287,8 @@ local SAVE_STEM = 'wp6_lakes'
 
 function Build()
     out, failed = {}, 0
+    -- an engine without the adaptive-map natives (WP5) still saves: map.lua's save asks adaptive.lua, which calls ed_adaptive_tables_path; a stub that finds no tables stands in
+    if not rawget(_G, 'ed_adaptive_tables_path') then ed_adaptive_tables_path = function() return '' end end
     local doc = Map.Doc or Map.Load()
     if not doc then return 'FAIL no document' end
     local w, h = ed_terrain_info()

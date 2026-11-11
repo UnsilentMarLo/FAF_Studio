@@ -13,3 +13,7 @@ shaders, water, alpha mask); the half resolution map (saved with the map, edited
 changes, on the worker pool when it is big. `ed_water_hires 0` switches it off. The finer texture belongs to the terrain resource (kept per `CWldTerrainRes`, removed in its destructor).
 
 **Checked** on a layout lake seen from above at 0.25 map distance: 2 unit steps with the half resolution map, a 0.5 unit comb with 2 texels per cell, a clean edge with 4.
+
+## With water bodies (2026-11-11, WP6, `WP6_WATER.md`)
+
+A map with `ScenarioInfo.WaterBodies` (lakes at their own levels) takes `RebuildWaterMapRectWithBodies`, where each 2 x 2 block has the water of its own body. The finer water map now follows: each texel takes the level and abyss of the block it lies in (a dry body has none), the dirty cells are marked from that branch too, and the map is rebuilt whole when the bodies change (`WaterBodiesGeneration`). Without bodies nothing differs from what is described above. A lake below the sea is a hole in the sea (the block rule), a lake above it has a shore. A `.scmap` is written with the sea's water map: the bodies are taken off the map for that write.
