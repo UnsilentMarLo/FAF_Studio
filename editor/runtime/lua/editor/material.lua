@@ -110,7 +110,7 @@ function New(how)
     local id = ed_tex_new(how or 'start')
     dirty = true
     Doc = { id = id, name = 'untitled', sel = false, undo = {}, redo = {}, pics = {}, serial = 0, evalChanges = -1, evalSize = 0, terrain = false, terrainStamp = '', saved = false,
-            changed = 0, stamp = 0 }
+            changed = 0, stamp = 0, epoch = 0 }
     Doc.saved = ed_tex_save(id)
     Say('')
     return Doc
@@ -279,16 +279,36 @@ function MoveNodes(list, before)
     if before then End('move', before, 'move') end
 end
 
---- Where a new node fits: right of the selected node, else below the lowest node.
+--- The height a node of this type has on the canvas (logical pixels; the canvas, panels_material.lua, draws it the same).
+function NodeHeight(def)
+    local rows = math.max(table.getn(def.inputs), table.getn(def.outputs), 1)
+    return 20 + 5 + rows * 16 + ((not def.output and def.outputs[1]) and (5 + 64) or 0) + 5
+end
+NODE_WIDTH = 150
+
+--- Where a new node of `type` fits: right of the selected node (else at the left edge), moved down until it overlaps no node.
 function FreeSpot(type)
     local s = Snap()
+    local def = TypeOf(type)
+    local h = def and NodeHeight(def) or 100
     local from = Doc and Doc.sel and Node(Doc.sel)
-    if from then return from.x + 190, from.y end
-    local y = 0
-    for _, n in s.nodes do
-        if n.y + 140 > y then y = n.y + 140 end
+    local x, y = 0, 0
+    if from then x, y = from.x + NODE_WIDTH + 40, from.y end
+    local function Free(px, py)
+        for _, n in s.nodes do
+            local nd = TypeOf(n.type)
+            local nh = nd and NodeHeight(nd) or 100
+            if px < n.x + NODE_WIDTH + 12 and px + NODE_WIDTH + 12 > n.x and py < n.y + nh + 12 and py + h + 12 > n.y then return false end
+        end
+        return true
     end
-    return 0, y
+    for col = 0, 4 do
+        for row = 0, 20 do
+            local px, py = x + col * (NODE_WIDTH + 40), y + row * 24
+            if Free(px, py) then return px, py end
+        end
+    end
+    return x, y
 end
 
 -- ---- evaluation and pictures ------------------------------------------------------------------------------------------------------------------
@@ -304,6 +324,7 @@ function CaptureTerrain()
     local ok, why = ed_tex_terrain(Doc.id, true)
     Doc.terrain = ok and true or false
     Doc.terrainStamp = TerrainStamp()
+    Doc.epoch = Doc.epoch + 1                  -- the Map nodes' pictures are made from new data: no cached picture is right
     Doc.evalChanges = -1
     if not ok then Say('map data: ' .. tostring(why), 'warn') end
     return ok
@@ -362,7 +383,7 @@ function Picture(node, pin, size, channel)
     if not n then return nil end
     local key = 'n' .. node .. ':' .. pin .. ':' .. size .. ':' .. (channel or '')
     local have = Doc.pics[key]
-    local rev = n.revision .. ':' .. Doc.evalSize
+    local rev = n.revision .. ':' .. Doc.evalSize .. ':' .. Doc.epoch
     if have and have.rev == rev then return have.vfs end
     local disk, vfs = Fresh(key)
     local ok, why = ed_tex_image(Doc.id, node, pin, disk, size, channel)
@@ -380,7 +401,7 @@ function OutputPicture(pin, size)
     Snap()
     local key = 'out:' .. pin .. ':' .. size
     local have = Doc.pics[key]
-    local rev = snapChanges .. ':' .. Doc.evalSize
+    local rev = snapChanges .. ':' .. Doc.evalSize .. ':' .. Doc.epoch
     if have and have.rev == rev then return have.vfs end
     local disk, vfs = Fresh(key)
     local ok, why = ed_tex_result(Doc.id, pin, disk, size)
@@ -398,7 +419,7 @@ function LitPicture(mode, size, yaw, light)
     Snap()
     local key = 'lit:' .. mode .. ':' .. size
     local have = Doc.pics[key]
-    local rev = snapChanges .. ':' .. Doc.evalSize .. ':' .. yaw .. ':' .. light
+    local rev = snapChanges .. ':' .. Doc.evalSize .. ':' .. Doc.epoch .. ':' .. yaw .. ':' .. light
     if have and have.rev == rev then return have.vfs end
     local disk, vfs = Fresh(key)
     local ok, why = ed_tex_lit(Doc.id, disk, size, mode, yaw, light)
