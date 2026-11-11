@@ -42,3 +42,15 @@ Work package 5 of `EDITOR_PORT_ANALYSIS.md`. Engine branch `port/wp5-adaptive` o
 * The panels are narrow when docked (the Objects workspace tab stack is about 210 px wide at 100 % UI): long file paths are cut; the list scrolls. They are meant to be popped out (drag the tab) or opened by the Map menu command.
 * `ed_adaptive_tables_path` follows the import in the script; a save under another name retargets that line only when the old path appears literally in the script.
 * Older tables templates (no `maxPlayerOnMap`, `;` after tables) are refused by upstream's parser: the panel says so and offers nothing to edit.
+
+## Integration with WP3 (2026-11-11, throwaway branch `port/wp5-int`, worktree `faf-re-port-wp5-int`, exe `main_ed_wp5int_x64`; not pushed)
+
+`git merge port/wp3-exact-save` into `port/wp5-adaptive`: one conflict, `src/moho/editor/editor_sources.cmake` (both added their binding unit at the same place); resolved by keeping both (`EdUpAdaptiveLua.cpp`, `EdUpMapFileLua.cpp`, `editor/doc/EdMapFile.cpp`). Built without errors.
+* `selftest_roundtrip` PASS, `selftest_adaptive` PASS (132 checks) on that exe.
+* DualGap loaded, one mex moved between two armies, Save As into a new folder: `_scenario.lua` 29 of 29 lines, only the three path lines (map / save / script) differ (text preserved by `textsave.lua`); `_tables.lua` 83 lines, the two army rows differ; `_options.lua` identical.
+
+## Final pass
+
+* Layout check (`layoutcheck.PanelOnly`, both panels, UI 100 / 150 / 200 %): one overlap in the "not adaptive" row found and fixed, now 66 controls, 0 problems.
+* Full `selftests` on the WP5 exe: all pass except those of other packages (natives not in this exe: import, roundtrip, vault, waterbodies), `alphagen` (out of memory after the full run, a known caveat), `perfbudget` (timing while a build ran) and one `assets` finding (`file.vault` has no menu tip, WP4).
+* Properties panel: a selected unit shows Group, Appears (the fate sentence) and Wreck rows (`gui/panels_objects.lua`); the full text and the lobby rules stay in the Adaptive map panel.
