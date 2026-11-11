@@ -215,6 +215,30 @@ function Run()
         Check(ed_stratum_layer(layer) == albedoAfter, 'Redo applies it again')
         History.Undo()
 
+        -- saving the map: the baked files are copied into the map's folder and the layer points there (maptextures.PrepareSave), the engine loads them from there
+        do
+            local MT = import('/lua/editor/maptextures.lua')
+            local dir, mount = M.TMP .. '/savetest', '/maps/selftest_material_save'
+            M.New('start')
+            M.SetPreviewSize(64)
+            M.Apply({ stratum = layer, size = 64, tile = 10, mask = false })
+            local stop3 = Now() + 30
+            while M.Job and Now() < stop3 do M.Refresh() end
+            local staged = ed_stratum_layer(layer)
+            local restore = MT.PrepareSave(dir, mount)
+            local saved, savedSize = ed_stratum_layer(layer)
+            local base = string.gsub(staged or '', '^.*/', '')
+            Check(saved == mount .. '/env/layers/' .. base, 'a map save points the layer into the map folder: ' .. tostring(saved))
+            Check(ed_file_exists(dir .. '/env/layers/' .. base), 'and the baked file is in that folder')
+            Check(savedSize == 10, 'with the tile size it had')
+            local ni = ed_tex_dds_info(dir .. '/env/layers/' .. base)
+            Check(ni and ni.width == 64, 'the copy is the 64 x 64 file the bake wrote')
+            M.Close()
+            Strata.Restore({ index = layer, albedo = albedoBefore, size = sizeBefore, normal = normalBefore, nsize = sizeBefore })
+            if (albedoBefore or '') == '' then Strata.Clear(layer) end
+            pcall(ed_file_delete, dir .. '/env/layers/' .. base)
+        end
+
         -- the mask follows the map's mask grid whatever its size: at 256 x 256 the paint is made at that grid, and the old size comes back afterwards
         local w0, h0 = w, h
         local okSize = Strata.SetMaskSize(w0 * 2)
