@@ -32,6 +32,23 @@ local function Timed(name, fn)
     if loadTimes and dt >= 5 then table.insert(loadTimes, string.format('%s %.0f', name, dt)) end
 end
 
+--- The records of the .scmap the session's map was read from (preview, image chunks, the props' floats) and what its heights, water and masks were: the exact save (SaveMapFile) writes
+--- the file's own bytes back for what was not edited. Called once when the session starts (control.lua Start), before anything can be edited. Returns true | false, reason.
+function CaptureFile()
+    if not rawget(_G, 'ed_mapfile_capture') then return false, 'no exact-save natives' end
+    local session = SessionGetScenarioInfo()
+    if not session or not session.file then return false, 'no scenario file on the session' end
+    local ok0, env = pcall(LoadChunk, session.file)
+    local mapPath = session.map or (ok0 and env.ScenarioInfo and env.ScenarioInfo.map)
+    if not mapPath then return false, 'the scenario names no map file' end
+    local ok, res, why = pcall(ed_mapfile_capture, mapPath)
+    if not ok or not res then
+        LOG('EDITOR map: exact save is off for this map (' .. tostring(ok and why or res) .. ')')
+        return false, tostring(ok and why or res)
+    end
+    return true
+end
+
 --- Reads the open session's map files. Returns the document or nil + a reason.
 function Load()
     local t0 = GetSystemTimeSeconds()
@@ -259,7 +276,7 @@ end
 --- The text of `_save.lua`: the header and the Scenario table (markers, areas, armies, units, platoons). `pace` (optional) is called every few hundred tables and may coroutine.yield():
 --- a caller that runs this in a coroutine serialises a big document in slices over many frames (luaser.lua). SaveAs takes the text as `opts.saveText` when the caller made it ahead.
 function SaveText(pace)
-    return HEADER .. Ser.Chunk({ { 'Scenario', Doc.save } }, pace)
+    return HEADER .. Ser.Chunk({ { 'Scenario', Doc.save } }, pace, true)
 end
 
 local function Basename(path)
@@ -291,6 +308,44 @@ function EnsureDefaultEnvCube()
     table.insert(flat, '<default>')
     table.insert(flat, '/textures/environment/defaultenvcube.dds')
     pcall(ed_env_set_lookups, flat)
+end
+
+--- Writes the map file. The exact writer (EdUpMapFileLua.cpp: the records the file was loaded with go back for what was not edited) unless the map keeps the engine's: a mesh terrain map,
+--- or one whose file was not a classic .scmap. Returns true, the writer used ('exact' | 'engine') | false.
+function SaveMapFile(path)
+    if not rawget(_G, 'ed_mapfile_save') then return ed_map_save(path) end
+    local res, why = ed_mapfile_save(path, { engine = (Doc and Doc.info and Doc.info.TerrainSystem == 'mesh') or false })
+    if not res then
+        LOG('EDITOR map: saving ' .. path .. ' failed: ' .. tostring(why))
+        return false
+    end
+    LOG(string.format('EDITOR map: %s written by the %s writer%s', path, res.writer, res.kept and (' (' .. res.kept .. ' of ' .. res.images .. ' image chunks kept as the file had them)') or ''))
+    return true, res.writer
+end
+
+--- The text of a data file the map was loaded from (a folder or an archive), or nil.
+local function OriginalText(vfsPath)
+    if not vfsPath or not rawget(_G, 'ed_game_file_read') then return nil end
+    local ok, text = pcall(ed_game_file_read, vfsPath)
+    return ok and text or nil
+end
+
+--- `_save.lua` as the file it was loaded from with the changes of the document written into it (comments and layout kept), or nil when that is not possible (the caller writes the whole text).
+function PreservedSaveText()
+    if not Doc then return nil end
+    local ok, text, why = pcall(function() return import('/lua/editor/textsave.lua').Save(OriginalText(Doc.savePath), Doc.save) end)
+    if ok and text then return text end
+    LOG('EDITOR map: _save.lua is written whole (' .. tostring(ok and why or text) .. ')')
+    return nil
+end
+
+--- The same for `_scenario.lua`; `info` is the table to be written.
+function PreservedScenario(info)
+    if not Doc then return nil end
+    local ok, text, why = pcall(function() return import('/lua/editor/textsave.lua').Scenario(OriginalText(Doc.scenarioPath), info) end)
+    if ok and text then return text end
+    LOG('EDITOR map: _scenario.lua is written whole (' .. tostring(ok and why or text) .. ')')
+    return nil
 end
 
 function SaveAsCore(diskDir, stem, opts)
@@ -340,7 +395,7 @@ function SaveAsCore(diskDir, stem, opts)
     EnsureDefaultEnvCube()
     local restoreTextures = nil
     pcall(function() restoreTextures = import('/lua/editor/maptextures.lua').PrepareSave(diskDir, mount) end)       -- the map-wide textures made in the editor go into this map folder
-    local savedScmap = ed_map_save(diskDir .. '/' .. stem .. '.scmap')
+    local savedScmap = SaveMapFile(diskDir .. '/' .. stem .. '.scmap')
     if restoreTextures then pcall(restoreTextures) end            -- (an autosave only borrows the paths)
     if not savedScmap then
         return nil, 'ed_map_save failed'
@@ -350,9 +405,8 @@ function SaveAsCore(diskDir, stem, opts)
         local ok, res, why = pcall(function() return import('/lua/editor/preview.lua').Apply(diskDir .. '/' .. stem .. '.scmap') end)
         if not ok or not res then LOG('EDITOR map preview not written: ' .. tostring(ok and why or res)) end
     end
-    local ok = ed_write_file(diskDir .. '/' .. stem .. '_scenario.lua',
-                             Ser.ScenarioChunk(info))
-    ok = ed_write_file(diskDir .. '/' .. stem .. '_save.lua', (opts and opts.saveText) or SaveText()) and ok
+    local ok = ed_write_file(diskDir .. '/' .. stem .. '_scenario.lua', PreservedScenario(info) or Ser.ScenarioChunk(info))
+    ok = ed_write_file(diskDir .. '/' .. stem .. '_save.lua', (opts and opts.saveText) or PreservedSaveText() or SaveText()) and ok
     ok = ed_write_file(diskDir .. '/' .. stem .. '_script.lua', script) and ok
     if info.TerrainMesh then
         local copied, why = import('/lua/editor/meshmap.lua').CopyTerrain(diskDir)

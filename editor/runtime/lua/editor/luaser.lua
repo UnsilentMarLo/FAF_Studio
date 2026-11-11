@@ -15,7 +15,13 @@ local function Number(n)
     if n == math.floor(n) and n > -1000000000 and n < 1000000000 then
         return string.format('%d', n)
     end
-    return string.format('%.7g', n)
+    -- 7 digits when they give the same number back, else 8 or 9: a float (LUA_NUMBER is float) needs up to 9, and a value of the loaded file (19.8515625) must be written as it was read
+    local s = string.format('%.7g', n)
+    if tonumber(s) ~= n then
+        s = string.format('%.8g', n)
+        if tonumber(s) ~= n then s = string.format('%.9g', n) end
+    end
+    return s
 end
 
 local function String(s)
@@ -31,13 +37,17 @@ end
 --
 -- `pace` (optional) is called every PACE_EVERY tables: code that serialises a big document in slices passes a function that coroutine.yield()s when its time slice is used up.
 
+local RESERVED = { ['and'] = true, ['break'] = true, ['do'] = true, ['else'] = true, ['elseif'] = true, ['end'] = true, ['false'] = true, ['for'] = true, ['function'] = true,
+                   ['if'] = true, ['in'] = true, ['local'] = true, ['nil'] = true, ['not'] = true, ['or'] = true, ['repeat'] = true, ['return'] = true, ['then'] = true,
+                   ['true'] = true, ['until'] = true, ['while'] = true }
+
 local PACE_EVERY = 32
 local floor, getn, find, concat, sort, rep = math.floor, table.getn, string.find, table.concat, table.sort, string.rep
 
 local function OtherKeyLess(a, b) return tostring(a) < tostring(b) end
 
 --- A writer: returns Put(value, indent) (appends the text of a value to the list), Finish() (the text of everything put so far) and Raw(text).
-local function Writer(pace)
+local function Writer(pace, bare)
     local buf, n = {}, 0
     local pads, keys = {}, {}
     local visits = 0
@@ -61,7 +71,11 @@ local function Writer(pace)
     local function KeyText(k)
         local t = keys[k]
         if not t then
-            t = '[' .. Quoted(k) .. '] = '
+            if bare and find(k, '^[%a_][%w_]*$') and not RESERVED[k] then
+                t = k .. ' = '           -- the game's own files write the names that are identifiers bare (Markers = {): upstream's SaveFile finds its blocks by them
+            else
+                t = '[' .. Quoted(k) .. '] = '
+            end
             keys[k] = t
         end
         return t
@@ -178,9 +192,9 @@ function Dump(value, indent)
     return finish()
 end
 
---- `assignments` is an array of { name, value }. `pace` (optional): see above.
-function Chunk(assignments, pace)
-    local put, finish, raw = Writer(pace)
+--- `assignments` is an array of { name, value }. `pace` (optional): see above. `bare`: keys that are identifiers are written without brackets and quotes, as the game's own save files do.
+function Chunk(assignments, pace, bare)
+    local put, finish, raw = Writer(pace, bare)
     for _, a in assignments do
         raw(a[1] .. ' = ')
         put(a[2], 0)
@@ -189,13 +203,9 @@ function Chunk(assignments, pace)
     return finish()
 end
 
-local RESERVED = { ['and'] = true, ['break'] = true, ['do'] = true, ['else'] = true, ['elseif'] = true, ['end'] = true, ['false'] = true, ['for'] = true, ['function'] = true,
-                   ['if'] = true, ['in'] = true, ['local'] = true, ['nil'] = true, ['not'] = true, ['or'] = true, ['repeat'] = true, ['return'] = true, ['then'] = true,
-                   ['true'] = true, ['until'] = true, ['while'] = true }
-
 --- The text of a `_scenario.lua` in the form the game's own maps have: `key = value` for names that are identifiers (`['standard']` stays quoted, as in the game's files), the no-rush radius
 --- and offsets as numbers with decimals, and an offset of 0 for every army (norushoffsetX_ARMY_1 ... Y). `info` is not changed.
-function ScenarioChunk(info)
+function ScenarioCopy(info)
     local copy = {}
     for k, v in info do copy[k] = v end
     local std = info.Configurations and info.Configurations.standard
@@ -204,6 +214,11 @@ function ScenarioChunk(info)
         if copy['norushoffsetX_' .. name] == nil then copy['norushoffsetX_' .. name] = 0 end
         if copy['norushoffsetY_' .. name] == nil then copy['norushoffsetY_' .. name] = 0 end
     end
+    return copy
+end
+
+function ScenarioChunk(info)
+    local copy = ScenarioCopy(info)
     local text = Chunk({ { 'version', 3 }, { 'ScenarioInfo', copy } })
     local out = {}
     for line in string.gfind(text, '[^\n]+') do

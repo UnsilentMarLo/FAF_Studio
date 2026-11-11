@@ -1,9 +1,10 @@
 -- Releasing a map: the checks a map must pass before it goes to players, the next free version folder, and the release itself (a complete copy of the map under a new
--- `<stem>.v<N>` folder with `map_version = N` in the scenario file; the working map stays as it is). `scripts/pack_map.py` zips such a folder for the vault.
+-- `<stem>.v<N>` folder with `map_version = N` in the scenario file; the working map stays as it is). `Package` zips such a folder for the vault (scripts/pack_map.py does the same outside the editor).
 --
 --   Findings()            list of { sev = 'E' | 'W' | 'I', text }: scenario information, start positions, markers, script, army setup, mission, mesh terrain, mods
 --   Target()              -> disk folder of the next release, stem, version number
 --   Release()             -> folder, version   | nil, reason   (refuses while Findings() has an error)
+--   Package(folder, done) the vault zip of a released folder (upstream's EdPackage through ed_package_*: a worker thread, polled here); done(ok, text, zipPath) is called when it is finished
 --
 -- Lua 5.0 dialect: no `%` (math.mod), no `#` (table.getn), no string.match.
 
@@ -132,4 +133,38 @@ function Release()
     end
     -- the working map keeps the version too, so its next release is the next number
     return dir, n
+end
+
+--- Makes `<folder>.zip` (the folder is the zip's only top folder, as the vault wants it; the editor's sidecar is left out). The checks of EdPackage (name.vNNNN in lower case, the scenario's
+--- map_version, the files it names) run first: a folder that fails them gets no zip and `done` hears why. Without the natives (an older engine) nothing is made.
+function Package(folder, done)
+    if not (rawget(_G, 'ed_package_start') and rawget(_G, 'ForkThread')) then
+        if done then done(false, 'this engine has no package natives (use scripts/pack_map.py)') end
+        return false
+    end
+    local zip = string.gsub(folder, '[\/]+$', '') .. '.zip'
+    local job = ed_package_start(folder, zip)
+    ForkThread(function()
+        while true do
+            WaitSeconds(0.2)
+            local st = ed_package_poll(job)
+            if not st then
+                if done then done(false, 'the package job was lost') end
+                return
+            end
+            if st.done then
+                ed_package_free(job)
+                local text
+                if st.ok then
+                    text = string.format('%s (%d files, %.1f MB)', zip, st.files or 0, (st.bytes or 0) / 1048576)
+                else
+                    text = tostring(st.error)
+                    for _, e in st.errors or {} do text = text .. '; ' .. e end
+                end
+                if done then done(st.ok and true or false, text, zip) end
+                return
+            end
+        end
+    end)
+    return true
 end

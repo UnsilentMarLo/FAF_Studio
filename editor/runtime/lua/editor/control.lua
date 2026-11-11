@@ -96,6 +96,7 @@ function Start()
     FreeNativeStores()
     -- every session starts a new map document (heights, command stack, dirty state)
     ed_doc_attach()
+    Safe.Try('control:map.CaptureFile', function() import('/lua/editor/map.lua').CaptureFile() end)       -- the file's records, for the exact save (before anything is edited)
     if not HasCommandLineArg('/noeditorui') then
         local ui = import('/lua/editor/ui.lua')
         if not HasCommandLineArg('/oldui') then

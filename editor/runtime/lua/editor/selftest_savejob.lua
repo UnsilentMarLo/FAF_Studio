@@ -18,7 +18,12 @@ end
 local CALLS = { VECTOR3 = true, VECTOR2 = true, RECTANGLE = true }
 local function RNumber(n)
     if n == math.floor(n) and n > -1000000000 and n < 1000000000 then return string.format('%d', n) end
-    return string.format('%.7g', n)
+    local s = string.format('%.7g', n)
+    if tonumber(s) ~= n then
+        s = string.format('%.8g', n)
+        if tonumber(s) ~= n then s = string.format('%.9g', n) end
+    end
+    return s
 end
 local function RString(s)
     s = string.gsub(s, '\\', '\\\\')

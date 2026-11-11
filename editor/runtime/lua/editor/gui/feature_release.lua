@@ -47,7 +47,10 @@ function ReleaseDialog()
         local folder, n = Release.Release()
         Dialog.Close()
         if folder then
-            Say('released as version ' .. n .. ': ' .. folder .. '  (zip it with scripts/pack_map.py)')
+            Say('released as version ' .. n .. ': ' .. folder .. '  (making the vault zip...)')
+            Release.Package(folder, function(ok, text)
+                Say(ok and ('vault zip: ' .. text) or ('no vault zip: ' .. tostring(text)))
+            end)
         else
             Say('release failed: ' .. tostring(n))
         end
