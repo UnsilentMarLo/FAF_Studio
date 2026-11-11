@@ -72,3 +72,4 @@ selftest_roundtrip
 selftest_wp7
 selftest_adaptive
 selftest_waterbodies
+selftest_particles

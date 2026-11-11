@@ -7,6 +7,14 @@
 --
 -- points = { {x, v}, ... } with x ascending from 0 to 1; v is plotted from VMIN to VMAX (0 and 1 are marked). The curve is the monotone cubic of paths.lua (EvalProfile), drawn as dots.
 --
+-- Optional opts for other kinds of curve (the particle editor's emitter curves, fxparticle.lua: linear keys, any value range, a random spread, the ends free):
+--   range = function() return vmin, vmax end       the plotted value range (default VMIN, VMAX)
+--   sample = function(n) return { v1 .. vn } end   the curve's values at n points from x = 0 to 1 (default: paths.lua's EvalProfile of the points)
+--   band = function(n) return lo, hi end            two more arrays, drawn dimmer: the spread around the curve
+--   refs = function() return { {v, 'text'}, ... } end   horizontal reference lines with their labels (replaces the 0 and 1 lines)
+--   freeEnds = true                                  the first and last point move in x too, any point can be deleted down to one, a point can be added before the first / after the last
+--   onSelect = function(index) end, selected = function() return index end     the point that was pressed, and which one is drawn highlighted
+--
 -- Lua 5.0 dialect.
 
 local Bitmap = import('/lua/maui/bitmap.lua').Bitmap
@@ -18,10 +26,20 @@ local Paths = import('/lua/editor/paths.lua')
 local VMIN, VMAX = -0.25, 1.25
 local DOTS = 160
 local HIT = 9
+local BAND_COLOR = '70ffffff'
 
 function Curve(parent, opts)
     local c = Skin.color
-    local C = { x = 0, y = 0, w = 200, h = 140, dots = {}, handles = {} }
+    local C = { x = 0, y = 0, w = 200, h = 140, dots = {}, handles = {}, bandLo = {}, bandHi = {}, refs = {} }
+
+    --- The plotted value range (opts.range, else the profile's).
+    local function Range()
+        if opts.range then
+            local lo, hi = opts.range()
+            if lo and hi and hi > lo then return lo, hi end
+        end
+        return VMIN, VMAX
+    end
 
     C.bg = Bitmap(parent)
     C.bg.Depth:Set(function() return parent.Depth() + 5 end)
@@ -56,13 +74,15 @@ function Curve(parent, opts)
     end
 
     local function ToPixel(x, v)
-        return C.bg.Left() + x * C.bg.Width(), C.bg.Top() + (VMAX - v) / (VMAX - VMIN) * C.bg.Height()
+        local vmin, vmax = Range()
+        return C.bg.Left() + x * C.bg.Width(), C.bg.Top() + (vmax - v) / (vmax - vmin) * C.bg.Height()
     end
 
     local function FromPixel(px, py)
+        local vmin, vmax = Range()
         local x = (px - C.bg.Left()) / math.max(1, C.bg.Width())
-        local v = VMAX - (py - C.bg.Top()) / math.max(1, C.bg.Height()) * (VMAX - VMIN)
-        return math.max(0, math.min(1, x)), math.max(VMIN, math.min(VMAX, v))
+        local v = vmax - (py - C.bg.Top()) / math.max(1, C.bg.Height()) * (vmax - vmin)
+        return math.max(0, math.min(1, x)), math.max(vmin, math.min(vmax, v))
     end
 
     local function Handle(i)
@@ -80,26 +100,89 @@ function Curve(parent, opts)
     function C:Place(x, y, w, h)
         C.x, C.y, C.w, C.h = x, y, w, h
         W.Place(C.bg, parent, x, y, w, h)
-        local function Row(v) return y + math.floor((VMAX - v) / (VMAX - VMIN) * h) end
-        W.Place(C.zero, parent, x, Row(0), w, 1)
-        W.Place(C.one, parent, x, Row(1), w, 1)
+        local vmin, vmax = Range()
+        local function Row(v) return y + math.floor((vmax - v) / (vmax - vmin) * h) end
+        if opts.refs then
+            C.zero:Hide() C.one:Hide() C.top:Hide() C.base:Hide()
+        else
+            W.Place(C.zero, parent, x, Row(0), w, 1)
+            W.Place(C.one, parent, x, Row(1), w, 1)
+            W.Place(C.top, parent, x + Skin.S(3), Row(1) - Skin.S(14))
+            W.Place(C.base, parent, x + Skin.S(3), Row(0) - Skin.S(14))
+        end
         W.Place(C.mid, parent, x + math.floor(w / 2), y, 1, h)
-        W.Place(C.top, parent, x + Skin.S(3), Row(1) - Skin.S(14))
-        W.Place(C.base, parent, x + Skin.S(3), Row(0) - Skin.S(14))
         W.Place(C.left, parent, x + Skin.S(3), y + h - Skin.S(14))
         W.Place(C.right, parent, x + w - C.right.Width() - Skin.S(3), y + h - Skin.S(14))
         C:Refresh()
     end
 
+    --- The reference lines (opts.refs): a pool of lines with labels.
+    local function DrawRefs(vmin, vmax)
+        if not opts.refs then return end
+        local list = opts.refs() or {}
+        for i = 1, math.max(table.getn(list), table.getn(C.refs)) do
+            local r = C.refs[i]
+            local ref = list[i]
+            if ref and ref[1] >= vmin and ref[1] <= vmax then
+                if not r then
+                    r = { line = Bitmap(parent), label = W.Label(parent, '', 0, 0, { color = c.textDim, size = 'small' }) }
+                    r.line.Depth:Set(function() return parent.Depth() + 6 end)
+                    r.line:SetSolidColor('40ffffff')
+                    r.line:DisableHitTest()
+                    C.refs[i] = r
+                end
+                local row = C.y + math.floor((vmax - ref[1]) / (vmax - vmin) * C.h)
+                W.Place(r.line, parent, C.x, row, C.w, 1)
+                r.label:SetText(ref[2])
+                W.Place(r.label, parent, C.x + Skin.S(3), row - Skin.S(14))
+                r.line:Show() r.label:Show()
+            elseif r then
+                r.line:Hide() r.label:Hide()
+            end
+        end
+    end
+
+    local function DotSet(set, i)
+        local d = set[i]
+        if not d then
+            d = Bitmap(parent)
+            d.Depth:Set(function() return parent.Depth() + 7 end)
+            d:SetSolidColor(BAND_COLOR)
+            d:DisableHitTest()
+            set[i] = d
+        end
+        return d
+    end
+
     function C:Refresh()
         local points, smooth, symmetric = Pts()
         local w, h = C.w, C.h
+        local vmin, vmax = Range()
         local lastY = nil
+        local samples = opts.sample and opts.sample(DOTS)
+        DrawRefs(vmin, vmax)
+        if opts.band then
+            local lo, hi = opts.band(DOTS)
+            for i = 1, DOTS do
+                local l, u = DotSet(C.bandLo, i), DotSet(C.bandHi, i)
+                if lo and hi and lo[i] and hi[i] then
+                    local x = (i - 1) / (DOTS - 1)
+                    local dw = math.max(2, math.floor(w / DOTS) + 1)
+                    local ly = math.floor((vmax - math.max(vmin, math.min(vmax, lo[i]))) / (vmax - vmin) * h)
+                    local uy = math.floor((vmax - math.max(vmin, math.min(vmax, hi[i]))) / (vmax - vmin) * h)
+                    W.Place(l, parent, C.x + math.floor(x * (w - 2)), C.y + ly, dw, 2)
+                    W.Place(u, parent, C.x + math.floor(x * (w - 2)), C.y + uy, dw, 2)
+                    l:Show() u:Show()
+                else
+                    l:Hide() u:Hide()
+                end
+            end
+        end
         for i = 1, DOTS do
             local x = (i - 1) / (DOTS - 1)
-            local v = Paths.EvalProfile(points, smooth, x)
-            v = math.max(VMIN, math.min(VMAX, v))
-            local py = math.floor((VMAX - v) / (VMAX - VMIN) * h)
+            local v = samples and samples[i] or Paths.EvalProfile(points, smooth, x)
+            v = math.max(vmin, math.min(vmax, v))
+            local py = math.floor((vmax - v) / (vmax - vmin) * h)
             local top, bottom = py, py
             if lastY then top, bottom = math.min(py, lastY), math.max(py, lastY) end
             lastY = py
@@ -111,8 +194,9 @@ function Curve(parent, opts)
             local p = points[i]
             local hnd = Handle(i)
             if p then
-                local py = math.floor((VMAX - math.max(VMIN, math.min(VMAX, p[2]))) / (VMAX - VMIN) * h)
+                local py = math.floor((vmax - math.max(vmin, math.min(vmax, p[2]))) / (vmax - vmin) * h)
                 W.Place(hnd, parent, C.x + math.floor(p[1] * (w - 2)) - math.floor(hs / 2), C.y + py - math.floor(hs / 2), hs, hs)
+                hnd:SetSolidColor((opts.selected and opts.selected() == i) and c.accent or c.text)
                 hnd:Show()
             else
                 hnd:Hide()
@@ -142,7 +226,8 @@ function Curve(parent, opts)
         local list = {}
         for i, p in points do list[i] = { p[1], p[2] } end
         if hit and (mods.Right or (IsKeyDown and IsKeyDown(17))) then
-            if table.getn(list) > 2 and hit > 1 and hit < table.getn(list) then
+            local deletable = opts.freeEnds and table.getn(list) > 1 or (table.getn(list) > 2 and hit > 1 and hit < table.getn(list))
+            if deletable then
                 table.remove(list, hit)
                 opts.set(list)
                 if opts.onDragEnd then opts.onDragEnd() end
@@ -157,12 +242,13 @@ function Curve(parent, opts)
             for i, p in list do
                 if p[1] > x then at = i break end
             end
-            if at == 1 or at > table.getn(list) then return true end    -- the ends are fixed in x
+            if not opts.freeEnds and (at == 1 or at > table.getn(list)) then return true end    -- the ends are fixed in x
             table.insert(list, at, { x, v })
             hit = at
             opts.set(list)
         end
         local index = hit
+        if opts.onSelect then opts.onSelect(index) end
         local dragger = Dragger()
         dragger.OnMove = function(d, x, y)
             local px, pv = FromPixel(x, y)
@@ -171,10 +257,11 @@ function Curve(parent, opts)
             for i, p in cur do l2[i] = { p[1], p[2] } end
             local p = l2[index]
             if not p then return end
-            if index == 1 or index == table.getn(l2) then
+            if (index == 1 or index == table.getn(l2)) and not opts.freeEnds then
                 p[2] = pv
             else
-                local lo, hi = l2[index - 1][1] + 0.01, l2[index + 1][1] - 0.01
+                local lo = l2[index - 1] and (l2[index - 1][1] + 0.002) or 0
+                local hi = l2[index + 1] and (l2[index + 1][1] - 0.002) or 1
                 p[1] = math.max(lo, math.min(hi, px))
                 p[2] = pv
             end
@@ -196,6 +283,9 @@ function Curve(parent, opts)
         C.bg:Destroy() C.zero:Destroy() C.one:Destroy() C.mid:Destroy() C.left:Destroy() C.right:Destroy() C.top:Destroy() C.base:Destroy()
         for _, d in C.dots do d:Destroy() end
         for _, hnd in C.handles do hnd:Destroy() end
+        for _, d in C.bandLo do d:Destroy() end
+        for _, d in C.bandHi do d:Destroy() end
+        for _, r in C.refs do r.line:Destroy() r.label:Destroy() end
     end
 
     return C

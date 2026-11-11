@@ -392,6 +392,7 @@ function SaveAsCore(diskDir, stem, opts)
     if not import('/lua/editor/mission.lua').IsImported() then       -- (the script of an imported hand-written mission is not edited behind the user's back)
         script = import('/lua/editor/playable.lua').PatchScript(script)       -- AREA_1 is applied as the playable area
     end
+    pcall(function() script = import('/lua/editor/fxdeco.lua').PatchScript(script) end)       -- the effect decorations (markers of type Effect): MapEditorEffects and its call in OnPopulate (WP8)
 
     EnsureDefaultEnvCube()
     local restoreTextures = nil
