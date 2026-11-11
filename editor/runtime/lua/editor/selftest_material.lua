@@ -215,6 +215,43 @@ function Run()
         Check(ed_stratum_layer(layer) == albedoAfter, 'Redo applies it again')
         History.Undo()
 
+        -- the mask follows the map's mask grid whatever its size: at 256 x 256 the paint is made at that grid, and the old size comes back afterwards
+        local w0, h0 = w, h
+        local okSize = Strata.SetMaskSize(w0 * 2)
+        local w2, h2 = ed_stratum_info()
+        Check(okSize and w2 == w0 * 2 and h2 == h0 * 2, 'the mask grid can be changed (' .. w0 .. ' to ' .. tostring(w2) .. ')')
+        if okSize then
+            M.SetPreviewSize(64)
+            M.New('start')
+            for _, nd in M.Snap().nodes do if nd.type == 'Noise' then M.Connect(nd.id, 0, M.OutputNode(), 2) end end
+            Check(M.Apply({ stratum = layer, size = 128, tile = 10, mask = true }), 'Apply at the new grid starts')
+            local stop2 = Now() + 30
+            while M.Job and Now() < stop2 do M.Refresh() end
+            local big = ed_stratum_read(layer - 1, 0, 0, w2 - 1, h2 - 1)
+            local lo2, hi2, painted = 255, 0, 0
+            for i = 1, w2 * h2 do
+                if big[i] < lo2 then lo2 = big[i] end
+                if big[i] > hi2 then hi2 = big[i] end
+                if big[i] > 0 then painted = painted + 1 end
+            end
+            Check(table.getn(big) == w2 * h2 and hi2 - lo2 > 100 and painted > (w2 * h2) / 2, 'the Mask output is painted over all ' .. w2 .. ' x ' .. h2 .. ' cells (values ' .. lo2 .. '..' .. hi2 .. ')')
+            M.Close()
+            Strata.SetMaskSize(w0)
+            local w3 = ed_stratum_info()
+            Check(w3 == w0, 'the mask grid is back at ' .. w0)
+            -- the layer is put back by hand (the history was cleared by the size change)
+            if wasEmpty then Strata.Clear(layer) else Strata.Restore({ index = layer, albedo = albedoBefore, size = sizeBefore, normal = normalBefore, nsize = sizeBefore }) end
+            local clear = ed_stratum_read(layer - 1, 0, 0, w0 - 1, h0 - 1)
+            local cleared = true
+            for i = 1, w0 * h0 do
+                if clear[i] ~= maskBefore[i] then cleared = false break end
+            end
+            if not cleared then
+                -- put the original paint back: the cells that differ are rewritten
+                ed_stratum_write(layer - 1, 0, 0, w0 - 1, h0 - 1, maskBefore)
+            end
+        end
+
         -- no Albedo linked: refused with a message, nothing changes
         local de = M.New('empty')
         local refused, reason = M.Apply({ stratum = layer, size = 64 })
