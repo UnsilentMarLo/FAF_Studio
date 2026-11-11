@@ -30,6 +30,7 @@ Job = false               -- the running bake: { id, stratum, tile, size, mask, 
 
 local types, byName = false, {}
 local snap, snapChanges, snapKey = false, -1, ''
+local dirty = true      -- an edit was made (or a tick began): the snapshot is asked from the natives again; between, Node() and friends read the one in hand
 local tmpSerial = 0
 local tmpMounted = false
 local filesMounted = false
@@ -107,6 +108,7 @@ function New(how)
     if not Available() then return nil, 'this engine has no texture graph natives (ed_tex_*)' end
     Free()
     local id = ed_tex_new(how or 'start')
+    dirty = true
     Doc = { id = id, name = 'untitled', sel = false, undo = {}, redo = {}, pics = {}, serial = 0, evalChanges = -1, evalSize = 0, terrain = false, terrainStamp = '', saved = false,
             changed = 0, stamp = 0 }
     Doc.saved = ed_tex_save(id)
@@ -121,7 +123,9 @@ end
 --- The snapshot of the graph; one native call per change.
 function Snap()
     if not Doc then return false end
+    if not dirty and snap then return snap end
     local s = ed_tex_graph(Doc.id)
+    dirty = false
     if not s then return false end
     -- the natives' change counter and ours (a Load can bring the counter back to a value it had before: the graph file differs, the count may not)
     local key = s.changes .. ':' .. Doc.changed
@@ -169,6 +173,7 @@ end
 
 --- Records the edit that turned `before` into the graph as it is now. `key` merges the edits of one slider drag (within 1.5 s) into one entry. Returns true when something changed.
 function End(label, before, key)
+    dirty = true
     local after = ed_tex_save(Doc.id)
     if after == before then return false end
     local now = Now()
@@ -186,6 +191,7 @@ function End(label, before, key)
 end
 
 local function Restore(text)
+    dirty = true
     local ok, why = ed_tex_load(Doc.id, text)
     if not ok then Say('undo: ' .. tostring(why), 'error') return false end
     if Doc.sel and not Node(Doc.sel) then Doc.sel = false end
@@ -268,6 +274,7 @@ end
 
 --- Moves nodes: `list` = { { id, x, y }, ... }; `before` (from Begin) makes it one undo step, else each call is one.
 function MoveNodes(list, before)
+    dirty = true
     for _, m in list do ed_tex_move(Doc.id, m[1], m[2], m[3]) end
     if before then End('move', before, 'move') end
 end
@@ -605,6 +612,7 @@ end
 --- Called about four times a second by the panels: evaluates what changed and finishes a bake. Returns true when something changed.
 function Refresh()
     if not Doc then return false end
+    dirty = true
     local moved = false
     if Evaluate() then moved = true end
     if PollBake() then moved = true end
