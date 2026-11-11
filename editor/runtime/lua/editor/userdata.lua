@@ -119,7 +119,7 @@ end
 
 --- Files the editor writes into the user folder (layouts, saved layouts, hotkeys, recent maps, settings).
 function Known()
-    local list = { 'settings.lua', 'hotkeys.lua', 'recent.txt', 'crash.lua' }
+    local list = { 'settings.lua', 'hotkeys.lua', 'recent.txt', 'crash.lua', 'play_setups.lua' }
     local ok, Workspace = pcall(import, '/lua/editor/gui/workspace.lua')
     if ok and Workspace then
         for _, name in Workspace.Presets() do

@@ -666,6 +666,7 @@ function Start(name, opts)
     Commands.Register{ id = 'file.info', title = 'File: map info...', run = function() import('/lua/editor/gui/dialogs_map.lua').MapInfo() end }
     Commands.Register{ id = 'file.lobbyslots', title = 'File: lobby slots...', run = function() import('/lua/editor/gui/dialogs_map.lua').LobbySlots() end }
     Commands.Register{ id = 'file.play', title = 'File: play test', keys = 'F5', run = function() EditorUI().Play() end }
+    Commands.Register{ id = 'file.playsetup', title = 'File: play setup...', run = function() import('/lua/editor/gui/dialogs_play.lua').Open() end }
     Commands.Register{ id = 'file.mods', title = 'File: mods...', run = function() ShowOrAdd('mods') end }
     Commands.Register{ id = 'file.import_height', title = 'File: import heightmap...', run = function() import('/lua/editor/heightio.lua').Import() end }
     Commands.Register{ id = 'file.export_height', title = 'File: export heightmap...', run = function() import('/lua/editor/heightio.lua').Export() end }
@@ -729,6 +730,7 @@ function Start(name, opts)
     if S.editor and session.autoplay == '1' then
         local ui = EditorUI()
         ui.State.backup = session.backup
+        ui.State.skirmish = session.skirmish == '1'
         local stage = tonumber(session.stage) or 1
         ForkThread(function()
             WaitSeconds(1.5)

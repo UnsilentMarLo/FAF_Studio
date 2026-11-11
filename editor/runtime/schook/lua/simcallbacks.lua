@@ -24,7 +24,7 @@ do
 
     Callbacks.EdSetPlay = function(data)
         ScenarioInfo.EditorPlaying = data.on and true or false
-        if ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then
+        if ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.Options.EditorSkirmish then
             -- first, so that the test run starts with the diplomacy the scenario made (free for all, teams, a mission's Alliances); back to edit (on = false) is quiet again
             Peace(data.on and 'Restore' or 'Enter')
         end
@@ -49,7 +49,7 @@ do
                 end
             end
         end
-        if data.on and data.deposits and not ScenarioInfo.EditorDepositsMade then
+        if data.on and data.deposits and not ScenarioInfo.EditorDepositsMade and not (ScenarioInfo.Options and ScenarioInfo.Options.EditorSkirmish) then       -- (a play setup's world made them at load)
             -- The editing sim leaves out the rock prop and the splat of every resource marker (schook/lua/sim/scenarioutilities.lua: the editor draws its own and moves them
             -- with the marker); a test run shows the ones of the game, made like ScenarioUtilities.CreateResources does, for the markers as they are now. Once per session:
             -- a splat cannot be removed again, and Stop opens the map afresh.

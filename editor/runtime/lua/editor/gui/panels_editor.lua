@@ -60,7 +60,8 @@ Panels.Register{
         P.undo = Make('Undo', function() UI.DoUndo() end, 'Undo the last step (Ctrl+Z). A brush stroke is one step.')
         P.redo = Make('Redo', function() UI.DoRedo() end, 'Redo what you undid (Ctrl+Y).')
         P.save = Make('Save map', function() UI.DoSave() end, 'Save the map (Ctrl+S). The first save asks where.')
-        P.play = Make('Play test', function() UI.Play() end, 'Run the map in the game (F5). Stop brings you back to the editor.')
+        P.play = Make('Play test', function() UI.Play() end, 'Run the map in the game (F5) with the Play setup (solo by default; AIs, teams, fog, mods when set up). Stop brings you back to the editor.')
+        P.playSetup = Make('Play setup...', function() import('/lua/editor/gui/dialogs_play.lua').Open() end, 'Choose who plays the test run: AIs of any type, teams, factions, fog, victory, mods. Profiles keep a setup.')
         P.mods = Make('Mods', function() UI.ToggleModDialog() end, 'Choose the game mods that are loaded for this map.')
         function P:Refresh()
             for id, b in P.toolButtons do b:SetOn(id == UI.State.tool) end
@@ -119,10 +120,10 @@ Panels.Register{
             end
             -- a read-only workspace (Review) has nothing to undo
             local ws = UI.Workspaces[UI.State.workspace]
-            local actions = { P.undo, P.redo, P.save, P.play, P.mods }
+            local actions = { P.undo, P.redo, P.save, P.play, P.playSetup, P.mods }
             if ws and ws.readOnly then
                 for _, b in { P.undo, P.redo } do Park(b) end
-                actions = { P.save, P.play, P.mods }
+                actions = { P.save, P.play, P.playSetup, P.mods }
             end
             Block(P.heads.Actions, actions, y)
             P:Refresh()

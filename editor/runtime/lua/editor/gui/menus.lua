@@ -166,6 +166,7 @@ Menu.Extend('menubar.Map', function()
     return {
         { command = 'file.mods' },
         { command = 'file.play' },
+        { command = 'file.playsetup' },
     }
 end, 30)
 

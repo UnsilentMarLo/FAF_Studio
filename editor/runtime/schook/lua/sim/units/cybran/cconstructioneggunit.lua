@@ -7,7 +7,7 @@ do
     local baseOnStopBeingBuilt = CConstructionEggUnit.OnStopBeingBuilt
     pcall(function() import('/lua/editor/hookcheck.lua').Expect('cconstructioneggunit', CConstructionEggUnit, { 'OnStopBeingBuilt' }) end)       -- best effort (the check only warns)
     CConstructionEggUnit.OnStopBeingBuilt = function(self, builder, layer)
-        if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.EditorPlaying then
+        if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.Options.EditorSkirmish and not ScenarioInfo.EditorPlaying then
             self.EdDeferred = function() baseOnStopBeingBuilt(self, builder, layer) end
             CStructureUnit.OnStopBeingBuilt(self, builder, layer)
             return

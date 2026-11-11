@@ -108,6 +108,7 @@ OnModeChange = false
 State = {
     mode = 'edit',          -- 'edit' (game HUD hidden, tools active) or 'play' (game HUD shown, test run)
     backup = nil,           -- scenario path of the autosave taken when Play was pressed
+    skirmish = false,       -- this session was started for a play setup (AIs, fog, mods ...): its world is a game from the start (playsetup.lua)
     tool = 'select',
     workspace = false,      -- set by the shell (SetWorkspace); false = no workspace rules (the old fixed panel)
     markerCount = 0,
@@ -753,7 +754,7 @@ function SetMode(mode)
     end
     State.mode = mode
     -- (a test run also gets the rock and splat of every resource marker: the editing sim leaves them out, markervis.lua)
-    Safe.Try('ui:fn755', function() SimCallback({ Func = 'EdSetPlay', Args = { on = (mode == 'play'), deposits = (mode == 'play') and import('/lua/editor/markervis.lua').DepositList() or nil } }, false) end)       -- mission scripts start their first stage on Play
+    Safe.Try('ui:fn755', function() SimCallback({ Func = 'EdSetPlay', Args = { on = (mode == 'play'), deposits = (mode == 'play' and not State.skirmish) and import('/lua/editor/markervis.lua').DepositList() or nil } }, false) end)       -- mission scripts start their first stage on Play
     if mode == 'play' then
         GameUIHidden(false)
         UnitBars(true)
@@ -811,9 +812,30 @@ function Play(stage)
         return
     end
     State.backup = scenario
+    -- the play setup (lua/editor/playsetup.lua): AIs, teams, factions, fog, victory, mods need armies with a brain, which only a session start makes; a campaign mission plays with its own
+    local PlaySetup = import('/lua/editor/playsetup.lua')
+    local setup = (not PlaySetup.IsCampaign()) and PlaySetup.Current() or nil
+    if setup then
+        local blocked = PlaySetup.Blocking(setup)
+        if blocked then
+            Say('play: ' .. blocked)
+            return
+        end
+    end
+    local Control = import('/lua/editor/control.lua')
+    if setup and PlaySetup.NeedsReload(setup) then
+        if not PlaySetup.WriteLaunch(setup, scenario) then
+            Say('play: the setup could not be written (editor_play_launch.txt)')
+            return
+        end
+        -- a new session of the saved copy with the armies the setup asks for, which starts in play mode (gui/shell.lua Start reads these keys)
+        Control.SessionExtra = { autoplay = 1, backup = scenario, stage = stage or 1, skirmish = 1 }
+        Say('play: starting the session for the setup ...')
+        Control.LoadMap(scenario)
+        return
+    end
     if MissionChanged() then
         -- a new session with the saved copy, which then starts in play mode (gui/shell.lua Start reads these keys)
-        local Control = import('/lua/editor/control.lua')
         Control.SessionExtra = { autoplay = 1, backup = scenario, stage = stage or 1 }
         Say('the mission changed: reloading the map for the test run ...')
         Control.LoadMap(scenario)

@@ -9,7 +9,7 @@ do
     pcall(function() import('/lua/editor/hookcheck.lua').Expect('structureunit', baseStructureUnit, { 'CreateTarmac', 'FlattenSkirt', 'FlattenSkirtHorizontally', 'RotateTowardsEnemy' }) end)       -- best effort (the check only warns)
     StructureUnit = ClassUnit(baseStructureUnit) {
         CreateTarmac = function(self, createAlbedoTarmac, createNormalTarmac, createGlowTarmac, orientation, tarmac, lifeTime)
-            if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.EditorPlaying then
+            if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.Options.EditorSkirmish and not ScenarioInfo.EditorPlaying then
                 return
             end
             return baseStructureUnit.CreateTarmac(self, createAlbedoTarmac, createNormalTarmac, createGlowTarmac, orientation, tarmac, lifeTime)
@@ -19,14 +19,14 @@ do
         -- editor places, moves (the editor takes the unit down and makes it again), pastes or loads one, and again for one a test run builds). In an editor world both do nothing.
         -- Base: StructureUnit:FlattenSkirt()   StructureUnit:FlattenSkirtHorizontally()   (both flatten the heights under GetSkirtRect() with FlattenMapRect / FlattenGradientMapRect)
         FlattenSkirt = function(self)
-            if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then
+            if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.Options.EditorSkirmish then
                 return
             end
             return baseStructureUnit.FlattenSkirt(self)
         end,
 
         FlattenSkirtHorizontally = function(self)
-            if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then
+            if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.Options.EditorSkirmish then
                 return
             end
             return baseStructureUnit.FlattenSkirtHorizontally(self)
@@ -35,7 +35,7 @@ do
         -- OnCreate also turns defensive structures towards the nearest enemy or the map centre: in the editor the unit keeps the heading the mapper gave it (the preview showed that one).
         -- Base: StructureUnit:RotateTowardsEnemy()
         RotateTowardsEnemy = function(self)
-            if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode then
+            if ScenarioInfo and ScenarioInfo.Options and ScenarioInfo.Options.EditorMode and not ScenarioInfo.Options.EditorSkirmish then
                 return
             end
             return baseStructureUnit.RotateTowardsEnemy(self)
