@@ -6,7 +6,7 @@
 --   Settings       mode ('props' or 'decals': the same rules scatter terrain decals, Decals.Active style: Entries then hold albedo decal textures), decalSize (units at scale 100 percent),
 --                  withNormals (decals: add the matching normals decal), seed, count (most props placed), minDist, fill (0..1: how much of the density mask is used), slopeMin / slopeMax (degrees), heightMin / heightMax, scaleMin / scaleMax (percent),
 --                  randomHeading, avoidExisting (keep minDist to the props already on the map), margin (units from the map edge)
---   Entries        list of { bp = path, weight = number } (prop blueprints, or albedo decal textures when Settings.mode is 'decals'); each mode keeps its own list: Entries and DecalEntries
+--   Entries        list of { bp = path, weight = number[, rotMin, rotMax (degrees), scaleMin, scaleMax (percent)] } (the optional ranges are the entry's own, a FAFME paint set: fafme.lua) (prop blueprints, or albedo decal textures when Settings.mode is 'decals'); each mode keeps its own list: Entries and DecalEntries
 --   Density        the mask definition (maskgen.lua) that says where props go; no rules = everywhere
 --   Plan() -> list, report | nil, message     { bp, x, z, heading, scale } for every prop (no change to the map)
 --   Apply() -> placed | nil, message          places them
@@ -172,13 +172,25 @@ function Plan(opts)
                 else
                     -- which blueprint, heading and scale: one draw for the whole group
                     local pick = R.next() * weightSum
-                    local bp = entries[table.getn(entries)].bp
+                    local picked = entries[table.getn(entries)]
                     for _, e in entries do
                         pick = pick - math.max(0, e.weight or 1)
-                        if pick <= 0 then bp = e.bp break end
+                        if pick <= 0 then picked = e break end
                     end
+                    local bp = picked.bp
                     local heading = s.randomHeading and (R.next() * PI2) or 0
-                    local scale = lo + (hi - lo) * R.next()
+                    local scaleRoll = R.next()
+                    local slo, shi = lo, hi
+                    -- an entry with ranges of its own (a paint set of FAFME, fafme.lua: rotMin / rotMax degrees, scaleMin / scaleMax percent) uses them for its props
+                    if picked.rotMin or picked.rotMax then
+                        local r0, r1 = picked.rotMin or 0, picked.rotMax or 360
+                        heading = math.rad(r0 + (r1 - r0) * R.next())
+                    end
+                    if picked.scaleMin or picked.scaleMax then
+                        slo, shi = (picked.scaleMin or picked.scaleMax) / 100, (picked.scaleMax or picked.scaleMin) / 100
+                        if shi < slo then slo, shi = shi, slo end
+                    end
+                    local scale = slo + (shi - slo) * scaleRoll
                     for _, im in images do
                         Remember(im.x, im.z)
                         table.insert(out, { bp = bp, x = im.x, z = im.z, heading = Symmetry.Heading(heading, im), scale = scale })

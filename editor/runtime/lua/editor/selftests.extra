@@ -66,3 +66,4 @@ selftest_uilayout
 selftest_nativebatch
 selftest_placer
 selftest_playsetup
+selftest_import

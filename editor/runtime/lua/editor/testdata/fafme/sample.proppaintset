@@ -1,0 +1,20 @@
+{
+    "PaintProps": [
+        {
+            "Blueprint": "/env/evergreen/props/trees/pine06_s1_prop.bp",
+            "ScaleMin": 0.800000011920929,
+            "ScaleMax": 1.2000000476837159,
+            "RotationMin": 0,
+            "RotationMax": 360,
+            "Chance": 70
+        },
+        {
+            "Blueprint": "/env/evergreen/props/rocks/rock01_prop.bp",
+            "ScaleMin": 1.0,
+            "ScaleMax": 1.0,
+            "RotationMin": 90,
+            "RotationMax": 180,
+            "Chance": 30
+        }
+    ]
+}
