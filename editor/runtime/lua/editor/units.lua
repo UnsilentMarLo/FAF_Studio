@@ -274,6 +274,28 @@ function GameSpawns(group)
     return group == 'INITIAL' or string.sub(group or '', 1, 8) == 'INITIAL/'
 end
 
+-- ---- group paths (adaptive maps: adaptive.lua asks what becomes of a unit by the groups it sits in) -------------------------------------------------------
+
+--- A group path as a list of group names, root first: 'INITIAL/Base' -> { 'INITIAL', 'Base' }.
+function SplitGroup(group)
+    local list = {}
+    for seg in string.gfind(group or 'INITIAL', '[^/]+') do table.insert(list, seg) end
+    return list
+end
+
+--- The names of the groups from under the army's root down to the unit's, e.g. { 'Optional_Wreckage_2', 'Middle' }; nil when the unit does not exist.
+function GroupPathOf(army, name)
+    local u = Lookup(army, name)
+    return u and SplitGroup(u.group) or nil
+end
+
+--- Every group of an army as a path list ({ { 'INITIAL' }, { 'INITIAL', 'Base' }, { 'Optional_Wreckage_2' }, ... }; the order of Groups()).
+function GroupPaths(army)
+    local list = {}
+    for _, group in Groups(army) do table.insert(list, SplitGroup(group)) end
+    return list
+end
+
 --- All units of the map: list of { army, group, name, bp, x, z, y, heading }.
 function All()
     local list = {}
@@ -368,6 +390,24 @@ end
 --- Bulk edits that keep their own undo entry (mirrorhalf.lua): store and spawn / unstore and remove a unit { army, group, name, bp, x, y, z, heading } without history.
 function AddRaw(u) return Add(u) end
 function RemoveRaw(u) Remove(u) end
+
+--- Moves units ({ { army, name }, ... } of one army) into the group `path` ('Optional_Wreckage_2' or 'A/B'; created when missing); one undo step. Returns the number moved.
+function MoveToGroup(list, path)
+    if not Map.Doc or type(path) ~= 'string' or path == '' then return 0 end
+    local moved = {}
+    for _, sel in list do
+        local u = Lookup(sel.army, sel.name)
+        if u and u.group ~= path then table.insert(moved, { from = u, to = { army = u.army, group = path, name = u.name, bp = u.bp, x = u.x, y = u.y, z = u.z, heading = u.heading } }) end
+    end
+    if table.getn(moved) == 0 then return 0 end
+    local function Apply(back)
+        for _, m in moved do Remove(back and m.to or m.from) end
+        for _, m in moved do Add(back and m.from or m.to) end
+    end
+    Apply(false)
+    History.Push({ label = 'move ' .. table.getn(moved) .. ' unit(s) to ' .. path, undo = function() Apply(true) end, redo = function() Apply(false) end })
+    return table.getn(moved)
+end
 
 --- A function that hands out unit names (UNIT_<n>) without scanning every unit each time.
 function NameCounter()

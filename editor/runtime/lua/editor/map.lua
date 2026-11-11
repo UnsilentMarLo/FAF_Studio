@@ -388,6 +388,7 @@ function SaveAsCore(diskDir, stem, opts)
     end
     local patched = import('/lua/editor/mission.lua').PatchScript(script)       -- the generated mission region (when the map has stages)
     script = patched
+    pcall(function() script = import('/lua/editor/adaptive.lua').PatchScript(script, mount, stem) end)       -- an adaptive map's script keeps reading its own _tables.lua after a save under another name
     if not import('/lua/editor/mission.lua').IsImported() then       -- (the script of an imported hand-written mission is not edited behind the user's back)
         script = import('/lua/editor/playable.lua').PatchScript(script)       -- AREA_1 is applied as the playable area
     end
@@ -408,6 +409,10 @@ function SaveAsCore(diskDir, stem, opts)
     local ok = ed_write_file(diskDir .. '/' .. stem .. '_scenario.lua', PreservedScenario(info) or Ser.ScenarioChunk(info))
     ok = ed_write_file(diskDir .. '/' .. stem .. '_save.lua', (opts and opts.saveText) or PreservedSaveText() or SaveText()) and ok
     ok = ed_write_file(diskDir .. '/' .. stem .. '_script.lua', script) and ok
+    do       -- an adaptive map's data files (the edited _tables.lua / _options.lua, or the ones the map was loaded with)
+        local wrote, why = import('/lua/editor/adaptive.lua').WriteFiles(diskDir, stem)
+        if not wrote then LOG('EDITOR map: could not write ' .. tostring(why)) ok = false end
+    end
     if info.TerrainMesh then
         local copied, why = import('/lua/editor/meshmap.lua').CopyTerrain(diskDir)
         if not copied then LOG('EDITOR mesh terrain not copied: ' .. tostring(why)) ok = false end
