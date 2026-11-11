@@ -69,3 +69,6 @@ selftest_playsetup
 selftest_vault
 selftest_import
 selftest_roundtrip
+selftest_wp7
+selftest_adaptive
+selftest_waterbodies

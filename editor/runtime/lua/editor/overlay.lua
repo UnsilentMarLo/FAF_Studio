@@ -1114,6 +1114,56 @@ local function DrawRamp()
     ed_overlay_set('ramp:b', Circle(p[3], p[4], r, 32, GroundHeight(p[3], p[4]), math.max(2, r)), 'FF60A0FF', 0.2, 2, 3, true, true)
 end
 
+-- ---- plane brush: the three picked points and their triangle (terrain.lua PlaneAddPoint) -------------------------------------------------------
+
+local planeKey = ''
+
+local function DrawPlane(ui)
+    local pts = (ui.State.tool == 'plane') and Terrain.Brush.planePoints or nil
+    local key = ''
+    if pts then
+        for _, p in pts do key = key .. string.format('%d,%d,%d;', p.x, p.z, p.h) end
+    end
+    if key == planeKey then return end
+    planeKey = key
+    ed_overlay_remove('plane:tri')
+    for i = 1, 3 do ed_overlay_remove('plane:p' .. i) end
+    if not pts then return end
+    local n = table.getn(pts)
+    local line = {}
+    for i = 1, n do Push(line, pts[i].x, pts[i].z) end
+    if n == 3 then Push(line, pts[1].x, pts[1].z) end
+    if n >= 2 then ed_overlay_set('plane:tri', line, 'FFFFD24A', 0.15, 2, 3, false, true) end
+    for i = 1, n do
+        ed_overlay_set('plane:p' .. i, Circle(pts[i].x, pts[i].z, 2, 16, pts[i].h / 128, 2), 'FFFFD24A', 0.2, 2, 3, true, true)
+    end
+end
+
+-- ---- decal path: the clicked points and the line the decals will follow (decalpath.lua) --------------------------------------------------------
+
+local decalPathKey = ''
+
+local function DrawDecalPath(ui)
+    local DP = Mod('decalpath', '/lua/editor/decalpath.lua')
+    local active = ui.State.tool == 'decalpath'
+    local key = active and (DP.Revision .. '|' .. table.getn(DP.Points)) or ''
+    if key == decalPathKey then return end
+    decalPathKey = key
+    ed_overlay_remove('decalpath:line')
+    for i = 1, 64 do ed_overlay_remove('decalpath:p' .. i) end
+    if not active or table.getn(DP.Points) == 0 then return end
+    local plan = DP.Plan()
+    if plan and table.getn(plan) > 1 then
+        local line = {}
+        for _, d in plan do Push(line, d.cx, d.cz) end
+        ed_overlay_set('decalpath:line', line, 'FF60E0A0', 0.15, 2, 3, false, true)
+    end
+    for i, p in DP.Points do
+        if i > 64 then break end
+        ed_overlay_set('decalpath:p' .. i, Circle(p.x, p.z, 2, 16, GroundHeight(p.x, p.z), 2), 'FF60E0A0', 0.2, 2, 3, true, true)
+    end
+end
+
 -- ---- selected decals ---------------------------------------------------------------------------------------------------------------
 
 local decalSelKey = ''
@@ -1535,6 +1585,8 @@ local function ForgetObjects()
     decalSelIds = {}
     decalSelKey = ''
     rampKey = ''
+    planeKey = ''
+    decalPathKey = ''
     propSelIds = {}
     propSelKey = ''
     import('/lua/editor/ttoverlay.lua').Forget()
@@ -1588,6 +1640,8 @@ local function DrawLayers(ui, view, px)
     DrawUnits(ui)
     DrawDecalSelection(ui)
     DrawRamp()
+    DrawPlane(ui)
+    DrawDecalPath(ui)
     Perf.End('overlay: unit rings, decal sel, ramp', t0)
     t0 = Perf.Begin()
     Call('unitview', '/lua/editor/unitview.lua', 'OnFrame')       -- the unit viewer's bones follow the animation every frame

@@ -34,6 +34,8 @@ Brush = {
     noiseScale = 8,        -- noise brush: lattice cell size in samples (the size of the bumps)
     noiseOctaves = 2,      -- noise brush: 1..4 layers of finer bumps (half the cell size each)
     noiseRoughness = 0.5,  -- noise brush: the share of the amplitude each further octave keeps (0.3 soft .. 0.7 rough)
+    terraceStep = 5,       -- terrace brush: the step height in world units (upstream's default 640 words)
+    planePoints = {},      -- plane brush: up to three picked points { x, z, h } (sample x, z; h in height words), see PlaneAddPoint
 }
 
 --- A box blur of the w x h grid `src` (1-based, row after row), half width `kr` samples, the edge samples repeated; running sums, so the cost does not grow with kr.
@@ -190,7 +192,69 @@ end
 
 --- Whether the height brushes use the native dab (ed_terrain_brush, moho/editor/EdBrush.cpp) when the exe has it. false forces the Lua loop below (tests compare the two).
 NativeBrush = true
-local NATIVE_MODES = { raise = true, lower = true, plateau = true, flatten = true, smooth = true, noise = true }
+local NATIVE_MODES = { raise = true, lower = true, plateau = true, flatten = true, smooth = true, noise = true, terrace = true, plane = true }
+
+-- ---- plane brush: three picked points (Ctrl+click with the Plane tool) --------------------------------------------------------------------------------
+-- The ground is pulled towards the plane through the points (upstream's Plane brush mode). With symmetry on, the image of a dab uses the plane through the images of the three
+-- points, so the copies stay equal (upstream applies the plane once per group of symmetric samples; here each image has its own plane). The plane maths is the native
+-- ed_plane_through (upstream's faf::editor::PlaneThrough), with the same Cramer's rule in Lua for an exe without it.
+
+local planeCache = {}         -- symmetry slot -> { x, z, c } (height words = x * sx + z * sz + c) or false (no plane); cleared when the points or the stroke change
+
+--- The plane through three points { x, z, h } (h in words): planeX, planeZ, planeC, or nil when they are on one line seen from above.
+function PlaneThrough(a, b, c)
+    if rawget(_G, 'ed_plane_through') then
+        return ed_plane_through(a.x, a.h, a.z, b.x, b.h, b.z, c.x, c.h, c.z)
+    end
+    local x1, z1, h1 = b.x - a.x, b.z - a.z, b.h - a.h
+    local x2, z2, h2 = c.x - a.x, c.z - a.z, c.h - a.h
+    local det = x1 * z2 - x2 * z1
+    if math.abs(det) < 0.000001 then return nil end
+    local px = (h1 * z2 - h2 * z1) / det
+    local pz = (x1 * h2 - x2 * h1) / det
+    return px, pz, a.h - px * a.x - pz * a.z
+end
+
+--- Adds a picked point at world (x, z) (the ground height under it is read); a fourth point replaces the oldest. Returns the number of points.
+function PlaneAddPoint(x, z)
+    local sx, sz = math.floor(x + 0.5), math.floor(z + 0.5)
+    local words = ed_terrain_read_rect(sx, sz, sx, sz)
+    local pts = Brush.planePoints
+    if table.getn(pts) >= 3 then table.remove(pts, 1) end
+    table.insert(pts, { x = sx, z = sz, h = (words and words[1]) or 0 })
+    planeCache = {}
+    return table.getn(pts)
+end
+
+function PlaneClear()
+    Brush.planePoints = {}
+    planeCache = {}
+end
+
+--- The plane of symmetry image `slot` (1 = the cursor's own): planeX, planeZ, planeC, or nil while fewer than three points are picked or they are on one line.
+function PlaneFor(slot)
+    slot = slot or 1
+    local c = planeCache[slot]
+    if c == nil then
+        c = false
+        local pts = Brush.planePoints
+        if table.getn(pts) == 3 then
+            local img = {}
+            for i = 1, 3 do
+                local p = Symmetry.Points(pts[i].x, pts[i].z)[slot]
+                if not p then img = nil break end
+                img[i] = { x = p.x, z = p.z, h = pts[i].h }
+            end
+            if img then
+                local px, pz, pc = PlaneThrough(img[1], img[2], img[3])
+                if px then c = { px, pz, pc } end
+            end
+        end
+        planeCache[slot] = c
+    end
+    if c then return c[1], c[2], c[3] end
+    return nil
+end
 
 local function IsPaint()
     return Brush.mode == 'paint' or Brush.mode == 'erase' or Brush.mode == 'stamp_paint'
@@ -216,6 +280,7 @@ function BeginStroke()
     strokeId = strokeId + 1
     strokeTurn = Brushes.RandomAngle and (math.random() * 360) or 0
     strokeLevel = nil
+    planeCache = {}
     strokeOpen = true
     strokePaint = IsPaint()
     strokeType = (Brush.mode == 'ttype')
@@ -341,7 +406,8 @@ function DabOne(cx, cz, slot, image)
         end
         local t0 = Perf.Begin()
         local changed, x0, z0, x1, z1, used = nativeBrush(cx, cz, Brush.radius, Brush.mode, Brush.strength, inverted and -1 or 1, Brush.falloff, level or -1, strokeId,
-                                                         Brush.noiseScale, Brush.noiseOctaves, Brush.noiseRoughness, shape, shapeAngle)
+                                                         Brush.noiseScale, Brush.noiseOctaves, Brush.noiseRoughness, shape, shapeAngle,
+                                                         Brush.terraceStep, PlaneFor(slot))
         Perf.End(shape ~= 0 and 'terrain.dab.native.shaped' or 'terrain.dab.native', t0)
         if changed ~= nil then
             if used ~= nil and strokeLevel == nil then
@@ -385,6 +451,8 @@ function DabOne(cx, cz, slot, image)
     end
 
     local changed = 0
+    local planeX, planeZ, planeC
+    if mode == 'plane' then planeX, planeZ, planeC = PlaneFor(slot) end
     -- smooth: the ground under the brush goes toward a blurred copy of itself. The blur widens with the strength (3 x 3 at low strength, up to a quarter of the radius at most 6 samples at the
     -- highest), two passes, so one dab at full strength really flattens the bumps (the old single 3 x 3 average barely moved them); the blur is made once per dab, not once per sample.
     local blurred
@@ -451,6 +519,17 @@ function DabOne(cx, cz, slot, image)
                     -- inverted: away from the level instead of toward it
                     local k = math.min(1, strength * 0.2 * weight) * dir
                     value = value + (strokeLevel * WORD - value) * k
+                elseif mode == 'terrace' then
+                    -- towards the nearest step of the terrace height (upstream's Terrace); Shift does not invert it
+                    local step = math.max(1, (Brush.terraceStep or 5) * WORD)
+                    local k = math.min(1, strength * 0.2 * weight)
+                    value = value + (math.floor(value / step + 0.5) * step - value) * k
+                elseif mode == 'plane' then
+                    -- towards the plane through the three picked points (upstream's Plane); nothing until there are three
+                    if planeX then
+                        local k = math.min(1, strength * 0.2 * weight)
+                        value = value + (planeX * x + planeZ * z + planeC - value) * k
+                    end
                 elseif mode == 'smooth' then
                     -- inverted: sharpen (away from the blurred ground)
                     local k = math.min(1, strength * 0.2 * weight) * dir

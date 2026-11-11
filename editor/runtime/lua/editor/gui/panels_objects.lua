@@ -640,6 +640,25 @@ Panels.Register{
                 ReadOnly('Chain', function() return Chains.Current or '(a new chain)' end)
                 Gap(6)
                 Help('Click to place a marker at the end of the chain. Ctrl+click starts a new chain; pick a chain in the Chains panel to extend it. With symmetry on the mirror images get chains of their own.')
+            elseif tool and tool.id == 'decalpath' then
+                local DP = import('/lua/editor/decalpath.lua')
+                Title('Decal path')
+                P.live = true
+                ReadOnly('Points', function() return tostring(table.getn(DP.Points)) end)
+                ReadOnly('Texture', function() local a = import('/lua/editor/decals.lua').Active return a and Basename(a) or '(none: pick one in the Decals panel)' end)
+                SliderPair({ label = 'Decal size (units)', min = 1, max = 64, step = 0.5, fmt = '%.1f',
+                             get = function() return DP.Settings.size end, set = function(v) DP.Settings.size = v DP.Revision = DP.Revision + 1 end },
+                           { label = 'Overlap %', min = 0, max = 90, step = 1, fmt = '%d',
+                             get = function() return DP.Settings.overlap * 100 end, set = function(v) DP.Settings.overlap = v / 100 DP.Revision = DP.Revision + 1 end })
+                Toggle('With normals', function() return DP.Settings.withNormals end, function(on) DP.Settings.withNormals = on end)
+                Action('Place decals', function()
+                    local n, why = DP.Place()
+                    UI.Say(n and string.format('decal path: %d decals placed', n) or ('decal path: ' .. tostring(why)))
+                end)
+                Action('Remove last point', function() DP.RemoveLast() end)
+                Action('Clear points', function() DP.Clear() end)
+                Gap(6)
+                Help('Click points on the ground; the line shows where the decals go. Place decals lays the active decal end to end along the curve, turned along it (one undo step). Ctrl+click removes the last point. The terrain is not changed.')
             elseif tool and (tool.id == 'prop' or tool.id == 'prop_erase') then
                 PropBrushPanel(tool)
             elseif tool and (tool.id == 'decal' or tool.id == 'decal_erase') then
@@ -663,8 +682,30 @@ Panels.Register{
                                  get = function() return B.levelValue or 30 end,
                                  set = function(v) B.levelValue = v if B.level ~= nil then B.level = v end end })
                 end
+                if tool.id == 'terrace' then
+                    -- upstream's Terrace: the ground is pulled to the nearest multiple of the step height
+                    local B = Terrain.Brush
+                    SliderPair({ label = 'Step (units)', min = 0.5, max = 100, step = 0.5, fmt = '%.1f',
+                                 get = function() return B.terraceStep or 5 end,
+                                 set = function(v) B.terraceStep = v end })
+                elseif tool.id == 'plane' then
+                    -- upstream's Plane (3 points): the ground is pulled to the plane through three points picked with Ctrl+click
+                    ReadOnly('Points', function()
+                        local n = table.getn(Terrain.Brush.planePoints)
+                        local text = string.format('%d of 3', n)
+                        if n == 3 and not Terrain.PlaneFor(1) then text = text .. ' (on one line)' end
+                        return text
+                    end)
+                    Action('Clear points', function() Terrain.PlaneClear() end)
+                end
                 Gap(6)
-                Help('Drag over the terrain. The ring shows the footprint of one dab.')
+                if tool.id == 'plane' then
+                    Help('Ctrl+click three points on the terrain, then drag: the ground moves towards their plane. With symmetry on the images use the images of the points.')
+                elseif tool.id == 'terrace' then
+                    Help('Drag over the terrain: the ground moves towards the nearest step. A stronger brush pulls harder.')
+                else
+                    Help('Drag over the terrain. The ring shows the footprint of one dab.')
+                end
             else
                 Title('Map')
                 local mk, ar = 0, 0
@@ -859,7 +900,7 @@ Panels.Register{
                     return
                 end
                 local issue = Validate.Issues[index]
-                local colors = { blocked = 'ffff7070', stacked = 'ffffb060', unaligned = 'ffffe070', map = 'ffffc880', start = 'ffffe070', water = 'ff80b8ff', prop = 'ffff7070' }
+                local colors = { blocked = 'ffff7070', stacked = 'ffffb060', unaligned = 'ffffe070', map = 'ffffc880', start = 'ffffe070', water = 'ff80b8ff', prop = 'ffff7070', propsym = 'ffffb060', script = 'ffff7070' }
                 RowText(row, issue.text, colors[issue.kind] or 'ffffb060')
             end,
             onSelect = function(index)

@@ -17,6 +17,10 @@
 --   Survey(scenarioPath [, opts]) -> stats of a map's save file without opening it (size from the scenario, playable area AREA_1, no height checks), plus
 --       sizeX, sizeZ, minY, maxY; SurveyAll(outPath [, filter]) writes one line per map of the maps folders (path|size|total|outsideMap|outsidePlayable|minY|maxY)
 --   SnapY(markers, names, ground) -> number moved: sets y to the ground height for the named markers (those outside the terrain are skipped).
+--   PropSymmetry(props, mode, cx, cz [, turns, opts]) -> list of { sev = 'W' | 'I', text, x, z, name }: upstream's prop symmetry check (native ed_up_check_props, EdChecks.cpp of the editor
+--       logic library): a prop with no prop of its blueprint at one of its symmetric copies. props = list of { blueprint, x, z, reclaimMass }; mode = a symmetry.lua mode; (cx, cz) = the
+--       symmetry centre; opts.reach (2), opts.listed (20). The first entry is the summary (W when unmatched props hold reclaim mass, else I), the rest are the first unmatched props.
+--       Empty when the mode is 'off' or the check cannot run (an exe without the native: returns nil, 'no native').
 --
 -- Lua 5.0 dialect.
 
@@ -155,4 +159,23 @@ function SurveyAll(outPath, filter)
     end
     if outPath then ed_write_file(outPath, table.concat(rows, NL)) end
     return rows
+end
+
+--- The props' symmetry (see the header). The copies mirror about (width - 1) / 2 in the native: a centre elsewhere gets a field of 2 * centre + 1 samples. The modes that need a square
+--- field (diagonals, turns) are skipped when the centre is not on the diagonal (the native would fall back to no symmetry anyway).
+function PropSymmetry(props, mode, cx, cz, turns, opts)
+    if not mode or mode == 'off' then return {} end
+    if not rawget(_G, 'ed_up_check_props') then return nil, 'no native' end
+    opts = opts or {}
+    local width = math.floor(2 * cx + 0.5) + 1
+    local height = math.floor(2 * cz + 0.5) + 1
+    local squareOnly = mode == 'diag' or mode == 'adiag' or mode == 'diag_both' or mode == 'rot4' or mode == 'rotn'
+    if squareOnly and width ~= height then return {} end
+    local issues, why = ed_up_check_props(props, mode, turns or 3, width, height, opts.reach or 2, opts.listed or 20)
+    if not issues then return nil, why end
+    local out = {}
+    for _, i in issues do
+        table.insert(out, { sev = (i.level == 'note') and 'I' or 'W', text = i.text, x = i.x, z = i.z, name = i.marker })
+    end
+    return out
 end

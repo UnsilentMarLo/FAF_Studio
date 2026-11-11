@@ -46,6 +46,8 @@ Tools = {
     { id = 'flatten', label = 'Flatten', kind = 'brush' },
     { id = 'smooth',  label = 'Smooth',  kind = 'brush' },
     { id = 'plateau', label = 'Plateau', kind = 'brush' },
+    { id = 'terrace', label = 'Terrace', kind = 'brush' },
+    { id = 'plane',   label = 'Plane (3 points)', kind = 'brush' },
     { id = 'erode',   label = 'Erode',   kind = 'brush' },
     { id = 'rain',    label = 'Rain',    kind = 'brush' },
     { id = 'deposit', label = 'Deposit', kind = 'brush' },
@@ -86,6 +88,8 @@ Tools = {
     { id = 'area_select', label = 'Select area', kind = 'select', pick = 'area' },
     { id = 'chain',   label = 'Draw chain', kind = 'custom', workspaces = { Objects = true, Mission = true },
       OnPress = function(wx, wz, event) return import('/lua/editor/chains.lua').DrawPress(wx, wz, event) end },
+    { id = 'decalpath', label = 'Decal path', kind = 'custom', workspaces = { Objects = true },
+      OnPress = function(wx, wz, event) return import('/lua/editor/decalpath.lua').Press(wx, wz, event) end },
 }
 
 --- Workspaces own their tools (the shell tells ui.lua which workspace is showing, SetWorkspace): a tool belongs to a workspace by its kind
@@ -218,7 +222,7 @@ end
 -- does not make the height brush big.
 
 BRUSH_KIND = {
-    raise = 'terrain', lower = 'terrain', flatten = 'terrain', smooth = 'terrain', plateau = 'terrain', noise = 'terrain', ramp = 'terrain',
+    raise = 'terrain', lower = 'terrain', flatten = 'terrain', smooth = 'terrain', plateau = 'terrain', terrace = 'terrain', plane = 'terrain', noise = 'terrain', ramp = 'terrain',
     erode = 'erosion', rain = 'erosion', deposit = 'erosion',
     stamp = 'stamp', stamp_paint = 'texture', paint = 'texture', erase = 'texture', ttype = 'texture',
     prop = 'props', prop_erase = 'props', decal = 'decals', decal_erase = 'decals',
@@ -606,6 +610,12 @@ function OnWorldPress(event)
     if tool.kind == 'select' then
         return ObjectTools.OnSelectPress(wx, wz, event, tool.pick)
     elseif tool.kind == 'brush' then
+        if tool.id == 'plane' and event.Modifiers and event.Modifiers.Ctrl then
+            -- Ctrl+click picks one of the three points of the plane (terrain.lua PlaneAddPoint); a plain click paints
+            local n = Terrain.PlaneAddPoint(wx, wz)
+            Say(string.format('plane: point %d of 3', n))
+            return true
+        end
         BeginStroke()
         StrokeMove(wx, wz)
         State.dragPointer = { wx, wz }        -- the overlay's brush preview follows this while the button is down

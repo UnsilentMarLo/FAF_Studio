@@ -56,10 +56,10 @@ function Findings()
     local okV, Validate = pcall(import, '/lua/editor/validate.lua')
     if okV then
         for _, i in Validate.MapIssues() do
-            Add(i.kind == 'prop' and 'E' or 'W', i.text)
+            Add((i.kind == 'prop' or i.kind == 'script') and 'E' or 'W', i.text)       -- (a script that does not compile stops the release)
         end
         for _, i in Validate.Issues do
-            if i.kind ~= 'map' and i.kind ~= 'start' and i.kind ~= 'water' and i.kind ~= 'prop' then Add('W', i.text) end
+            if i.kind ~= 'map' and i.kind ~= 'start' and i.kind ~= 'water' and i.kind ~= 'prop' and i.kind ~= 'propsym' and i.kind ~= 'script' then Add('W', i.text) end
         end
     end
     if info.TerrainSystem == 'mesh' then

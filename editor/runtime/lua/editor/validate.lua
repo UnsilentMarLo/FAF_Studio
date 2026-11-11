@@ -40,7 +40,8 @@ local function Issue(kind, names, x, z, text)
     return { kind = kind, names = names or {}, x = x or 0, z = z or 0, text = text }
 end
 
---- Checks that do not need the sim: returns a list of issues. kinds: 'map' (what the map lacks), 'start' (a start position), 'water' (under water), 'prop' (a prop problem).
+--- Checks that do not need the sim: returns a list of issues. kinds: 'map' (what the map lacks), 'start' (a start position), 'water' (under water), 'prop' (a prop problem),
+--- 'propsym' (a prop without its symmetric partner; sev 'W' or 'I'), 'script' (a map script that does not compile; sev 'E'). `sev` is set only where the kind alone does not say.
 local function CheckMap()
     local issues = {}
     if not Map.Doc then return issues end
@@ -129,6 +130,39 @@ local function CheckMap()
     end
     for bp, pos in missing do
         table.insert(issues, Issue('prop', {}, pos[1], pos[2], 'prop blueprint not found: ' .. bp))
+    end
+    -- the props' symmetry under the editor's symmetry (upstream's check, markercheck.lua PropSymmetry): a prop without its partner at a symmetric copy means unequal reclaim for the players
+    local Symmetry = import('/lua/editor/symmetry.lua')
+    if Symmetry.Mode ~= 'off' and rawget(_G, 'ed_prop_count') then
+        local okS, found = pcall(function()
+            local Stats = import('/lua/editor/mapstats.lua')
+            local list = {}
+            for i = 1, ed_prop_count() do
+                local bp, x, y, z = ed_prop_get(i)
+                if bp then
+                    local mass = Stats.ReclaimOf(bp)
+                    table.insert(list, { string.lower(bp), x, z, mass })
+                end
+            end
+            local cx, cz = Symmetry.Centre()
+            return import('/lua/editor/markercheck.lua').PropSymmetry(list, Symmetry.Mode, cx, cz)
+        end)
+        if okS and found then
+            for _, f in found do
+                local issue = Issue('propsym', {}, f.x, f.z, 'prop symmetry: ' .. f.text)
+                issue.sev = f.sev
+                table.insert(issues, issue)
+            end
+        end
+    end
+    -- the Lua syntax of the three scripts of the map (scriptcheck.lua)
+    local okL, scriptErrors = pcall(function() return import('/lua/editor/scriptcheck.lua').Check() end)
+    if okL and scriptErrors then
+        for _, e in scriptErrors do
+            local issue = Issue('script', {}, size / 2, size / 2, 'script does not compile: ' .. e.text)
+            issue.sev = 'E'
+            table.insert(issues, issue)
+        end
     end
     -- the army setup (army list against the save file, indices, alliances)
     local okA, problems = pcall(function() return import('/lua/editor/armysetup.lua').Check() end)

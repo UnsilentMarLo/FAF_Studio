@@ -261,6 +261,7 @@ local function Compose()
         for _, v in Validate.Issues do
             local sev = (v.kind == 'blocked' or v.kind == 'map' or v.kind == 'start') and 'W' or 'W'
             if v.kind == 'blocked' or v.kind == 'water' then sev = 'E' end
+            if v.sev then sev = v.sev end
             table.insert(out, { kind = v.kind, sev = sev, text = v.text, x = v.x or 0, z = v.z or 0 })
         end
     end
