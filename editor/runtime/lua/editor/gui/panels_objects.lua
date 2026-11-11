@@ -591,6 +591,14 @@ Panels.Register{
             if info then
                 ReadOnly('Blueprint', function() return info.bp end)
                 ReadOnly('Army', function() return info.army end)
+                local okFate, fate = pcall(function() return import('/lua/editor/adaptive.lua').FateOf(info.army, Units.Selection[1].name) end)       -- what becomes of the unit (adaptive.lua)
+                if okFate and fate then
+                    ReadOnly('Group', function() return table.concat(fate.group, '/') end)
+                    ReadOnly('Appears', function() return fate.fate.text end)
+                    if fate.wreck and fate.wreck.exists then
+                        ReadOnly('Wreck', function() return string.format('%d mass, %d energy', fate.wreck.mass + 0.5, fate.wreck.energy + 0.5) end)
+                    end
+                end
                 local fx, fz
                 fx = Stepper('X', function() local i = Units.Info() return i and string.format('%.2f', i.x) or '' end,
                     function(t) local x, z = tonumber(t), tonumber(fz:GetText()) if x and z then Units.MoveTo(x, z) end end, 1, '%.2f')

@@ -182,7 +182,7 @@ local function AdaptiveRows(P)
     local files = Adaptive.Files()
     if not files.adaptive then
         table.insert(rows, { text = 'FILES', kind = 'header' })
-        table.insert(rows, { text = 'This map is not adaptive yet', extra = 'Make it adaptive', kind = 'make', color = c.warn })
+        table.insert(rows, { text = 'Not adaptive yet', kind = 'make', color = c.warn })
         table.insert(rows, { text = 'Adaptive maps spawn each player\'s resources only with that player and let the lobby add groups. The script (_script.lua) comes from an adaptive map.', kind = 'note' })
         return rows
     end
