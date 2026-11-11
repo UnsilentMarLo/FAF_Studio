@@ -92,6 +92,14 @@ Panels.Register{
                         table.insert(P.shown, f)
                     end
                 end
+            elseif P.mode == 'items' and P.templateOf then
+                -- the emitter files of the template that was picked
+                for _, path in P.templateOf.emitters do
+                    local name = string.gsub(string.gsub(path, '^.*/', ''), '%.bp$', '')
+                    if filter == '' or string.find(string.lower(name), filter, 1, true) then
+                        table.insert(P.shown, { name = name, path = path, type = 'emitter', faction = 0, kind = 0 })
+                    end
+                end
             else
                 for _, t in Templates() do
                     if filter == '' or string.find(string.lower(t.name), filter, 1, true) then
@@ -103,7 +111,8 @@ Panels.Register{
         end
 
         P.bFiles = Btn('Files', 52, function() P.mode = 'files' Rebuild() P:Refresh() P:OnResize(P.w, P.h) end)
-        P.bTemplates = Btn('Templates', 74, function() P.mode = 'templates' Rebuild() P:Refresh() P:OnResize(P.w, P.h) end)
+        P.bTemplates = Btn('Templates', 74, function() P.mode = 'templates' P.templateOf = false Rebuild() P:Refresh() P:OnResize(P.w, P.h) end)
+        P.bBack = Btn('Back to templates', 120, function() P.mode = 'templates' P.templateOf = false Rebuild() P:Refresh() P:OnResize(P.w, P.h) end)
         P.filter = W.TextField(group, 0, 0, 100, Skin.S(22), { onChange = function() Rebuild() end })
         P.filterLabel = W.Label(group, 'Find', 0, 0, { color = Skin.color.textDim })
         P.bFaction = Btn('', 100, function() P.faction = math.mod(P.faction + 1, table.getn(info.factions)) Rebuild() P:Refresh() end)
@@ -123,6 +132,8 @@ Panels.Register{
                 if e.template then
                     row.extra:SetText(table.getn(e.template.emitters) .. ' emitters')
                     row.extra:SetColor(c.textDim)
+                elseif P.mode == 'items' then
+                    row.extra:SetText('')
                 else
                     row.extra:SetText(info.factions[e.faction + 1] and e.faction > 0 and string.gsub(info.factions[e.faction + 1], '^%s*', '') or '')
                     row.extra:SetColor(TYPE_COLOR[e.type] or c.textDim)
@@ -138,9 +149,12 @@ Panels.Register{
                 local e = P.shown[index]
                 if not e then return end
                 if e.template then
-                    -- a template: its first emitter opens (the rest are listed in the status line; the Effects panel plays the whole template on the map)
+                    -- a template: its emitter files are listed (and the first opens); the Effects panel plays the whole template on the map
                     P.sel = e.name
                     P.templateOf = e.template
+                    P.mode = 'items'
+                    Rebuild()
+                    P:OnResize(P.w, P.h)
                     local first = e.template.emitters[1]
                     if first then OpenFile(first) end
                 else
@@ -171,7 +185,7 @@ Panels.Register{
         local swatched = false
         function P:Refresh()
             P.bFiles:SetOn(P.mode == 'files')
-            P.bTemplates:SetOn(P.mode == 'templates')
+            P.bTemplates:SetOn(P.mode == 'templates' or P.mode == 'items')
             P.bFaction:SetText(info.factions[P.faction + 1] or '')
             P.bKind:SetText(info.kinds[P.kind + 1] or '')
             P.bType:SetText(TYPES[P.type + 1])
@@ -192,15 +206,15 @@ Panels.Register{
                 P.swatch:SetSolidColor(Skin.color.panelAlt)
             end
             P.swatchLabel:SetText(tex and string.gsub(tex, '^.*/', '') or '')
-            local text = table.getn(P.shown) .. (P.mode == 'files' and ' effect files' or ' templates')
-            if P.templateOf then text = text .. '   template ' .. P.templateOf.name .. ': ' .. table.getn(P.templateOf.emitters) .. ' emitters' end
+            local text = table.getn(P.shown) .. (P.mode == 'files' and ' effect files' or (P.mode == 'items' and ' emitters' or ' templates'))
+            if P.templateOf then text = text .. '   template ' .. P.templateOf.name end
             W.Fit(P.status, text, (P.w or 300) - Skin.S(16))
         end
 
         function P:OnResize(w, h)
             P.w, P.h = w, h
             local pad = Skin.S(8)
-            W.Flow(group, { { P.bFiles, Skin.S(52) }, { P.bTemplates, Skin.S(74) } }, pad, pad, w - 2 * pad, Skin.S(22), Skin.S(4))
+            W.Flow(group, { { P.bFiles, Skin.S(52) }, { P.bTemplates, Skin.S(74) }, { P.bBack, Skin.S(120) } }, pad, pad, w - 2 * pad, Skin.S(22), Skin.S(4))
             local y = pad + Skin.S(28)
             W.Place(P.filterLabel, group, pad, y + Skin.S(3))
             W.Place(P.filter.frame, group, pad + Skin.S(34), y, math.max(Skin.S(40), w - 2 * pad - Skin.S(34)), Skin.S(22))
@@ -210,6 +224,7 @@ Panels.Register{
             for _, b in { P.bFaction, P.bKind, P.bType } do
                 if files then b:Show() else b:Hide() end
             end
+            if P.mode == 'items' then P.bBack:Show() else P.bBack:Hide() end
             if files then
                 W.Flow(group, { { P.bFaction, Skin.S(100) }, { P.bKind, Skin.S(100) }, { P.bType, Skin.S(90) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4))
                 y = y + Skin.S(28)

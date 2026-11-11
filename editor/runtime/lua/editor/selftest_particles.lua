@@ -167,6 +167,28 @@ function Run()
         Check(Fx.Text() == original, 'undo goes back to the original through the key edits too')
     end
 
+    -- 4b. the curve plot's edits (needs the Particle editor panel to be built; skipped otherwise)
+    local PanelModule = import('/lua/editor/gui/panels_particles.lua')
+    local P = PanelModule.live.particles
+    if P and P.plotSet and not P.dead and Fx.Open(EMITTER) then
+        local idx = Fx.CurveIndex('SizeCurve')
+        P.curve = idx
+        local R = Fx.Curve(idx).xRange
+        Fx.SetKeys(idx, { { x = 0, y = 1, z = 0.2 }, { x = 50, y = 2, z = 0.5 }, { x = 100, y = 3, z = 0 } })
+        P.plotSet({ { 0, 1 }, { 50 / R, 2.5 }, { 100 / R, 3 } })
+        local k = Fx.Curve(idx).keys
+        Check(table.getn(k) == 3 and math.abs(k[2].y - 2.5) < 1e-4 and math.abs(k[2].z - 0.5) < 1e-4, 'dragging a key keeps its spread')
+        P.plotSet({ { 0, 1 }, { 20 / R, 1.4 }, { 50 / R, 2.5 }, { 100 / R, 3 } })
+        k = Fx.Curve(idx).keys
+        Check(table.getn(k) == 4 and math.abs(k[2].x - 20) < 0.01 and k[2].z == 0 and math.abs(k[3].z - 0.5) < 1e-4 and math.abs(k[1].z - 0.2) < 1e-4, 'a key added by a click has no spread and the others keep theirs')
+        P.plotSet({ { 0, 1 }, { 50 / R, 2.5 }, { 100 / R, 3 } })
+        k = Fx.Curve(idx).keys
+        Check(table.getn(k) == 3 and math.abs(k[2].z - 0.5) < 1e-4 and math.abs(k[1].z - 0.2) < 1e-4, 'a deleted key takes its own spread with it')
+        Fx.Open(EMITTER)
+    else
+        table.insert(out, '  skip  the Particle editor panel is not built: the plot checks need it')
+    end
+
     -- 5. a beam
     local beam, bwhy = Fx.Open(BEAM)
     Check(beam, 'opens a beam ' .. tostring(bwhy))
@@ -181,7 +203,7 @@ function Run()
 
     -- 6. the preview natives
     Fx.Open(EMITTER)
-    local view = ed_fxv_view({ pictureWidth = 512, pictureHeight = 384 })
+    local view = ed_fxv_view({ pictureWidth = 1024, pictureHeight = 640 })
     Check(view ~= nil and view.texture == '/ed_dyn/fxview', 'the preview offers its picture as ' .. tostring(view and view.texture))
     ed_fxv_emitter(Fx.Emitter, true)
     ed_fxv_touch()

@@ -167,6 +167,14 @@ Panels.Register{
             local n, why = Bp.Write()
             Say(n and ('mod project: ' .. n .. ' file(s) written (Test in the Unit lab loads them)') or ('mod project: ' .. tostring(why)))
         end)
+        -- the other route: the whole emitter / beam / trail file in the Particle editor (curves, preview), written as a file into a mod project or the map (fxparticle.lua, WP8)
+        P.bFile = Btn('Edit file', 66, function()
+            if not P.target or not import('/lua/editor/fxedit.lua').Kind(P.target) then Say('effects: pick an emitter, beam or trail first') return end
+            local ok, why = import('/lua/editor/fxparticle.lua').Open(P.target)
+            if not ok then Say('effects: ' .. tostring(why)) return end
+            pcall(function() import('/lua/editor/gui/shell.lua').OpenPanelWindow('particles', 340, 760) end)
+            pcall(function() import('/lua/editor/gui/shell.lua').OpenPanelWindow('particleview', 540, 640) end)
+        end)
         P.status = W.Label(group, '', 0, 0, { color = Skin.color.textDim, size = 'small' })
 
         function P:Refresh()
@@ -209,7 +217,7 @@ Panels.Register{
             local fields = P.mode == 'fields'
             for _, l in { P.list.root } do if fields then l:Hide() else l:Show() end end
             for _, l in { P.tlist.root, P.flist.root } do if fields then l:Show() else l:Hide() end end
-            for _, c in { P.valueSlider, P.bRevert, P.bWrite } do ShowControl(c, fields) end
+            for _, c in { P.valueSlider, P.bRevert, P.bWrite, P.bFile } do ShowControl(c, fields) end
             for _, c in { P.heightSlider, P.speedSlider } do ShowControl(c, not fields) end
             if fields then
                 local tl = Skin.S(86)
@@ -220,6 +228,7 @@ Panels.Register{
                 P.valueSlider:Place(pad, y, w - 2 * pad)
                 W.Place(P.bRevert, group, pad, y + Skin.S(50), Skin.S(54), Skin.S(22))
                 W.Place(P.bWrite, group, pad + Skin.S(60), y + Skin.S(50), Skin.S(90), Skin.S(22))
+                W.Place(P.bFile, group, pad + Skin.S(156), y + Skin.S(50), Skin.S(66), Skin.S(22))
                 W.Place(P.status, group, pad, y + Skin.S(76))
             else
                 local foot = Skin.S(130)

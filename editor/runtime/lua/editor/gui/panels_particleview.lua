@@ -17,7 +17,7 @@ local Fx = import('/lua/editor/fxparticle.lua')
 live = {}
 
 TEXTURE = '/ed_dyn/fxview'
-WIDTH, HEIGHT = 512, 384
+WIDTH, HEIGHT = 1024, 640      -- at least 1024 wide: a smaller Maui texture is packed into the UI atlas once and never updated (EdFxView.cpp)
 
 --- The view's options, kept across panel instances (a panel moved to a pop-out is built again).
 Opts = { background = 0, ground = true, grid = true, height = 0, turn = false, playing = true, loop = true, scale = 1 }

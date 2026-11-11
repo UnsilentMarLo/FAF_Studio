@@ -109,7 +109,7 @@ Panels.Register{
                 local ci = info.curves[index]
                 local curve = Fx.Curve(index)
                 if not ci or not curve then return end
-                local label = (groupOf[index] ~= '' and groupOf[index] ~= ci.caption) and (groupOf[index] .. ': ' .. ci.caption) or ci.caption
+                local label = ci.caption
                 W.Fit(row.text, label, math.max(Skin.S(30), row.bg.Width() - Skin.S(90)))
                 row.text:SetColor(index == P.curve and c.accent or c.text)
                 local n = table.getn(curve.keys)
@@ -139,8 +139,42 @@ Panels.Register{
             local pad = (hi - lo) * 0.06
             return lo - pad, hi + pad
         end
+        local function PlotSet(list)
+            local cv = Fx.Curve(P.curve)
+            if not cv then return end
+            local old = cv.keys
+            local keys = {}
+            local added = table.getn(list) - table.getn(old)
+            local at = 0
+            if added == 1 then
+                -- the plot inserted one: the first place where the times no longer line up
+                at = table.getn(list)
+                for i, k in old do
+                    if math.abs(list[i][1] * cv.xRange - k.x) > 1e-3 or math.abs(list[i][2] - k.y) > 1e-3 then at = i break end
+                end
+            end
+            for i, p in list do
+                local z = 0
+                if added == 0 then z = old[i] and old[i].z or 0
+                elseif added == 1 then
+                    if i < at then z = old[i] and old[i].z or 0 elseif i > at then z = old[i - 1] and old[i - 1].z or 0 end
+                else
+                    -- one deleted: the plot lists the keys that are left, in order; the deleted one is the first that differs
+                    local gone = table.getn(old)
+                    for j, k in old do
+                        if not list[j] or math.abs(list[j][1] * cv.xRange - k.x) > 1e-3 then gone = j break end
+                    end
+                    local src = i < gone and i or i + 1
+                    z = old[src] and old[src].z or 0
+                end
+                keys[i] = { x = p[1] * cv.xRange, y = p[2], z = z }
+            end
+            Fx.SetKeys(P.curve, keys)
+            P.sel = math.max(1, math.min(P.sel, table.getn(keys)))
+        end
+        P.plotSet = PlotSet
         P.plot = CurveWidget.Curve(group, {
-            leftText = '0', rightText = 'time', fixedLabels = true, freeEnds = true,
+            leftText = ' ', rightText = 'time', fixedLabels = true, freeEnds = true,
             get = function()
                 local cv = Fx.Curve(P.curve)
                 local points = {}
@@ -149,39 +183,7 @@ Panels.Register{
                 end
                 return points, false, false
             end,
-            set = function(list)
-                local cv = Fx.Curve(P.curve)
-                if not cv then return end
-                local old = cv.keys
-                local keys = {}
-                local added = table.getn(list) - table.getn(old)
-                local at = 0
-                if added == 1 then
-                    -- the plot inserted one: the first place where the times no longer line up
-                    at = table.getn(list)
-                    for i, k in old do
-                        if math.abs(list[i][1] * cv.xRange - k.x) > 1e-4 and math.abs(list[i][2] - k.y) > 1e-4 then at = i break end
-                    end
-                end
-                for i, p in list do
-                    local z = 0
-                    if added == 0 then z = old[i] and old[i].z or 0
-                    elseif added == 1 then
-                        if i < at then z = old[i] and old[i].z or 0 elseif i > at then z = old[i - 1] and old[i - 1].z or 0 end
-                    else
-                        -- one deleted: the plot lists the keys that are left, in order; the deleted one is the first that differs
-                        local gone = table.getn(old)
-                        for j, k in old do
-                            if not list[j] or math.abs(list[j][1] * cv.xRange - k.x) > 1e-4 then gone = j break end
-                        end
-                        local src = i < gone and i or i + 1
-                        z = old[src] and old[src].z or 0
-                    end
-                    keys[i] = { x = p[1] * cv.xRange, y = p[2], z = z }
-                end
-                Fx.SetKeys(P.curve, keys)
-                P.sel = math.max(1, math.min(P.sel, table.getn(keys)))
-            end,
+            set = PlotSet,
             onDragEnd = function() P:Refresh() end,
             range = RangeOf,
             sample = function(n)
@@ -369,7 +371,7 @@ Panels.Register{
                     P.keyTime:SetRange(0, cv.xRange, 0.01, '%.2f')
                     P.keyTime.label:SetText('Key time (key ' .. P.sel .. ' of ' .. table.getn(keys) .. ')')
                     P.keyValue:SetRange(math.min(ci.viewMin, -span), math.max(ci.viewMax, span), math.max(0.001, span / 1000), '%.2f')
-                    P.keyValue.label:SetText(ci.caption)
+                    P.keyValue.label:SetText('Key value: ' .. ci.caption .. ' (' .. (groupOf[P.curve] or '') .. ')')
                     P.keySpread:SetRange(0, math.max(1, span), math.max(0.001, span / 1000), '%.2f')
                     P.keyTime:Refresh() P.keyValue:Refresh() P.keySpread:Refresh()
                 end
