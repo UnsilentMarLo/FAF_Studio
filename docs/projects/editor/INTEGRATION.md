@@ -2,6 +2,55 @@
 
 All ten work packages of `EDITOR_PORT_ANALYSIS.md` were done on separate local branches. This pass puts them on one branch and tests the result. Nothing is pushed, no PR or issue is open.
 
+## Update 2026-11-12 (evening): runtime sim digests against plain upstream, and the nightly
+
+### Sim digests: our sim is upstream's, beat by beat
+
+Method (upstream's own: `docs/PR_REPLAY_CHECK.md`, `docs/SWITCHES.md` `--digests`): the recorded games of the core set are played in `headless_x64.exe` with `--digests` and `--state-digests` at `--checksum-period 1` (a checksum and a state digest of **every beat**), by three builds, and the files are compared beat by beat (`scripts/sim_digest_compare.py` in FAF_Studio; it copies each exe into one run folder under its own name, runs three at a time, reports the first differing beat):
+
+* `up`: plain `upstream/master` @ `e93492d47` in its own worktree (`faf-re-up-plain`, build dir `build/up`, preset `clang-x64-release`, `-DFAF_X64_LARGE_ADDRESS=heap`),
+* `off`: our `port/integration` @ `347723d87`, `-DFAF_EDITOR=OFF` (`build/off-x64`),
+* `on`: the same commit with `-DFAF_EDITOR=ON` (the editor build's `headless_x64.exe`, which is the editor's sim with no editor start).
+
+The data is the map-format session's replay parity pool and vault (`tmp/parity`, read only): replays 28016454 (Rotun, 2 players), 28063699 (The Dark Heart), 28059028 (Adaptive Hilly Plateau, 4), 28070914 (Astro Crater Battles 4x4 Rich XL, 8), 28038031 (Astro Crater Battles, 6), 28058778 (Dual Gap Adaptive, 12), 28013263 (Astro Crater Battles 4x4 Rich Huge, 2 + built-in AI), `/simworkers 8`. The core set's eighth replay (28041625) needs the M28AI mod folder and was left out.
+
+| Replay | Beats | Sim checksum per beat: up vs off, up vs on |
+|---|---|---|
+| 28016454 | 7,562 | identical, identical |
+| 28063699 | 8,498 | identical, identical |
+| 28059028 | 12,670 | identical, identical |
+| 28070914 | 12,010 | identical, identical |
+| 28038031 | 16,858 | identical, identical |
+| 28058778 | 15,126 | identical, identical |
+| 28013263 | 19,394 | identical, identical |
+| **sum** | **92,118 beats per build** | **no difference** |
+
+So the MD5 of the sim's checksum is the same on every one of the 92,118 beats in all three builds. The `--state-digests` file (what the sim publishes, a second view) is identical on 2 of the 7 replays and differs on the other 5 (first differing beats 2117, 3395, 7424, 3369, 8332), with a different value in each build, **including plain upstream against itself**: three runs of the same upstream exe on 28059028 give three different state digests from beat 2117 on, while the checksums of those runs are identical. That digest therefore has an upstream nondeterminism of its own (not the sim's checksum, which is what the replays record and CI compares); on that replay the first differing beat (2117) is the same one at which `off` and `on` differ from upstream, and on the other four `off` and `on` first differ at one and the same beat each; the self comparison was made on 28059028 only. Not investigated further.
+
+Water-body sim (WP6): the sim's water body code (`WaterBodies.cpp/.h`, `STIMapWaterBodies.cpp`, `WaterBodySurfaces.*`) does not differ from upstream at all (`git diff` empty); a map without `ScenarioInfo.WaterBodies` never reaches it, and the replays above are such maps. A map with bodies ran in the editor's Play (surface 20 inside the lake, 25 outside, 762 ticks, `sim_FixWaterBodies=1`) and upstream's `faf_water_bodies_tests` / `faf_water_bodies_map_tests` (20 tests) pass. A digest of a map **with** bodies against upstream was not made: there is no recorded game of one, and headless has no skirmish launcher in this tree.
+
+Commands (from FAF_Studio `scripts/`, run folder with `init_parity.lua`, `fafengine/`, the two dlls):
+
+```
+python scripts/sim_digest_compare.py --run-dir C:/ProgramData/FAForever/bin_x64_digest --init init_parity.lua ^
+  --exe up=<faf-re-up-plain>/build/up/src/headless_x64.exe --exe off=<integ>/build/off-x64/src/headless_x64.exe ^
+  --exe on=<integ>/build/editor-x64/src/headless_x64.exe --replay <pool>/28016454.scfareplay ... --beats 100000 --parallel 3
+```
+
+### Nightly QA (`python scripts/editor_nightly.py --tag nightlyint --exe main_ed_integ_x64.exe`, Lua of FAF_Studio `port/integration`)
+
+First run (engine `347723d87`, before the fixes below): lint, selftests (80 pass), menus, clicks (1341 buttons), workspaces, missionsim, simstress, stress, perf PASS; **selfloop** FAIL (out of memory in `alphagen` / `symdetect` / `missionsim` in the shuffled loop, the known memory caveat of long runs: the same out-of-memory of `alphagen` showed in earlier full selftest runs), **panels** FAIL (the editor died), **tips** FAIL (11 widgets without a tooltip), **layout** FAIL (15 overlaps at UI 200 % in 1280 x 720), **log** FAIL, **maps** FAIL (3 maps: the editor died).
+
+What the failures were, and what was done (engine `0a8f64c67`, FAF_Studio `e662c83`):
+
+* **maps, and one of the crashes: a real bug of WP3.** `EdUpMapFileLua.cpp` `WaterNow` (called by `ed_mapfile_capture`) hashed the three water planes over the size of the water map *texture*; the planes are `(width - 1) >> 1` by `(height - 1) >> 1` (as `CreateWaterMasks` allocates them), which is not the texture's size on every map: access violation reading past the allocation on the user map `1.v0001` (call stack `WaterNow` < `cfunc_MapFileCapture`). Fixed (the loader's size). The retail round trip and all other results did not change.
+* **tips:** the particle panels' unlabeled cycling buttons (destination, faction, kind, type), their `Value` slider and `Toggle` button, and the adaptive `Rename` dialog button had no text (WP8, WP5): added.
+* **layout:** the particle editor and preview panels advanced a fixed row height after `W.Flow` rows, which wrap at a big UI scale and overlapped the next row (WP8): they use the bottom `W.Flow` returns.
+* **log:** two Lua tracebacks of `Unable to find file /lua/editor/buildinfo.lua` (the git-ignored file `studio.py build` writes; it is missing in the integration worktree, not a defect): copied in, the step passes.
+* **panels, selfloop and selftests under load:** the editor's 12 second "frozen window" watchdog killed the process twice while a self test ran a long CPU erosion on the main thread and once while a GPU generator compiled its compute shader (`D3DCompile`, cold shader cache) on a machine that other sessions were using. Not caused by the merge: the same panels step passes alone (80 panels, 0 errors).
+
+Second full run (engine `0a8f64c67`, FAF_Studio `e662c83`): **lint, selfloop, menus, clicks, tips, workspaces, layout, maps, missionsim, simstress, stress, perf PASS.** Three flags remain, none a defect of this work: **selftests** `selftest_perfbudget` (two timing / read-count budgets exceeded while the machine was busy: `Lua time per second 25.05 ms <= 24`, `terrain reads per frame 33.43 <= 8`; passes alone: `PASS perfbudget`, and in the three earlier full selftest runs), **panels** (the editor died of the 12 second watchdog during the heavy step before it; passes alone, and after the fixes `panels PASS 80 panels, 0 errors`), **log** (the missing `buildinfo.lua` above; `PASS no suspicious lines` with the file) and, after `perf` had printed PASS, a harness error (`WinError 32`: the report step could not touch `run.log` while the instance still held it). A nightly that is not run next to other editor and game sessions should not flag the first two.
+
 ## Update 2026-11-12 (later): `FAF_EDITOR=OFF` links, and it is upstream's engine where the sim is concerned
 
 Engine commits: `a0ba9387e` (hooks), `d6f0f440c` (sim divergences behind `#if`). Both configurations were built and tested from the same commit.
@@ -181,7 +230,7 @@ How to close it (not done): a hook table in one engine header (null in the game,
 ## Remaining blockers before any PR
 
 1. ~~The branch is 25 commits behind `upstream/master`~~ **done 2026-11-12**: 0 behind, formatted as the CI wants (see the update at the top). Open: upstream moves fast (59 commits in a day); merge again right before opening a PR, and run the format command.
-2. ~~The OFF build does not link~~ **done 2026-11-12**: it links, its tests and the headless exe build, the sim differs from upstream in nothing (see the update at the top). Open: the client-side editor behaviours listed there.
+2. ~~The OFF build does not link~~ **done 2026-11-12**: it links, its tests and the headless exe build, the sim differs from upstream in nothing, per-beat digests included (see the updates at the top). Open: the client-side editor behaviours listed there.
 3. **Engine edits outside `moho/editor`** are visible to review and some are unguarded: `CD3DFileBatchTexture.cpp` (WP8, marked `// EDITOR:`), `CWldTerrainRes.cpp` (WP3/WP6), the FXAA, text, popout and shadow-cache hooks of the base.
 4. **Not run:** the nightly; a runtime sim digest of retail maps (needs the `fai` harness or a replay on an installed map); the skipped native tests listed above with their data; vault sign-in and a real search/download (needs the user's FAF login); WP8's effect-graph canvas does not exist; WP8's "mod with a new emitter file in a game session"; WP5's "Preview a game"; Play with an `.scmwtr` water file.
 5. `alphagen` runs out of memory at the end of a full selftest run (old caveat).
