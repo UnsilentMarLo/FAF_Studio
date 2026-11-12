@@ -115,9 +115,12 @@ Panels.Register{
         P.bBack = Btn('Back to templates', 120, function() P.mode = 'templates' P.templateOf = false Rebuild() P:Refresh() P:OnResize(P.w, P.h) end)
         P.filter = W.TextField(group, 0, 0, 100, Skin.S(22), { onChange = function() Rebuild() end })
         P.filterLabel = W.Label(group, 'Find', 0, 0, { color = Skin.color.textDim })
-        P.bFaction = Btn('', 100, function() P.faction = math.mod(P.faction + 1, table.getn(info.factions)) Rebuild() P:Refresh() end)
-        P.bKind = Btn('', 100, function() P.kind = math.mod(P.kind + 1, table.getn(info.kinds)) Rebuild() P:Refresh() end)
-        P.bType = Btn('', 90, function() P.type = math.mod(P.type + 1, table.getn(TYPES)) Rebuild() P:Refresh() end)
+        P.bFaction = Btn('', 100, function() P.faction = math.mod(P.faction + 1, table.getn(info.factions)) Rebuild() P:Refresh() end,
+            { tip = 'Show the effects of one faction, or all. Click for the next one.' })
+        P.bKind = Btn('', 100, function() P.kind = math.mod(P.kind + 1, table.getn(info.kinds)) Rebuild() P:Refresh() end,
+            { tip = 'Show one kind of effect (a unit, a weapon, an impact, ...), or all. Click for the next one.' })
+        P.bType = Btn('', 90, function() P.type = math.mod(P.type + 1, table.getn(TYPES)) Rebuild() P:Refresh() end,
+            { tip = 'Show emitters, beams, trails or all of them. Click for the next one.' })
 
         P.list = W.VirtualList(group, {
             extra = true, rowH = 20,

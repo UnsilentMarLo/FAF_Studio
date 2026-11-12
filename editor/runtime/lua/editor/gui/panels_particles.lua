@@ -76,7 +76,7 @@ Panels.Register{
             local list = Fx.Destinations()
             if table.getn(list) > 0 then P.dest = math.mod(P.dest, table.getn(list)) + 1 end
             P:Refresh()
-        end)
+        end, { tip = 'Where Write file puts the file: the open map or a mod project. Click for the next place.' })
         P.bWrite = Btn('Write file', 74, function()
             local list = Fx.Destinations()
             local d = list[P.dest] or list[1]
@@ -413,19 +413,17 @@ Panels.Register{
             local pad = Skin.S(8)
             local tab = Tab()
             local y = pad
-            W.Flow(group, { { P.bNewE, Skin.S(84) }, { P.bNewB, Skin.S(70) }, { P.bNewT, Skin.S(66) }, { P.bUndo, Skin.S(46) }, { P.bRedo, Skin.S(46) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4))
-            y = y + Skin.S(28)
+            -- a row that wraps at a big UI scale pushes the next one down (W.Flow answers the bottom of its last row)
+            y = W.Flow(group, { { P.bNewE, Skin.S(84) }, { P.bNewB, Skin.S(70) }, { P.bNewT, Skin.S(66) }, { P.bUndo, Skin.S(46) }, { P.bRedo, Skin.S(46) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4)) + Skin.S(6)
             W.Place(P.nameLabel, group, pad, y + Skin.S(3))
             local nameW = math.max(Skin.S(60), w - 2 * pad - Skin.S(34))
             W.Place(P.name.frame, group, pad + Skin.S(34), y, nameW, Skin.S(22))
             P.name.Width:Set(nameW - 2)
             y = y + Skin.S(28)
-            W.Flow(group, { { P.bDest, Skin.S(150) }, { P.bWrite, Skin.S(74) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4))
-            y = y + Skin.S(26)
+            y = W.Flow(group, { { P.bDest, Skin.S(150) }, { P.bWrite, Skin.S(74) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4)) + Skin.S(4)
             W.Place(P.status, group, pad, y)
             y = y + Skin.S(18)
-            W.Flow(group, { { P.bCurves, Skin.S(60) }, { P.bSettings, Skin.S(64) }, { P.bFlat, Skin.S(80) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4))
-            y = y + Skin.S(28)
+            y = W.Flow(group, { { P.bCurves, Skin.S(60) }, { P.bSettings, Skin.S(64) }, { P.bFlat, Skin.S(80) } }, pad, y, w - 2 * pad, Skin.S(22), Skin.S(4)) + Skin.S(6)
 
             local c, s, f = tab == 'curves', tab == 'settings', tab == 'flat'
             for _, l in { P.clist.root } do if c then l:Show() else l:Hide() end end
