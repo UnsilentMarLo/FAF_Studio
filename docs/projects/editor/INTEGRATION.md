@@ -2,11 +2,43 @@
 
 All ten work packages of `EDITOR_PORT_ANALYSIS.md` were done on separate local branches. This pass puts them on one branch and tests the result. Nothing is pushed, no PR or issue is open.
 
+## Update 2026-11-12: upstream merged, 0 commits behind
+
+`port/integration` (engine) now contains `upstream/master` @ `432a9df09` (59 commits since the first integration), head **`3eb58c320`**, `git rev-list --count HEAD..upstream/master` = 0.
+
+**How the whole-tree format commit was handled** (upstream `107e6ad79`, formatting of 3020 files with clang-format 22.1.8, plus a CI "Format" check of the lines a PR changes):
+
+1. Merged upstream up to the commit before it (`2c4ff1c85`): one conflict, `tests/CMakeLists.txt` (upstream added `SoundMuteTests.cpp` to `faf_editor_bake_tests` and listed three sources that our `faf_editor_logic` library already compiles: kept our target, added the new test file).
+2. Formatted **our whole tree** with the same clang-format (22.1.8 from pip, `.clang-format` as of that commit; 3165 files, 2568 changed) and committed it (`9d50538d7`). Both sides are then formatted by the same tool, so upstream's format commit has nothing to fight with.
+3. Upstream's format commit also turned 32 CRLF files into LF (clang-format alone keeps CRLF): the same 32 files were converted on our side (`92d9fb900`), plus one blank line of `ReflectionPrivate.h` taken as upstream has it.
+4. Merged `107e6ad79` with `-X ours` (`d3d8fb719`): no conflict arose, and the merge changed nothing on our side (the tree equals its first parent). Check: the files that differ from upstream's formatted tree are exactly our 312 changed or added files; no file of upstream's that we did not touch differs.
+5. Merged the rest of `upstream/master` (`670c25e8b`): two conflicts.
+   * `src/moho/sim/CWldMap.h`: upstream removed the unused `MapSave` and `MapSetPreview`; kept only our `MapSaveToDiskPath` declaration (its definition lives in `CWldTerrainRes.cpp`).
+   * `src/moho/app/WRenViewport.cpp`: includes, both sides kept (our editor includes plus upstream's `gpg/gal/PipelineDefer.h`; one duplicate `WxPrivate.h` dropped).
+6. Compile errors after the merge, all from upstream's "remove functions nothing links and nothing calls" batches (they cannot see our editor sources, which call them): `CD3DPrimBatcher::DrawTri` and its private helper `AddVert` (the editor's UI clip cuts quads into triangles) and `moho::WIN_GetMainWindow` (frame rate limiter). All three restored as they were (`f6809736e`, `3eb58c320`). `MapSave` / `MapSetPreview` stay removed.
+7. The CI command was run on the result (the file `.github/workflows/format-check.yml`): `git clang-format --style file --extensions c,cc,cpp,cxx,h,hh,hpp,hxx,inl --diff upstream/master HEAD -- src tests tools` with clang-format 22.1.8 prints nothing (one comment in `CWldMap.h` had to be wrapped, `ac7a6e2d4`). To redo it: `python -m venv V; V/Scripts/pip install clang-format==22.1.8`, then the command above.
+
+**Results on the merged engine** (exe `main_ed_integ_x64`, instance `integ`, Lua of FAF_Studio `port/integration`; raw lists in the shared notes folder):
+
+| Check | Result |
+|---|---|
+| Build `-DFAF_EDITOR=ON` | clean; the link-time `faf_math_dump` check now passes (`0 differ`, upstream's acos variant `b3f9efd43` came with the merge) |
+| `ctest` (54 tests, 32 test executables) | **53 pass, 1 fails**: `math_dump` at its 1,000,000 iterations run: six `acos` blocks (2, 3, 8, 10, 12, 13) differ, nothing else; the same x87 `fpatan` last-bit effect that upstream's variants file lists for blocks 0 and 1 on EPYC runners; this machine is a Ryzen 7 5800X3D. `render_math` (camera `LookAt`) passes now: upstream fixed it in `7ab8b0336` |
+| Editor native tests (`FAF_RETAIL_MAPS` set) | `faf_editor_brush_tests` 219 pass, 6 skipped (same data-dependent six as before); `faf_editor_bake_tests` 6/6 (4 + upstream's 2 `SoundMute`); water bodies 14/14 and 6/6 |
+| All selftests (`editor_inst.py selftests integ`) | **everything PASS**, including `selftest_alphagen` (it ran out of memory in the earlier full runs) |
+| `editor_lint.py` | 0 errors, 0 warnings (442 files) |
+| Retail round trip, 61 maps | 60 byte-identical, 1 different (`X1MP_007`, the kept fix), as before |
+| Play with a water body | sim ran 795 ticks, `sim_FixWaterBodies=1`, surface 20 inside the lake (terrain 10), 25 outside |
+| Play of a map saved with a baked WP10 layer | layer 3 points into the map folder, 256 px DDS, sim ran 871 ticks |
+| `-DFAF_EDITOR=OFF` | not rebuilt in this pass (the refactor is left out on purpose); the 52 undefined symbols counted below were found before the merge |
+
+Regressions caused by the merge: none beyond the three restored functions above. New upstream editor work that overlaps `src/editor/` (the code our replacement PR removes) and is **not** ported to our editor: `aef890e75` selected props outlined in yellow, `1410b4cdf` / `8571b64e1` prop and tree hover outlines (techniques appended to `mesh.fx`), `521a034ef` the editor's sound mutes while its window is in the background (`SoundMuteTests` are in the bake test now; the audio change itself is engine code), `229d86dd4` a play test about walking around a raised ridge, and `81939e660` the prop browser in the Properties panel (before the first integration).
+
 ## Where it lives
 
 | What | Where | Head |
 |---|---|---|
-| Engine (C++) | `C:\Users\Marlo\Documents\GitHub\faf-re-port-integ`, branch `port/integration` of the engine repo (`FAF_Studio/engine/faf-re`), cut from `editor-upstream-merge` = `editor` @ `178f1d7fe` | `1ea968d29` (25 commits: the 9 merges and the WP commits) |
+| Engine (C++) | `C:\Users\Marlo\Documents\GitHub\faf-re-port-integ`, branch `port/integration` of the engine repo (`FAF_Studio/engine/faf-re`), cut from `editor-upstream-merge` = `editor` @ `178f1d7fe` | `3eb58c320` (with upstream `432a9df09` merged; `1ea968d29` before that: the 9 merges and the WP commits) |
 | Lua (FAF_Studio) | worktree `C:\Users\Marlo\Documents\GitHub\FAF_Studio-integ`, branch `port/integration`, cut from `main` @ `6a0bf3a` | `14286d0` (3 fix commits on top of `main`) |
 
 The WP Lua commits (WP2 `b7b6b96` ... WP10 `6a0bf3a`) were all committed to `main` of FAF_Studio, so **no Lua merge was needed**; `port/integration` there is `main` plus the three fixes below. `main` of the shared checkout has uncommitted changes of other sessions (`map.lua`, `tipdata.lua`, `tooltips.lua`, `units.lua`, the `engine/faf-re` pin); none of them is in `port/integration`.
@@ -84,7 +116,7 @@ How to close it (not done): a hook table in one engine header (null in the game,
 
 ## Remaining blockers before any PR
 
-1. **The branch is 25 commits behind `upstream/master`** (fetched today; our last merge was at `81939e660`). Among them: `107e6ad79` formats every C/C++ file under `src`, `tests` and `tools` with `.clang-format`, and `77677ad58` adds a CI check that fails a PR whose changed lines are not formatted. Merging it into 137+ commits of ours will conflict widely; the plan is: merge upstream first, then run `git clang-format` over the lines we changed (clang-format 22.1.8 as upstream), then re-run the build and the tests above. `b3f9efd43` (the acos variant) comes with it. Also new upstream editor work (`feat(editor)` prop outlines, a prop browser, editor audio mute, `229d86dd4` a play test) overlaps `src/editor/`, which our PR replaces: check each against the port analysis.
+1. ~~The branch is 25 commits behind `upstream/master`~~ **done 2026-11-12**: 0 behind, formatted as the CI wants (see the update at the top). Open: upstream moves fast (59 commits in a day); merge again right before opening a PR, and run the format command.
 2. **The OFF build does not link** (above). PR A needs it: the engine without the editor must be what upstream's CI builds.
 3. **Engine edits outside `moho/editor`** are visible to review and some are unguarded: `CD3DFileBatchTexture.cpp` (WP8, marked `// EDITOR:`), `CWldTerrainRes.cpp` (WP3/WP6), the FXAA, text, popout and shadow-cache hooks of the base.
 4. **Not run:** the nightly; a runtime sim digest of retail maps (needs the `fai` harness or a replay on an installed map); the skipped native tests listed above with their data; vault sign-in and a real search/download (needs the user's FAF login); WP8's effect-graph canvas does not exist; WP8's "mod with a new emitter file in a game session"; WP5's "Preview a game"; Play with an `.scmwtr` water file.
