@@ -2,6 +2,68 @@
 
 All ten work packages of `EDITOR_PORT_ANALYSIS.md` were done on separate local branches. This pass puts them on one branch and tests the result. Nothing is pushed, no PR or issue is open.
 
+## Update 2026-11-12 (later): `FAF_EDITOR=OFF` links, and it is upstream's engine where the sim is concerned
+
+Engine commits: `a0ba9387e` (hooks), `d6f0f440c` (sim divergences behind `#if`). Both configurations were built and tested from the same commit.
+
+### The OFF build, before and after
+
+| | before | after |
+|---|---|---|
+| `faf_main` (`-DFAF_EDITOR=OFF`) | link fails: **52 undefined symbols from 18 engine files** | links; 0 undefined symbols |
+| `faf_tests` (OFF) | not built | builds (32 test executables) |
+| `headless_x64.exe` (OFF) | not checked | builds and links |
+| `ctest` (OFF, 54 tests) | not run | 53 pass; the one failure is `math_dump` at 1,000,000 iterations, six `acos` blocks, the Ryzen CPU variant described above |
+
+### How: one small header of null-by-default hooks
+
+`src/moho/app/EditorHooks.h` (+ `EditorHooks.cpp`, in `src/sources.cmake`): a struct `EditorHooks` of function pointers in six groups (`text`, `perf`, `uiclip`, `mesh`, `windows`, `launch`), the global `gEditorHooks` (all null in the game) and inline wrappers in `moho::ehook::...` that do nothing, or what the game does, while a hook is null: no font is an editor font; the frame is not throttled; the UI state's forced collection runs every time (`UiGcDue` is true); `ParallelFor` runs in order on the calling thread; no clipping parent, so every point is visible; no mesh terrain; no overlay, pop-out or FXAA; not an editor launch. `ehook::FxaaScope` is the RAII class of the old `edfxaa::FrameScope` (it holds the editor's scope behind a pointer; without the editor it holds nothing). The six render switches (`ren_ShadowCache`, `ren_ShadowCacheTrees`, `ren_ShadowCacheMaxAge`, `ren_WaterSkipDisabled`, `ui_CullOffscreen`, `ui_SkipTransparent`) are defined by the engine, **off**; the editor turns them on.
+
+The editor fills the table in `src/moho/editor/EdEngineHooks.cpp` (`InstallEngineHooks`, called first thing in `PrepareEditorStart`, which `WinMain` runs before anything else), the same way it installs `gSimBeforeBeat`. The engine call sites are single lines marked `// EDITOR:`; they changed from `moho::edtext::X` / `moho::editor::perf::X` / ... to `moho::ehook::...::X`. One block is a guard instead of a hook, because it is 130 lines of editor logic over the viewport's private members: the unit icon pass in `WRenViewport.cpp` (`#if defined(FAF_STUDIO_EDITOR)`).
+
+| Category | Symbols | Engine files |
+|---|---|---|
+| text backend (`edtext`) | 8 | `CD3DFont.cpp` |
+| perf, pacing, worker pool (`editor::perf`, `field::ParallelFor`) | 11 | `WinApp.cpp`, `CD3DDevice.cpp`, `CUIManager.cpp`, `CWldTerrainRes.cpp` |
+| UI clip (`editor::uiclip`) | 7 | `CMauiControl.cpp`, `CMauiFrame.cpp` |
+| mesh terrain (`edmesh`) | 5 | `HighFidelityTerrain.cpp` |
+| pop-out, overlay, FXAA, icon pass | 13 | `WRenViewport.cpp`, `CScApp.cpp`, `CUIWorldView.cpp` |
+| launch state | 2 | `StartupClientHelpers.cpp` |
+| the six render switches | 6 | `Shadow.cpp`, `HighFidelityWater.cpp`, `LowFidelityWater.cpp`, `CMauiBitmap.cpp`, `CMauiBorder.cpp`, `CMauiText.cpp`, `WRenViewport.cpp` |
+
+What remains of the editor in an OFF object file: nine header-inline variables (`editor::renderstats::gCur` / `gLast` / counters and `shadowcache` accumulators, found with `llvm-nm` over the 1132 engine objects) and the pure header-only helpers (UI clip geometry, `uicull`, the shadow-cache hasher) that engine files still include. No editor `.cpp` is compiled and nothing refers to one.
+
+### Sim: what differs from upstream in the OFF build
+
+Of the 783 object files linked into `headless_x64.exe` (the sim without the client), **6 source files differ from `upstream/master`**; each is inert or compiled out in OFF:
+
+| File | Difference | In the OFF build |
+|---|---|---|
+| `moho/sim/SimSetup.inl` | the map record's prop scale multiplies the new prop's scale | **`#if FAF_STUDIO_EDITOR`**: upstream's `PROP_Create` call |
+| `moho/sim/CWldMap.cpp`, `CWldMap.h` | `CWldPropEntry::mScale` (0x38 to 0x44 bytes), the three lanes kept on read and written back | **`#if`**: the 0x38 record, the lanes read and dropped, 1,1,1 written, as upstream |
+| `moho/sim/STIMap.cpp` | the `SyncTerrain` clamp crash fix (`width - 1`, inclusive) | **`#if`**: upstream's recovered clamp. It is a real heap overflow upstream still has; worth its own `fix(sim)` PR, not part of the editor |
+| `gpg/core/utils/Global.cpp` | `SetThreadDescription` names threads | **`#if`**: compiled out |
+| `moho/sim/SimTick.cpp` | `gSimGcDue` / `gSimGcDone` around the forced Lua collection (and `gSimBeforeBeat`) | null in the game: the collection runs every time, exactly as upstream |
+| `moho/resource/CSimResources.cpp` | `EditorClearDeposits()`, a non-virtual method nothing calls | unused |
+| `gpg/core/diagnostics/CrashHooks.cpp` | the logged-throw limit reads the environment variable `FAF_LOGTHROW` | unset: the same 40 as upstream; diagnostics only |
+
+Headers that differ and are seen by the sim: `CWldMap.h` and `SimSetup.inl` (guarded, above), `SimDriver.h` (an inline accessor `GetSimForEditor`), `SimEditorHook.h` (the null hooks), `CSimResources.h` (the method), `StratumMaskSize.h` (a new header, used by the client's terrain resource only). The earlier note "the nine merges change three files outside the editor" is superseded by the merge with upstream: the complete list of non-editor files that differ from upstream is 62 (`git diff --name-only upstream/master HEAD` without `src/moho/editor`, `src/editor`, `tests`, `docs`).
+
+**Client files that are still not upstream's, in the OFF build** (not sim; additive editor code that is inert without the editor, plus a few behaviours): the Lua methods `Control:SetClipChildren` / `GetClipChildren` exist (no-ops); `CUIManager` has the pop-out frame functions and `mNumDisplayHeads` (0 in the game, so `GetNumRootFrames` answers what it did); `CD3DDevice.cpp` logs and retries a failed device reset and catches a lost-device `Clear` (a **behaviour change** in the game's client: arguably a fix, not upstream's); `CD3DTextureBatcher` has the ARGB atlas and counters; `CWldTerrainRes.cpp` (+507 lines: hi-res water map, stratum mask size, the editor's writer), `CD3DPrimBatcher` (UI clip state), `Shadow.cpp` (shadow cache behind `ren_ShadowCache`, off), `CD3DFont` (backend behind `edtext`, null). A line-by-line pass to put the remaining client behaviours behind `FAF_STUDIO_EDITOR` or split them into their own `fix(...)` PRs has not been done; the stratum mask fix (`StratumMaskSize.h`, `CWldTerrainRes.cpp`) is meant to be its own PR already.
+
+### Tests after this change (ON build, exe `main_ed_integ_x64`)
+
+| Check | Result |
+|---|---|
+| Build ON, format command | clean; `git clang-format ... --diff upstream/master HEAD` prints nothing |
+| `ctest` ON | 53 of 54 pass (`math_dump`, as above) |
+| All selftests | everything PASS (80 selftests run) |
+| `editor_lint.py` | 0 errors, 0 warnings |
+| Retail round trip | 60 of 61 identical, `X1MP_007` the kept fix |
+| Play with a water body | 762 ticks, surface 20 inside the lake, 25 outside |
+| Play of a map with a baked WP10 layer | 832 ticks, layer in the map folder |
+| Editor window screenshot (text, panels, overlay) | draws as before |
+
 ## Update 2026-11-12: upstream merged, 0 commits behind
 
 `port/integration` (engine) now contains `upstream/master` @ `432a9df09` (59 commits since the first integration), head **`3eb58c320`**, `git rev-list --count HEAD..upstream/master` = 0.
@@ -95,7 +157,7 @@ Lua (FAF_Studio `port/integration`):
 * **`faf_math_dump`, `acos 0` and `acos 1` golden blocks.** `tests/math_dump` is identical to upstream's. Upstream's `b3f9efd43` ("cpu_variants.txt accepts acos blocks 0 and 1 as AMD EPYC 9V45 runners give them (x87 fpatan's last bit)") is newer than our merge. Plain upstream `81939e660`, built here in `faf-re-upstream`, passes `--check` on this machine (Ryzen 7 5800X3D) with exactly these two blocks reported as `VARIANT`. So it is a CPU-dependent last bit that upstream fixed after our merge point, not a regression.
 * **`render_math`, `RenderGeomCamera.LookAtPlacesTheCamera`** (the test's forward vector has the opposite sign). `GeomCamera` and the test are not changed by us; the same test built from plain upstream `81939e660` fails the same way.
 
-## `-DFAF_EDITOR=OFF` build (engine files that call editor code unguarded)
+## `-DFAF_EDITOR=OFF` build before the hooks (superseded by the update above: 52 undefined symbols counted, now 0)
 
 Target `faf_main`, `build/off-x64`: every file compiles, the **link fails with 52 undefined symbols from 18 engine source files** (full list: `off_link_errors.txt` in the shared notes folder, summary `off_link_summary.txt`). The refactor was not started.
 
@@ -117,7 +179,7 @@ How to close it (not done): a hook table in one engine header (null in the game,
 ## Remaining blockers before any PR
 
 1. ~~The branch is 25 commits behind `upstream/master`~~ **done 2026-11-12**: 0 behind, formatted as the CI wants (see the update at the top). Open: upstream moves fast (59 commits in a day); merge again right before opening a PR, and run the format command.
-2. **The OFF build does not link** (above). PR A needs it: the engine without the editor must be what upstream's CI builds.
+2. ~~The OFF build does not link~~ **done 2026-11-12**: it links, its tests and the headless exe build, the sim differs from upstream in nothing (see the update at the top). Open: the client-side editor behaviours listed there.
 3. **Engine edits outside `moho/editor`** are visible to review and some are unguarded: `CD3DFileBatchTexture.cpp` (WP8, marked `// EDITOR:`), `CWldTerrainRes.cpp` (WP3/WP6), the FXAA, text, popout and shadow-cache hooks of the base.
 4. **Not run:** the nightly; a runtime sim digest of retail maps (needs the `fai` harness or a replay on an installed map); the skipped native tests listed above with their data; vault sign-in and a real search/download (needs the user's FAF login); WP8's effect-graph canvas does not exist; WP8's "mod with a new emitter file in a game session"; WP5's "Preview a game"; Play with an `.scmwtr` water file.
 5. `alphagen` runs out of memory at the end of a full selftest run (old caveat).
