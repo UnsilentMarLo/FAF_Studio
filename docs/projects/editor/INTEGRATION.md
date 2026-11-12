@@ -6,6 +6,8 @@ All ten work packages of `EDITOR_PORT_ANALYSIS.md` were done on separate local b
 
 Engine commits: `a0ba9387e` (hooks), `d6f0f440c` (sim divergences behind `#if`). Both configurations were built and tested from the same commit.
 
+Upstream moved by 10 more commits meanwhile; they were merged too (`347723d87`, `upstream/master` @ `e93492d47`, no conflict): head **`347723d87`**, 0 behind. After that merge both configurations built again (ON, its tests, OFF `faf_main`, OFF tests, OFF headless: no error, 0 undefined symbols) and the full selftest list passed again (no FAIL, no ERROR); the retail round trip, Play tests and `ctest` were run on the commit before it (`d6f0f440c` plus docs).
+
 ### The OFF build, before and after
 
 | | before | after |
