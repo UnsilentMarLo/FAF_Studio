@@ -124,13 +124,11 @@ Panels.Register{
             W.Place(P.img, group, pad, pad, iw, ih)
             W.Place(P.msg, group, pad + Skin.S(8), pad + Skin.S(8))
             local y = pad + ih + Skin.S(6)
-            W.Flow(group, { { P.bPlay, Skin.S(56) }, { P.bRestart, Skin.S(60) }, { P.bLoop, Skin.S(50) }, { P.bTurn, Skin.S(50) }, { P.bGround, Skin.S(60) }, { P.bGrid, Skin.S(46) } },
-                   pad, y, iw, Skin.S(22), Skin.S(4))
-            y = y + Skin.S(28)
-            W.Flow(group, { { P.bg[1], Skin.S(52) }, { P.bg[2], Skin.S(52) }, { P.bg[3], Skin.S(52) }, { P.bg[4], Skin.S(52) } }, pad, y, iw, Skin.S(22), Skin.S(4))
-            y = y + Skin.S(28)
-            W.Flow(group, { { P.views[1], Skin.S(52) }, { P.views[2], Skin.S(52) }, { P.views[3], Skin.S(52) }, { P.views[4], Skin.S(52) } }, pad, y, iw, Skin.S(22), Skin.S(4))
-            y = y + Skin.S(30)
+            -- W.Flow answers the bottom of its last row: a row that wraps at a big UI scale pushes the next one down
+            y = W.Flow(group, { { P.bPlay, Skin.S(56) }, { P.bRestart, Skin.S(60) }, { P.bLoop, Skin.S(50) }, { P.bTurn, Skin.S(50) }, { P.bGround, Skin.S(60) }, { P.bGrid, Skin.S(46) } },
+                   pad, y, iw, Skin.S(22), Skin.S(4)) + Skin.S(6)
+            y = W.Flow(group, { { P.bg[1], Skin.S(52) }, { P.bg[2], Skin.S(52) }, { P.bg[3], Skin.S(52) }, { P.bg[4], Skin.S(52) } }, pad, y, iw, Skin.S(22), Skin.S(4)) + Skin.S(6)
+            y = W.Flow(group, { { P.views[1], Skin.S(52) }, { P.views[2], Skin.S(52) }, { P.views[3], Skin.S(52) }, { P.views[4], Skin.S(52) } }, pad, y, iw, Skin.S(22), Skin.S(4)) + Skin.S(8)
             P.height:Place(pad, y, iw)
             y = y + Skin.S(50)
             P.scale:Place(pad, y, iw)

@@ -457,7 +457,7 @@ local function RenameDialog(P, row)
         end
         P:Refresh(true)
     end
-    dlg:Button('Rename', 14, 92, 90, 28, Make)
+    dlg:Button('Rename', 14, 92, 90, 28, Make, { tip = 'Change the text the lobby shows for this choice.' })
     dlg:Button('Cancel', 114, 92, 90, 28, function() Dialog.Close() end)
     field.OnEnterPressed = function(self, text) Make() return true end
     field:AcquireFocus()

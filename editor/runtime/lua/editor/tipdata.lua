@@ -246,6 +246,8 @@ Widget = {
     ["particlebrowser/open editor"] = "Show the Particle editor.",
     ["particlebrowser/place on map"] = "Put the open effect on the map as a decoration: an Effect marker in the middle of the view. The map plays it for the whole game.",
     ["particlebrowser/templates"] = "The effect templates of the game: sets of emitter files played together.",
+    ["particles/toggle"] = "Switch the selected on / off setting of the emitter.",
+    ["particles/value"] = "The number of the selected setting of the emitter that has a single value (not a curve).",
     ["particles/add key"] = "Add a key to the curve after the selected one. You can also click empty plot.",
     ["particles/align rotation"] = "Particles are turned along their direction of travel.",
     ["particles/align to bone"] = "Particles are turned to the bone the emitter is attached to.",
@@ -857,6 +859,7 @@ Widget = {
     ["stamps/spacing"] = "Distance between dabs along a stroke, as a share of the stamp width.",
     ["stamps/strength"] = "How much of the stamp is applied: 100 percent is all of it.",
     ["startscreen/close"] = "Close the start screen.",
+    ["startscreen/faf vault"] = "Search the FAF map vault, download a map and open it.",
     ["startscreen/help"] = "Open Help: topics, search and step-by-step workflows.",
     ["startscreen/mod project"] = "Start or open a mod project: new units, changed blueprints and icons.",
     ["startscreen/new map"] = "Create a new map from a blank template.",
@@ -1196,6 +1199,7 @@ Command = {
     ["file.playsetup"] = "Choose who plays the test run: AIs of any type, teams, factions, fog, victory, mods. Profiles keep a setup.",
     ["file.recover"] = "Open the map that was autosaved before the editor stopped unexpectedly.",
     ["file.release"] = "Check the map and write a numbered version folder that is ready for the vault.",
+    ["file.vault"] = "Search the FAF map vault, sign in, download a map and open it.",
     ["file.save"] = "Save the map.",
     ["file.saveas"] = "Save the map under another name.",
     ["file.start"] = "Show the start screen: recent maps, templates and the mod project.",
@@ -1230,9 +1234,9 @@ Command = {
     ["view.slope"] = "Show or hide the slope colours.",
     ["workspace.load"] = "Load a saved panel layout.",
     ["workspace.save"] = "Save the current panel layout under a name.",
-}
     ["adaptive.panel"] = "Open the Adaptive map panel: which resources spawn with which army, the lobby option groups, and what becomes of the selected unit.",
     ["adaptive.window"] = "Open the Lobby options window of an adaptive map: each lobby option with its choices and what each puts on the map.",
+}
 
 Menu = {
     ["texture layer"] = "Import or export one texture layer as a FAFME layer file (.scmsl): choose the layer.",

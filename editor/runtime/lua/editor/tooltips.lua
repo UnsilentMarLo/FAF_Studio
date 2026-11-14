@@ -131,6 +131,9 @@ Panel = {
     watermotion = 'The water ramp, cube map and wave normal maps, and how fast and where the waves move; also the strategic view colours.',
     imager = 'The strategic view: contour spacing and the colours of the zoomed out map.',
     unitwiz = 'The wizard that makes a new unit or changes a unit step-by-step.',
+    material = 'Colour texture graph: nodes and wires that make a terrain albedo, normal and mask picture; Apply bakes it onto a texture layer.',
+    materialnode = 'Parameters of the selected material node, with its warning if it has one.',
+    materialout = 'The result of the material graph (albedo, normal, mask, or a lit sphere or plane), the bake size, and Apply: write the pictures and set them as the textures of a layer. One undo step.',
     brushes = 'A sample panel list of brush names (framework demo).',
 }
 
